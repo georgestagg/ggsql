@@ -1,0 +1,61 @@
+[package]
+name = "vizql"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description.workspace = true
+
+[lib]
+name = "vizql"
+path = "lib.rs"
+
+[[bin]]
+name = "vizql"
+path = "cli.rs"
+
+[dependencies]
+# Parsing
+tree-sitter.workspace = true
+tree-sitter-vizql = { path = "../tree-sitter-vizql" }
+
+# Data processing
+polars.workspace = true
+
+# Readers
+duckdb = { workspace = true, optional = true }
+postgres = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+
+# Writers
+plotters = { workspace = true, optional = true }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# CLI and error handling
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Utilities
+regex.workspace = true
+
+# Python bindings (future)
+pyo3 = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+default = ["duckdb", "sqlite"]
+duckdb = ["dep:duckdb"]
+postgres = ["dep:postgres"]
+sqlite = ["dep:rusqlite"]
+python = ["dep:pyo3"]
+all-readers = ["duckdb", "postgres", "sqlite"]
+all-writers = ["plotters"]

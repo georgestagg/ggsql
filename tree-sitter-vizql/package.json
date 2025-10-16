@@ -1,0 +1,47 @@
+{
+  "name": "tree-sitter-vizql",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for VizQL visualization language",
+  "main": "bindings/node",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vizql/vizql.git"
+  },
+  "keywords": [
+    "tree-sitter",
+    "parser",
+    "sql",
+    "visualization",
+    "grammar-of-graphics"
+  ],
+  "files": [
+    "grammar.js",
+    "binding.gyp",
+    "queries/*",
+    "src/**",
+    "bindings/c/*",
+    "bindings/rust/*",
+    "bindings/python/*",
+    "bindings/node/*",
+    "setup.py",
+    "pyproject.toml"
+  ],
+  "dependencies": {
+    "nan": "^2.17.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.8",
+    "tree-sitter": "^0.20.0"
+  },
+  "scripts": {
+    "build": "tree-sitter generate",
+    "install": "node-gyp rebuild",
+    "test": "tree-sitter test && node bindings/node/binding_test.js"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.vizql",
+      "injection-regex": "vizql"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "tree-sitter>=0.20.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tree-sitter-vizql"
+version = "0.1.0"
+description = "Tree-sitter grammar for VizQL visualization language"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "VizQL Team", email = "team@vizql.org"}]
+keywords = ["tree-sitter", "parser", "sql", "visualization", "grammar-of-graphics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Compilers",
+]
+dependencies = [
+    "tree-sitter>=0.20.0",
+]
+requires-python = ">=3.7"
+
+[project.urls]
+Homepage = "https://github.com/vizql/vizql"
+Repository = "https://github.com/vizql/vizql.git"
+Issues = "https://github.com/vizql/vizql/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "isort",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+where = ["bindings/python"]
+
+[tool.setuptools.package-data]
+tree_sitter_vizql = ["*.so", "*.dll", "*.dylib", "py.typed"]

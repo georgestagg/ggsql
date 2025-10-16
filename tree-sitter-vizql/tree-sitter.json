@@ -1,0 +1,38 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "vizql",
+      "camelcase": "VizQL",
+      "title": "VizQL",
+      "scope": "source.vizql",
+      "file-types": [
+        "vizql"
+      ],
+      "injection-regex": "^vizql$",
+      "class-name": "TreeSitterVizql"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Vizql grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "VizQL Authors"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-vizql"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

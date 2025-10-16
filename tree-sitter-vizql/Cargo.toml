@@ -1,0 +1,18 @@
+[package]
+name = "tree-sitter-vizql"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tree-sitter grammar for VizQL visualization language"
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter.workspace = true
+
+[build-dependencies]
+cc = "1.0"

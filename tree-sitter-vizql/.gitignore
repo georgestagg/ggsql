@@ -1,0 +1,38 @@
+# Rust artifacts
+target/
+Cargo.lock
+
+# Node artifacts
+build/
+prebuilds/
+node_modules/
+package-lock.json
+
+# Python artifacts
+.venv/
+dist/
+*.egg-info
+*.whl
+
+# C artifacts
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.pc
+*.exp
+*.lib
+
+# Example dirs
+/examples/*/
+
+# Grammar volatiles
+*.wasm
+*.obj
+*.o
+
+# Archives
+*.tar.gz
+*.tgz
+*.zip
