@@ -52,10 +52,12 @@ pyo3 = { workspace = true, optional = true }
 proptest.workspace = true
 
 [features]
-default = ["duckdb", "sqlite"]
+default = ["duckdb", "sqlite", "vegalite"]
 duckdb = ["dep:duckdb"]
 postgres = ["dep:postgres"]
 sqlite = ["dep:rusqlite"]
+vegalite = []
+ggplot2 = []
 python = ["dep:pyo3"]
 all-readers = ["duckdb", "postgres", "sqlite"]
-all-writers = ["plotters"]
+all-writers = ["vegalite", "ggplot2", "plotters"]

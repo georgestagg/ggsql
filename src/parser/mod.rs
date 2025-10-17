@@ -36,8 +36,7 @@ let specs = parse_query(query)?;
 assert_eq!(specs.len(), 1);
 assert_eq!(specs[0].viz_type, VizType::Plot);
 assert_eq!(specs[0].layers.len(), 1);
-// Note: Currently returns Point due to stub implementation
-assert_eq!(specs[0].layers[0].geom, Geom::Point);
+assert_eq!(specs[0].layers[0].geom, Geom::Line);
 # Ok(())
 # }
 ```
@@ -54,6 +53,7 @@ pub mod error;
 // Re-export key types
 pub use ast::*;
 pub use error::ParseError;
+pub use splitter::split_query;
 
 /// Main entry point for parsing VizQL queries
 ///
@@ -155,9 +155,27 @@ mod tests {
         let specs = parse_query(query).unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].layers.len(), 2);
-        // Note: These will be Point due to stub implementation
-        assert_eq!(specs[0].layers[0].geom, Geom::Point);
+        // First layer is line, second layer is point
+        assert_eq!(specs[0].layers[0].geom, Geom::Line);
         assert_eq!(specs[0].layers[1].geom, Geom::Point);
+
+        // Check aesthetics are parsed correctly
+        assert_eq!(specs[0].layers[0].aesthetics.len(), 2);
+        assert!(matches!(
+            specs[0].layers[0].aesthetics.get("x"),
+            Some(AestheticValue::Column(col)) if col == "x"
+        ));
+        assert!(matches!(
+            specs[0].layers[0].aesthetics.get("y"),
+            Some(AestheticValue::Column(col)) if col == "y"
+        ));
+
+        // Second layer should have x, y, and color
+        assert_eq!(specs[0].layers[1].aesthetics.len(), 3);
+        assert!(matches!(
+            specs[0].layers[1].aesthetics.get("color"),
+            Some(AestheticValue::Literal(LiteralValue::String(s))) if s == "red"
+        ));
     }
 
     #[test]

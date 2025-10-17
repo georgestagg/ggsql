@@ -248,9 +248,9 @@ Query → Tree-sitter Splitter → Reader + Parser
 **Parser:** Tree-sitter (robust, incremental, editor support) ✅
 **Grammar:** Simplified approach without external C scanner ✅
 **Bindings:** Rust ✅, C ✅, Python ✅, Node.js ✅
-**Data:** Polars DataFrames (planned)
-**Readers:** DuckDB, PostgreSQL, SQLite, CSV (planned)
-**Writers:** ggplot2, Vega-Lite, PNG renderer (planned)
+**Data:** Polars DataFrames ✅
+**Readers:** DuckDB ✅, PostgreSQL (planned), SQLite (planned), CSV (planned)
+**Writers:** Vega-Lite ✅, ggplot2 (planned), PNG renderer (planned)
 
 ## Current Project Structure
 
@@ -285,41 +285,75 @@ vizql/
     ├── lib.rs                  # Library entry point with public API
     ├── cli.rs                  # Command-line interface ✅ WORKING
     │
-    └── parser/                 # Parsing subsystem ✅ IMPLEMENTED
-        ├── mod.rs              # Public parsing API + query splitting
-        ├── ast.rs              # AST type definitions (VizSpec, Layer, etc.)
-        ├── builder.rs          # Tree-sitter CST → AST conversion
-        ├── splitter.rs         # Regex-based query splitter
-        └── error.rs            # Parse error types
+    ├── parser/                 # Parsing subsystem ✅ IMPLEMENTED
+    │   ├── mod.rs              # Public parsing API + query splitting
+    │   ├── ast.rs              # AST type definitions (VizSpec, Layer, etc.)
+    │   ├── builder.rs          # Tree-sitter CST → AST conversion
+    │   ├── splitter.rs         # Regex-based query splitter
+    │   └── error.rs            # Parse error types
+    │
+    ├── reader/                 # Data source abstraction ✅ IMPLEMENTED
+    │   ├── mod.rs              # Reader trait and public API
+    │   ├── connection.rs       # Connection string parsing
+    │   └── duckdb.rs           # DuckDB reader implementation
+    │
+    └── writer/                 # Output format abstraction ✅ IMPLEMENTED
+        ├── mod.rs              # Writer trait and public API
+        └── vegalite.rs         # Vega-Lite JSON writer implementation
 ```
 
 ## Implementation Status
 
-### ✅ **Completed (Phase 1-2)**
+### ✅ **Completed (Phase 1-4)**
 - **Tree-sitter Grammar**: Simplified grammar without external scanner
 - **Multiple Visualization Support**: Can parse multiple VISUALISE/VISUALIZE statements in one query
 - **Spelling Flexibility**: Both British (VISUALISE) and American (VISUALIZE) spellings supported
 - **Visualization Types**: Supports PLOT, TABLE, MAP types
-- **Parser Integration**: Rust bindings working, all 20 tests passing
+- **Parser Integration**: Rust bindings working, all tests passing
 - **AST System**: Complete type definitions for VizSpec, VizType, Layer, Geom, etc.
 - **Query Splitting**: Regex-based splitter separates SQL from VISUALISE portions (supports both spellings)
 - **CLI Interface**: Working commands (parse, validate, exec, run) with multi-visualization support
+- **Reader Module**: Trait-based abstraction for pluggable data sources
+- **DuckDB Reader**: Full implementation with in-memory and file-based support
+  - Connection string parsing (`duckdb://memory`, `duckdb://file.db`)
+  - SQL query execution → Polars DataFrame conversion
+  - Column validation for query introspection
+  - Comprehensive test coverage (7 tests passing)
+- **Writer Module**: Trait-based abstraction for pluggable output formats
+- **Vega-Lite Writer**: Full implementation with web-ready JSON output
+  - Geom → Vega-Lite mark type mapping (point, line, bar, area, etc.)
+  - Aesthetic → encoding channel mapping (x, y, color, size, etc.)
+  - DataFrame → inline JSON data conversion
+  - Multi-layer composition support
+  - Faceting support (wrap and grid)
+  - Title and label integration
+  - Comprehensive test coverage (7 tests passing)
+- **End-to-End Pipeline**: Complete SQL → DuckDB → DataFrame → VizSpec → Vega-Lite JSON workflow
 
 ### 🚧 **In Progress**
-- **Documentation**: Updated specification and examples
-- **Code Quality**: Stub implementations need full logic
+- **Code Quality**: Builder stub implementations need full logic
+- **Reader Extensions**: PostgreSQL, SQLite, CSV readers
+- **Writer Extensions**: ggplot2 R code generation, PNG renderer
 
-### 📋 **Planned (Phase 3+)**
-- **Readers**: Data source abstraction (DuckDB, PostgreSQL, CSV)
-- **Engine**: Query execution pipeline, validation logic
-- **Writers**: Output format generation (ggplot2, Vega-Lite, PNG)
-- **Advanced Features**: Full AST builder implementation
-- **Polish**: Optimization, CI/CD, comprehensive testing
+### 📋 **Planned (Phase 5+)**
+- **Engine**: Full query execution pipeline with validation
+- **Advanced Features**: Full AST builder implementation, scale/coord/theme support in writers
+- **Polish**: Optimization, CI/CD, comprehensive integration testing
+- **Multiple Output Support**: Render all specs in a query (currently only first spec)
 
 ### 🎯 **Current Capabilities**
 ```bash
-# Working CLI commands:
+# Parse query and show AST:
 cargo run -- parse "SELECT * FROM data VISUALISE AS PLOT WITH point USING x=x, y=y"
+
+# Execute query and generate Vega-Lite JSON:
+cargo run -- exec "SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y) VISUALISE AS PLOT WITH point USING x=x, y=y LABEL title = 'My Chart'" --writer vegalite
+
+# Save output to file:
+cargo run -- exec "SELECT * FROM data VISUALISE AS PLOT WITH line USING x=date, y=value" --writer vegalite --output viz.vl.json
+
+# Execute query from file:
+cargo run -- run query.sql --writer vegalite
 
 # Multiple visualizations in one query:
 cargo run -- parse "SELECT * FROM data VISUALISE AS PLOT WITH point USING x=x, y=y VISUALIZE AS TABLE"
@@ -329,6 +363,12 @@ cargo run -- parse "SELECT * FROM data VISUALIZE AS MAP WITH tile USING x=x, y=y
 
 # JSON output for programmatic processing:
 cargo run -- parse "SELECT * FROM data VISUALISE AS PLOT WITH line USING x=x, y=y" --format json
+
+# Use file-based DuckDB:
+cargo run -- exec "SELECT * FROM sales VISUALISE AS PLOT WITH bar USING x=region, y=revenue" --reader duckdb://data.db --writer vegalite
+
+# Multi-layer visualization:
+cargo run -- exec "SELECT * FROM data VISUALISE AS PLOT WITH line USING x=x, y=y WITH point USING x=x, y=y" --writer vegalite
 ```
 
 ## Future Extensions

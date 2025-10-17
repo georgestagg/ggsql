@@ -40,18 +40,18 @@ VizQL splits queries at the `VISUALISE AS` boundary:
 
 pub mod parser;
 
+#[cfg(any(feature = "duckdb", feature = "postgres", feature = "sqlite"))]
+pub mod reader;
+
+#[cfg(any(feature = "vegalite", feature = "ggplot2", feature = "plotters"))]
+pub mod writer;
+
 // Re-export key types for convenience
 pub use parser::{VizSpec, VizType, Layer, Scale, Geom, AestheticValue};
 
 // Future modules - not yet implemented
 // #[cfg(feature = "engine")]
 // pub mod engine;
-
-// #[cfg(any(feature = "duckdb", feature = "postgres", feature = "sqlite"))]
-// pub mod readers;
-
-// #[cfg(any(feature = "plotters"))]
-// pub mod writers;
 
 // DataFrame abstraction (wraps Polars)
 pub use polars::prelude::DataFrame;

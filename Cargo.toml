@@ -22,7 +22,7 @@ tree-sitter = "0.25"
 polars = { version = "0.43", features = ["lazy", "sql"] }
 
 # Readers
-duckdb = "1.1"
+duckdb = { version = "1.1", features = ["bundled"] }
 postgres = "0.19"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
 rusqlite = "0.32"
