@@ -16,6 +16,11 @@ path = "lib.rs"
 name = "vizql"
 path = "cli.rs"
 
+[[bin]]
+name = "vizql-rest"
+path = "rest.rs"
+required-features = ["rest-api"]
+
 [dependencies]
 # Parsing
 tree-sitter.workspace = true
@@ -45,6 +50,13 @@ thiserror.workspace = true
 # Utilities
 regex.workspace = true
 
+# Web server (optional)
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
 # Python bindings (future)
 pyo3 = { workspace = true, optional = true }
 
@@ -59,5 +71,6 @@ sqlite = ["dep:rusqlite"]
 vegalite = []
 ggplot2 = []
 python = ["dep:pyo3"]
+rest-api = ["dep:axum", "dep:tokio", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "duckdb", "vegalite"]
 all-readers = ["duckdb", "postgres", "sqlite"]
 all-writers = ["vegalite", "ggplot2", "plotters"]
