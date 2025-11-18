@@ -71,7 +71,39 @@ fn build_visualise_statement(node: &Node, source: &str) -> Result<VizSpec> {
         }
     }
 
+    // Validate no conflicts between SCALE and COORD domain specifications
+    validate_scale_coord_conflicts(&spec)?;
+
     Ok(spec)
+}
+
+/// Check for conflicts between SCALE domain and COORD aesthetic domain specifications
+fn validate_scale_coord_conflicts(spec: &VizSpec) -> Result<()> {
+    if let Some(ref coord) = spec.coord {
+        // Get all aesthetic names that have domains in COORD
+        let coord_aesthetics: Vec<String> = coord.properties.keys()
+            .filter(|k| is_aesthetic_name(k))
+            .cloned()
+            .collect();
+
+        // Check if any of these also have domain in SCALE
+        for aesthetic in coord_aesthetics {
+            for scale in &spec.scales {
+                if scale.aesthetic == aesthetic {
+                    // Check if this scale has a domain property
+                    if scale.properties.contains_key("domain") {
+                        return Err(VvsqlError::ParseError(format!(
+                            "Domain for '{}' specified in both SCALE and COORD clauses. \
+                            Please specify domain in only one location.",
+                            aesthetic
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Parse a viz_type node to determine the visualization type
@@ -512,37 +544,132 @@ fn build_coord(node: &Node, source: &str) -> Result<Coord> {
             "coord_type" => {
                 coord_type = parse_coord_type(&child, source)?;
             }
-            "coord_property" => {
-                // Parse coord property: name = value
-                let mut prop_cursor = child.walk();
-                let mut prop_name = String::new();
-                let mut prop_value: Option<CoordPropertyValue> = None;
-
-                for prop_child in child.children(&mut prop_cursor) {
-                    match prop_child.kind() {
-                        "coord_property_name" => {
-                            prop_name = get_node_text(&prop_child, source);
-                        }
-                        "string" | "number" | "boolean" | "array" => {
-                            prop_value = Some(parse_coord_property_value(&prop_child, source)?);
-                        }
-                        "=" => continue,
-                        _ => {}
+            "coord_properties" => {
+                // New grammar structure: coord_properties contains multiple coord_property
+                let mut props_cursor = child.walk();
+                for prop_node in child.children(&mut props_cursor) {
+                    if prop_node.kind() == "coord_property" {
+                        let (prop_name, prop_value) = parse_single_coord_property(&prop_node, source)?;
+                        properties.insert(prop_name, prop_value);
                     }
-                }
-
-                if !prop_name.is_empty() && prop_value.is_some() {
-                    properties.insert(prop_name, prop_value.unwrap());
                 }
             }
             _ => {}
         }
     }
 
+    // Validate properties for this coord type
+    validate_coord_properties(&coord_type, &properties)?;
+
     Ok(Coord {
         coord_type,
         properties,
     })
+}
+
+/// Parse a single coord_property node into (name, value)
+fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, CoordPropertyValue)> {
+    let mut prop_name = String::new();
+    let mut prop_value: Option<CoordPropertyValue> = None;
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "coord_property_name" => {
+                // Could be a keyword or an aesthetic_name
+                let mut name_cursor = child.walk();
+                for name_child in child.children(&mut name_cursor) {
+                    match name_child.kind() {
+                        "aesthetic_name" => {
+                            prop_name = get_node_text(&name_child, source);
+                        }
+                        _ => {
+                            // Direct keyword like xlim, ylim, theta
+                            prop_name = get_node_text(&child, source);
+                            break;
+                        }
+                    }
+                }
+                if prop_name.is_empty() {
+                    prop_name = get_node_text(&child, source);
+                }
+            }
+            "string" | "number" | "boolean" | "array" => {
+                prop_value = Some(parse_coord_property_value(&child, source)?);
+            }
+            "identifier" => {
+                // New: identifiers can be property values (e.g., theta = y)
+                let ident = get_node_text(&child, source);
+                prop_value = Some(CoordPropertyValue::String(ident));
+            }
+            "=" => continue,
+            _ => {}
+        }
+    }
+
+    if prop_name.is_empty() || prop_value.is_none() {
+        return Err(VvsqlError::ParseError(format!(
+            "Invalid coord property: name='{}', value present={}",
+            prop_name,
+            prop_value.is_some()
+        )));
+    }
+
+    Ok((prop_name, prop_value.unwrap()))
+}
+
+/// Validate that properties are valid for the given coord type
+fn validate_coord_properties(coord_type: &CoordType, properties: &HashMap<String, CoordPropertyValue>) -> Result<()> {
+    for prop_name in properties.keys() {
+        let valid = match coord_type {
+            CoordType::Cartesian => {
+                // Cartesian allows: xlim, ylim, aesthetic names
+                // Not allowed: theta
+                prop_name == "xlim" || prop_name == "ylim" || is_aesthetic_name(prop_name)
+            }
+            CoordType::Flip => {
+                // Flip allows: aesthetic names only
+                // Not allowed: xlim, ylim, theta
+                is_aesthetic_name(prop_name)
+            }
+            CoordType::Polar => {
+                // Polar allows: theta, aesthetic names
+                // Not allowed: xlim, ylim
+                prop_name == "theta" || is_aesthetic_name(prop_name)
+            }
+            _ => {
+                // Other coord types: allow all for now (future implementation)
+                true
+            }
+        };
+
+        if !valid {
+            let valid_props = match coord_type {
+                CoordType::Cartesian => "xlim, ylim, <aesthetics>",
+                CoordType::Flip => "<aesthetics>",
+                CoordType::Polar => "theta, <aesthetics>",
+                _ => "<varies>",
+            };
+            return Err(VvsqlError::ParseError(format!(
+                "Property '{}' not valid for {:?} coordinates. Valid properties: {}",
+                prop_name, coord_type, valid_props
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if a property name is an aesthetic name
+fn is_aesthetic_name(name: &str) -> bool {
+    matches!(
+        name,
+        "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend" |
+        "color" | "colour" | "fill" | "alpha" |
+        "size" | "shape" | "linetype" | "linewidth" | "width" | "height" |
+        "label" | "family" | "fontface" | "hjust" | "vjust" |
+        "group"
+    )
 }
 
 /// Parse coord type from a coord_type node
@@ -828,10 +955,301 @@ fn get_node_text(node: &Node, source: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn parse_test_query(query: &str) -> Result<Vec<VizSpec>> {
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_vvsql::language()).unwrap();
+
+        let tree = parser.parse(query, None).unwrap();
+        build_ast(&tree, query)
+    }
+
+    // ========================================
+    // COORD Property Validation Tests
+    // ========================================
+
     #[test]
-    fn test_stub_implementation() {
-        // This is just a placeholder test
-        // Real tests will be added when the full implementation is done
-        assert!(true);
+    fn test_coord_cartesian_valid_xlim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y
+            COORD cartesian USING xlim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+        assert_eq!(specs.len(), 1);
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert_eq!(coord.coord_type, CoordType::Cartesian);
+        assert!(coord.properties.contains_key("xlim"));
+    }
+
+    #[test]
+    fn test_coord_cartesian_valid_ylim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y
+            COORD cartesian USING ylim = [-10, 50]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert!(coord.properties.contains_key("ylim"));
+    }
+
+    #[test]
+    fn test_coord_cartesian_valid_aesthetic_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y, color = category
+            COORD cartesian USING color = ['red', 'green', 'blue']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert!(coord.properties.contains_key("color"));
+    }
+
+    #[test]
+    fn test_coord_cartesian_invalid_property_theta() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y
+            COORD cartesian USING theta = y
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'theta' not valid for Cartesian"));
+    }
+
+    #[test]
+    fn test_coord_flip_valid_aesthetic_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value, color = region
+            COORD flip USING color = ['A', 'B', 'C']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert_eq!(coord.coord_type, CoordType::Flip);
+        assert!(coord.properties.contains_key("color"));
+    }
+
+    #[test]
+    fn test_coord_flip_invalid_property_xlim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD flip USING xlim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'xlim' not valid for Flip"));
+    }
+
+    #[test]
+    fn test_coord_flip_invalid_property_ylim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD flip USING ylim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'ylim' not valid for Flip"));
+    }
+
+    #[test]
+    fn test_coord_flip_invalid_property_theta() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD flip USING theta = y
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'theta' not valid for Flip"));
+    }
+
+    #[test]
+    fn test_coord_polar_valid_theta() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD polar USING theta = y
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert_eq!(coord.coord_type, CoordType::Polar);
+        assert!(coord.properties.contains_key("theta"));
+    }
+
+    #[test]
+    fn test_coord_polar_valid_aesthetic_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value, color = region
+            COORD polar USING color = ['North', 'South', 'East', 'West']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert!(coord.properties.contains_key("color"));
+    }
+
+    #[test]
+    fn test_coord_polar_invalid_property_xlim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD polar USING xlim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'xlim' not valid for Polar"));
+    }
+
+    #[test]
+    fn test_coord_polar_invalid_property_ylim() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value
+            COORD polar USING ylim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Property 'ylim' not valid for Polar"));
+    }
+
+    // ========================================
+    // SCALE/COORD Domain Conflict Tests
+    // ========================================
+
+    #[test]
+    fn test_scale_coord_conflict_x_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y
+            SCALE x USING domain = [0, 100]
+            COORD cartesian USING x = [0, 50]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Domain for 'x' specified in both SCALE and COORD"));
+    }
+
+    #[test]
+    fn test_scale_coord_conflict_color_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y, color = category
+            SCALE color USING domain = ['A', 'B']
+            COORD cartesian USING color = ['A', 'B', 'C']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Domain for 'color' specified in both SCALE and COORD"));
+    }
+
+    #[test]
+    fn test_scale_coord_no_conflict_different_aesthetics() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y, color = category
+            SCALE color USING domain = ['A', 'B']
+            COORD cartesian USING xlim = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_scale_coord_no_conflict_scale_without_domain() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y
+            SCALE x USING type = 'linear'
+            COORD cartesian USING x = [0, 100]
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+    }
+
+    // ========================================
+    // Multiple Properties Tests
+    // ========================================
+
+    #[test]
+    fn test_coord_cartesian_multiple_properties() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH point USING x = x, y = y, color = category
+            COORD cartesian USING xlim = [0, 100], ylim = [-10, 50], color = ['A', 'B']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert!(coord.properties.contains_key("xlim"));
+        assert!(coord.properties.contains_key("ylim"));
+        assert!(coord.properties.contains_key("color"));
+    }
+
+    #[test]
+    fn test_coord_polar_theta_with_aesthetic() {
+        let query = r#"
+            VISUALISE AS PLOT
+            WITH bar USING x = category, y = value, color = region
+            COORD polar USING theta = y, color = ['North', 'South']
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let coord = specs[0].coord.as_ref().unwrap();
+        assert!(coord.properties.contains_key("theta"));
+        assert!(coord.properties.contains_key("color"));
     }
 }

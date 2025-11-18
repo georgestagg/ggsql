@@ -2,75 +2,77 @@
 Simple point plot
 ================================================================================
 
-SELECT x, y FROM data VISUALISE AS PLOT WITH point USING x = x, y = y
+VISUALISE AS PLOT WITH point USING x = x, y = y
 
 --------------------------------------------------------------------------------
 
 (query
-  (sql_body)
-  (viz_clause
-    (with_clause
-      (geom_type)
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier)))))))
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))))
 
 ================================================================================
 Multi-layer plot
 ================================================================================
 
-SELECT date, value FROM timeseries VISUALISE AS PLOT
+VISUALISE AS PLOT
 WITH line USING x = date, y = value
 WITH point USING x = date, y = value, color = 'red'
 
 --------------------------------------------------------------------------------
 
 (query
-  (sql_body)
-  (viz_clause
-    (with_clause
-      (geom_type)
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))))
-  (viz_clause
-    (with_clause
-      (geom_type)
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (literal_value
-            (string)))))))
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (literal_value
+              (string))))))))
 
 ================================================================================
 Plot with scales and theme
 ================================================================================
 
-SELECT x, y, group FROM data VISUALISE AS PLOT
+VISUALISE AS PLOT
 WITH point USING x = x, y = y, color = group
 SCALE x USING type = 'linear', limits = [0, 100]
 SCALE color USING palette = 'viridis'
@@ -79,56 +81,57 @@ THEME minimal
 --------------------------------------------------------------------------------
 
 (query
-  (sql_body)
-  (viz_clause
-    (with_clause
-      (geom_type)
-      (aesthetic_mapping
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (scale_clause
         (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
+        (scale_property
+          (scale_property_name)
+          (scale_property_value
+            (string)))
+        (scale_property
+          (scale_property_name)
+          (scale_property_value
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number)))))))
+    (viz_clause
+      (scale_clause
         (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))
-      (aesthetic_mapping
-        (aesthetic_name)
-        (aesthetic_value
-          (column_reference
-            (identifier))))))
-  (viz_clause
-    (scale_clause
-      (aesthetic_name)
-      (scale_property
-        (scale_property_name)
-        (scale_property_value
-          (string)))
-      (scale_property
-        (scale_property_name)
-        (scale_property_value
-          (array
-            (array_element
-              (number))
-            (array_element
-              (number)))))))
-  (viz_clause
-    (scale_clause
-      (aesthetic_name)
-      (scale_property
-        (scale_property_name)
-        (scale_property_value
-          (string)))))
-  (viz_clause
-    (theme_clause
-      (theme_name))))
+        (scale_property
+          (scale_property_name)
+          (scale_property_value
+            (string)))))
+    (viz_clause
+      (theme_clause
+        (theme_name)))))
 
 ================================================================================
 Plot with labels
 ================================================================================
 
-SELECT x, y FROM data VISUALISE AS PLOT
+VISUALISE AS PLOT
 WITH point USING x = x, y = y
 LABEL title = 'My Plot', x = 'X Axis', y = 'Y Axis'
 LABEL caption = 'Data source: Analysis DB'
@@ -136,7 +139,265 @@ LABEL caption = 'Data source: Analysis DB'
 --------------------------------------------------------------------------------
 
 (query
-  (sql_body)
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (label_clause
+        (label_assignment
+          (label_type)
+          (string))
+        (label_assignment
+          (label_type)
+          (string))
+        (label_assignment
+          (label_type)
+          (string))))
+    (viz_clause
+      (label_clause
+        (label_assignment
+          (label_type)
+          (string))))))
+
+================================================================================
+COORD cartesian with xlim
+================================================================================
+
+VISUALISE AS PLOT
+WITH point USING x = x, y = y
+COORD cartesian USING xlim = [0, 100]
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_type)
+        (coord_properties
+          (coord_property
+            (coord_property_name)
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number)))))))))
+
+================================================================================
+COORD cartesian with ylim
+================================================================================
+
+VISUALISE AS PLOT
+WITH point USING x = x, y = y
+COORD cartesian USING ylim = [-10, 50]
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_type)
+        (coord_properties
+          (coord_property
+            (coord_property_name)
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number)))))))))
+
+================================================================================
+COORD cartesian with multiple properties
+================================================================================
+
+VISUALISE AS PLOT
+WITH point USING x = x, y = y, color = category
+COORD cartesian USING xlim = [0, 100], ylim = [0, 200], color = ['A', 'B', 'C']
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_type)
+        (coord_properties
+          (coord_property
+            (coord_property_name)
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number))))
+          (coord_property
+            (coord_property_name)
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number))))
+          (coord_property
+            (coord_property_name
+              (aesthetic_name))
+            (array
+              (array_element
+                (string))
+              (array_element
+                (string))
+              (array_element
+                (string)))))))))
+
+================================================================================
+COORD flip
+================================================================================
+
+VISUALISE AS PLOT
+WITH bar USING x = category, y = value
+COORD flip
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
+    (viz_clause
+      (with_clause
+        (geom_type)
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))
+        (aesthetic_mapping
+          (aesthetic_name)
+          (aesthetic_value
+            (column_reference
+              (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_type)))))
+
+================================================================================
+COORD flip with aesthetic domain
+================================================================================
+
+VISUALISE AS PLOT
+WITH bar USING x = category, y = value, color = region
+COORD flip USING color = ['North', 'South', 'East', 'West']
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
+  (viz_clause
+    (with_clause
+      (geom_type)
+      (aesthetic_mapping
+        (aesthetic_name)
+        (aesthetic_value
+          (column_reference
+            (identifier))))
+      (aesthetic_mapping
+        (aesthetic_name)
+        (aesthetic_value
+          (column_reference
+            (identifier))))
+      (aesthetic_mapping
+        (aesthetic_name)
+        (aesthetic_value
+          (column_reference
+            (identifier))))))
+  (viz_clause
+    (coord_clause
+      (coord_type)
+      (coord_properties
+        (coord_property
+          (coord_property_name
+            (aesthetic_name))
+          (array
+            (array_element
+              (string))
+            (array_element
+              (string))
+            (array_element
+              (string))
+            (array_element
+              (string)))))))))
+
+================================================================================
+COORD polar with theta
+================================================================================
+
+VISUALISE AS PLOT
+WITH bar USING x = category, y = value
+COORD polar USING theta = y
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
   (viz_clause
     (with_clause
       (geom_type)
@@ -150,19 +411,47 @@ LABEL caption = 'Data source: Analysis DB'
         (aesthetic_value
           (column_reference
             (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_type)
+        (coord_properties
+          (coord_property
+            (coord_property_name)
+            (identifier)))))))
+
+================================================================================
+COORD USING without type (defaults to cartesian)
+================================================================================
+
+VISUALISE AS PLOT
+WITH point USING x = x, y = y
+COORD USING xlim = [0, 100]
+
+--------------------------------------------------------------------------------
+
+(query
+  (visualise_statement
+    (viz_type)
   (viz_clause
-    (label_clause
-      (label_assignment
-        (label_type)
-        (string))
-      (label_assignment
-        (label_type)
-        (string))
-      (label_assignment
-        (label_type)
-        (string))))
-  (viz_clause
-    (label_clause
-      (label_assignment
-        (label_type)
-        (string)))))
+    (with_clause
+      (geom_type)
+      (aesthetic_mapping
+        (aesthetic_name)
+        (aesthetic_value
+          (column_reference
+            (identifier))))
+      (aesthetic_mapping
+        (aesthetic_name)
+        (aesthetic_value
+          (column_reference
+            (identifier))))))
+    (viz_clause
+      (coord_clause
+        (coord_properties
+          (coord_property
+            (coord_property_name)
+            (array
+              (array_element
+                (number))
+              (array_element
+                (number)))))))))

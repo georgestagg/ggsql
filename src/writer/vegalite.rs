@@ -22,7 +22,7 @@
 
 use crate::writer::Writer;
 use crate::{DataFrame, Result, VvsqlError, VizSpec, VizType, Geom, AestheticValue};
-use crate::parser::ast::LiteralValue;
+use crate::parser::ast::{LiteralValue, Coord, CoordType, CoordPropertyValue, ArrayElement};
 use serde_json::{json, Value, Map};
 use polars::prelude::*;
 
@@ -433,6 +433,344 @@ impl Default for VegaLiteWriter {
     }
 }
 
+// Coordinate transformation methods
+impl VegaLiteWriter {
+    /// Apply coordinate transformations to the spec and data
+    /// Returns (possibly transformed DataFrame, possibly modified spec)
+    fn apply_coord_transforms(
+        &self,
+        spec: &VizSpec,
+        data: &DataFrame,
+        vl_spec: &mut Value,
+    ) -> Result<Option<DataFrame>> {
+        if let Some(ref coord) = spec.coord {
+            match coord.coord_type {
+                CoordType::Cartesian => {
+                    self.apply_cartesian_coord(coord, vl_spec, data)?;
+                    Ok(None) // No DataFrame transformation needed
+                }
+                CoordType::Flip => {
+                    self.apply_flip_coord(vl_spec)?;
+                    Ok(None) // No DataFrame transformation needed
+                }
+                CoordType::Polar => {
+                    // Polar requires DataFrame transformation for percentages
+                    let transformed_df = self.apply_polar_coord(coord, spec, data, vl_spec)?;
+                    Ok(Some(transformed_df))
+                }
+                _ => {
+                    // Other coord types not yet implemented
+                    Ok(None)
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Apply Cartesian coordinate properties (xlim, ylim, aesthetic domains)
+    fn apply_cartesian_coord(
+        &self,
+        coord: &Coord,
+        vl_spec: &mut Value,
+        _data: &DataFrame,
+    ) -> Result<()> {
+        // Apply xlim/ylim to scale domains
+        for (prop_name, prop_value) in &coord.properties {
+            match prop_name.as_str() {
+                "xlim" => {
+                    if let Some(limits) = self.extract_limits(prop_value)? {
+                        self.apply_axis_limits(vl_spec, "x", limits)?;
+                    }
+                }
+                "ylim" => {
+                    if let Some(limits) = self.extract_limits(prop_value)? {
+                        self.apply_axis_limits(vl_spec, "y", limits)?;
+                    }
+                }
+                _ if self.is_aesthetic_name(prop_name) => {
+                    // Aesthetic domain specification
+                    if let Some(domain) = self.extract_domain(prop_value)? {
+                        self.apply_aesthetic_domain(vl_spec, prop_name, domain)?;
+                    }
+                }
+                _ => {
+                    // ratio, clip - not yet implemented (TODO comments added by validation)
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Apply Flip coordinate transformation (swap x and y)
+    fn apply_flip_coord(&self, vl_spec: &mut Value) -> Result<()> {
+        // Handle single layer
+        if let Some(encoding) = vl_spec.get_mut("encoding") {
+            if let Some(enc_obj) = encoding.as_object_mut() {
+                // Swap x and y encodings
+                if let (Some(x), Some(y)) = (enc_obj.remove("x"), enc_obj.remove("y")) {
+                    enc_obj.insert("x".to_string(), y);
+                    enc_obj.insert("y".to_string(), x);
+                }
+            }
+        }
+
+        // Handle multi-layer
+        if let Some(layers) = vl_spec.get_mut("layer") {
+            if let Some(layers_arr) = layers.as_array_mut() {
+                for layer in layers_arr {
+                    if let Some(encoding) = layer.get_mut("encoding") {
+                        if let Some(enc_obj) = encoding.as_object_mut() {
+                            if let (Some(x), Some(y)) = (enc_obj.remove("x"), enc_obj.remove("y")) {
+                                enc_obj.insert("x".to_string(), y);
+                                enc_obj.insert("y".to_string(), x);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Apply Polar coordinate transformation (bar→arc, point→arc with radius)
+    fn apply_polar_coord(
+        &self,
+        coord: &Coord,
+        spec: &VizSpec,
+        _data: &DataFrame,
+        vl_spec: &mut Value,
+    ) -> Result<DataFrame> {
+        // Get theta field (defaults to 'y')
+        let theta_field = coord.properties.get("theta")
+            .and_then(|v| match v {
+                CoordPropertyValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "y".to_string());
+
+        // Convert geoms to polar equivalents
+        self.convert_geoms_to_polar(spec, vl_spec, &theta_field)?;
+
+        // No DataFrame transformation needed - Vega-Lite handles polar math
+        Ok(_data.clone())
+    }
+
+    /// Convert geoms to polar equivalents (bar→arc, point→arc with radius)
+    fn convert_geoms_to_polar(
+        &self,
+        spec: &VizSpec,
+        vl_spec: &mut Value,
+        theta_field: &str,
+    ) -> Result<()> {
+        // Determine which aesthetic (x or y) maps to theta
+        // Default: y maps to theta (pie chart style)
+        let theta_aesthetic = theta_field;
+
+        // Handle single layer
+        if let Some(mark) = vl_spec.get_mut("mark") {
+            *mark = self.convert_mark_to_polar(mark, spec)?;
+
+            // Update encoding for polar
+            if let Some(encoding) = vl_spec.get_mut("encoding") {
+                self.update_encoding_for_polar(encoding, theta_aesthetic)?;
+            }
+        }
+
+        // Handle multi-layer
+        if let Some(layers) = vl_spec.get_mut("layer") {
+            if let Some(layers_arr) = layers.as_array_mut() {
+                for layer in layers_arr {
+                    if let Some(mark) = layer.get_mut("mark") {
+                        *mark = self.convert_mark_to_polar(mark, spec)?;
+
+                        if let Some(encoding) = layer.get_mut("encoding") {
+                            self.update_encoding_for_polar(encoding, theta_aesthetic)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert a mark type to its polar equivalent
+    fn convert_mark_to_polar(&self, mark: &Value, _spec: &VizSpec) -> Result<Value> {
+        let mark_str = if mark.is_string() {
+            mark.as_str().unwrap()
+        } else if let Some(mark_type) = mark.get("type") {
+            mark_type.as_str().unwrap_or("bar")
+        } else {
+            "bar"
+        };
+
+        // Convert geom types to polar equivalents
+        match mark_str {
+            "bar" | "col" => {
+                // Bar/col in polar becomes arc (pie/donut slices)
+                Ok(json!("arc"))
+            }
+            "point" => {
+                // Points in polar can stay as points or become arcs with radius
+                // For now, keep as points (they'll plot at radius based on value)
+                Ok(json!("point"))
+            }
+            "line" => {
+                // Lines in polar become circular/spiral lines
+                Ok(json!("line"))
+            }
+            "area" => {
+                // Area in polar becomes arc with radius
+                Ok(json!("arc"))
+            }
+            _ => {
+                // Other geoms: keep as-is or convert to arc
+                Ok(json!("arc"))
+            }
+        }
+    }
+
+    /// Update encoding channels for polar coordinates
+    fn update_encoding_for_polar(
+        &self,
+        encoding: &mut Value,
+        theta_aesthetic: &str,
+    ) -> Result<()> {
+        let enc_obj = encoding.as_object_mut().ok_or_else(|| {
+            VvsqlError::WriterError("Encoding is not an object".to_string())
+        })?;
+
+        // Map the theta aesthetic to theta channel
+        if theta_aesthetic == "y" {
+            // Standard pie chart: y → theta, x → color/category
+            if let Some(y_enc) = enc_obj.remove("y") {
+                enc_obj.insert("theta".to_string(), y_enc);
+            }
+            // x becomes the color/category dimension (if not already mapped)
+            // No change needed - Vega-Lite will use x for categories
+        } else if theta_aesthetic == "x" {
+            // Reversed: x → theta, y → radius
+            if let Some(x_enc) = enc_obj.remove("x") {
+                enc_obj.insert("theta".to_string(), x_enc);
+            }
+            if let Some(y_enc) = enc_obj.remove("y") {
+                enc_obj.insert("radius".to_string(), y_enc);
+            }
+        }
+
+        Ok(())
+    }
+
+    // Helper methods
+
+    fn extract_limits(&self, value: &CoordPropertyValue) -> Result<Option<(f64, f64)>> {
+        match value {
+            CoordPropertyValue::Array(arr) => {
+                if arr.len() != 2 {
+                    return Err(VvsqlError::WriterError(format!(
+                        "xlim/ylim must be exactly 2 numbers, got {}",
+                        arr.len()
+                    )));
+                }
+                let min = match &arr[0] {
+                    ArrayElement::Number(n) => *n,
+                    _ => return Err(VvsqlError::WriterError("xlim/ylim values must be numbers".to_string())),
+                };
+                let max = match &arr[1] {
+                    ArrayElement::Number(n) => *n,
+                    _ => return Err(VvsqlError::WriterError("xlim/ylim values must be numbers".to_string())),
+                };
+
+                // Auto-swap if reversed
+                let (min, max) = if min > max { (max, min) } else { (min, max) };
+
+                Ok(Some((min, max)))
+            }
+            _ => Err(VvsqlError::WriterError("xlim/ylim must be an array".to_string())),
+        }
+    }
+
+    fn extract_domain(&self, value: &CoordPropertyValue) -> Result<Option<Vec<Value>>> {
+        match value {
+            CoordPropertyValue::Array(arr) => {
+                let domain: Vec<Value> = arr.iter().map(|elem| match elem {
+                    ArrayElement::String(s) => json!(s),
+                    ArrayElement::Number(n) => json!(n),
+                    ArrayElement::Boolean(b) => json!(b),
+                }).collect();
+                Ok(Some(domain))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn apply_axis_limits(&self, vl_spec: &mut Value, axis: &str, limits: (f64, f64)) -> Result<()> {
+        let domain = json!([limits.0, limits.1]);
+
+        // Apply to encoding if present
+        if let Some(encoding) = vl_spec.get_mut("encoding") {
+            if let Some(axis_enc) = encoding.get_mut(axis) {
+                axis_enc["scale"] = json!({"domain": domain});
+            }
+        }
+
+        // Apply to layers if present
+        if let Some(layers) = vl_spec.get_mut("layer") {
+            if let Some(layers_arr) = layers.as_array_mut() {
+                for layer in layers_arr {
+                    if let Some(encoding) = layer.get_mut("encoding") {
+                        if let Some(axis_enc) = encoding.get_mut(axis) {
+                            axis_enc["scale"] = json!({"domain": domain});
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_aesthetic_domain(&self, vl_spec: &mut Value, aesthetic: &str, domain: Vec<Value>) -> Result<()> {
+        let domain_json = json!(domain);
+
+        // Apply to encoding if present
+        if let Some(encoding) = vl_spec.get_mut("encoding") {
+            if let Some(aes_enc) = encoding.get_mut(aesthetic) {
+                aes_enc["scale"] = json!({"domain": domain_json});
+            }
+        }
+
+        // Apply to layers if present
+        if let Some(layers) = vl_spec.get_mut("layer") {
+            if let Some(layers_arr) = layers.as_array_mut() {
+                for layer in layers_arr {
+                    if let Some(encoding) = layer.get_mut("encoding") {
+                        if let Some(aes_enc) = encoding.get_mut(aesthetic) {
+                            aes_enc["scale"] = json!({"domain": domain_json});
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn is_aesthetic_name(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend" |
+            "color" | "colour" | "fill" | "alpha" |
+            "size" | "shape" | "linetype" | "linewidth" | "width" | "height" |
+            "label" | "family" | "fontface" | "hjust" | "vjust" |
+            "group"
+        )
+    }
+}
+
 impl Writer for VegaLiteWriter {
     fn write(&self, spec: &VizSpec, data: &DataFrame) -> Result<String> {
         // Only support Plot type for now
@@ -446,15 +784,9 @@ impl Writer for VegaLiteWriter {
         // Validate that all column references exist in the DataFrame
         self.validate_column_references(spec, data)?;
 
-        // Convert DataFrame to Vega-Lite data values
-        let data_values = self.dataframe_to_values(data)?;
-
-        // Build the base Vega-Lite spec
+        // Build the base Vega-Lite spec (without data yet)
         let mut vl_spec = json!({
-            "$schema": self.schema,
-            "data": {
-                "values": data_values
-            }
+            "$schema": self.schema
         });
 
         // Add title if present
@@ -547,13 +879,21 @@ impl Writer for VegaLiteWriter {
             }
         }
 
+        // Apply coordinate transformations (may modify vl_spec and/or transform DataFrame)
+        let transformed_data = self.apply_coord_transforms(spec, data, &mut vl_spec)?;
+        let data_to_use = transformed_data.as_ref().unwrap_or(data);
+
+        // Convert DataFrame to Vega-Lite data values
+        let data_values = self.dataframe_to_values(data_to_use)?;
+        vl_spec["data"] = json!({"values": data_values});
+
         // Handle faceting if present
         if let Some(facet) = &spec.facet {
             use crate::parser::ast::Facet;
             match facet {
                 Facet::Wrap { variables, .. } => {
                     if !variables.is_empty() {
-                        let field_type = self.infer_field_type(data, &variables[0]);
+                        let field_type = self.infer_field_type(data_to_use, &variables[0]);
                         vl_spec["facet"] = json!({
                             "field": variables[0],
                             "type": field_type,
@@ -581,14 +921,14 @@ impl Writer for VegaLiteWriter {
                     // Grid faceting: use row and column
                     let mut facet_spec = Map::new();
                     if !rows.is_empty() {
-                        let field_type = self.infer_field_type(data, &rows[0]);
+                        let field_type = self.infer_field_type(data_to_use, &rows[0]);
                         facet_spec.insert(
                             "row".to_string(),
                             json!({"field": rows[0], "type": field_type}),
                         );
                     }
                     if !cols.is_empty() {
-                        let field_type = self.infer_field_type(data, &cols[0]);
+                        let field_type = self.infer_field_type(data_to_use, &cols[0]);
                         facet_spec.insert(
                             "column".to_string(),
                             json!({"field": cols[0], "type": field_type}),
@@ -1702,5 +2042,483 @@ mod tests {
         // fill should be mapped to color channel
         assert_eq!(vl_spec["encoding"]["color"]["field"], "region");
         assert_eq!(vl_spec["encoding"]["color"]["legend"]["title"], "Region");
+    }
+
+    // ========================================
+    // COORD Clause Tests
+    // ========================================
+
+    #[test]
+    fn test_coord_cartesian_xlim() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD cartesian with xlim
+        let mut properties = HashMap::new();
+        properties.insert(
+            "xlim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[10, 20, 30],
+            "y" => &[4, 5, 6],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check that x scale has domain set
+        assert_eq!(vl_spec["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
+    }
+
+    #[test]
+    fn test_coord_cartesian_ylim() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Line)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD cartesian with ylim
+        let mut properties = HashMap::new();
+        properties.insert(
+            "ylim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(-10.0),
+                ArrayElement::Number(50.0),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[1, 2, 3],
+            "y" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check that y scale has domain set
+        assert_eq!(vl_spec["encoding"]["y"]["scale"]["domain"], json!([-10.0, 50.0]));
+    }
+
+    #[test]
+    fn test_coord_cartesian_xlim_ylim() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD cartesian with both xlim and ylim
+        let mut properties = HashMap::new();
+        properties.insert(
+            "xlim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
+        properties.insert(
+            "ylim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(200.0),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[10, 20, 30],
+            "y" => &[50, 100, 150],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check both domains
+        assert_eq!(vl_spec["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
+        assert_eq!(vl_spec["encoding"]["y"]["scale"]["domain"], json!([0.0, 200.0]));
+    }
+
+    #[test]
+    fn test_coord_cartesian_reversed_limits_auto_swap() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD with reversed xlim (should auto-swap)
+        let mut properties = HashMap::new();
+        properties.insert(
+            "xlim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(100.0),
+                ArrayElement::Number(0.0),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[10, 20, 30],
+            "y" => &[4, 5, 6],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Should be swapped to [0, 100]
+        assert_eq!(vl_spec["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
+    }
+
+    #[test]
+    fn test_coord_cartesian_aesthetic_domain() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
+            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD with color domain
+        let mut properties = HashMap::new();
+        properties.insert(
+            "color".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::String("A".to_string()),
+                ArrayElement::String("B".to_string()),
+                ArrayElement::String("C".to_string()),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[1, 2, 3],
+            "y" => &[4, 5, 6],
+            "category" => &["A", "B", "A"],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check that color scale has domain set
+        assert_eq!(
+            vl_spec["encoding"]["color"]["scale"]["domain"],
+            json!(["A", "B", "C"])
+        );
+    }
+
+    #[test]
+    fn test_coord_cartesian_multi_layer() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+
+        // First layer: line
+        let layer1 = Layer::new(Geom::Line)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer1);
+
+        // Second layer: points
+        let layer2 = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+        spec.layers.push(layer2);
+
+        // Add COORD with xlim and ylim
+        let mut properties = HashMap::new();
+        properties.insert(
+            "xlim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(10.0),
+            ]),
+        );
+        properties.insert(
+            "ylim".to_string(),
+            CoordPropertyValue::Array(vec![
+                ArrayElement::Number(-5.0),
+                ArrayElement::Number(5.0),
+            ]),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Cartesian,
+            properties,
+        });
+
+        let df = df! {
+            "x" => &[1, 2, 3],
+            "y" => &[1, 2, 3],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check that both layers have the limits applied
+        let layers = vl_spec["layer"].as_array().unwrap();
+        assert_eq!(layers.len(), 2);
+
+        for layer in layers {
+            assert_eq!(layer["encoding"]["x"]["scale"]["domain"], json!([0.0, 10.0]));
+            assert_eq!(layer["encoding"]["y"]["scale"]["domain"], json!([-5.0, 5.0]));
+        }
+    }
+
+    #[test]
+    fn test_coord_flip_single_layer() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Bar)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer);
+
+        // Add custom axis labels
+        let mut labels = Labels {
+            labels: HashMap::new(),
+        };
+        labels.labels.insert("x".to_string(), "Category".to_string());
+        labels.labels.insert("y".to_string(), "Value".to_string());
+        spec.labels = Some(labels);
+
+        // Add COORD flip
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Flip,
+            properties: HashMap::new(),
+        });
+
+        let df = df! {
+            "category" => &["A", "B", "C"],
+            "value" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // After flip: x should have "value" field, y should have "category" field
+        assert_eq!(vl_spec["encoding"]["x"]["field"], "value");
+        assert_eq!(vl_spec["encoding"]["y"]["field"], "category");
+
+        // But titles should preserve original aesthetic names (ggplot2 style)
+        assert_eq!(vl_spec["encoding"]["x"]["title"], "Value");
+        assert_eq!(vl_spec["encoding"]["y"]["title"], "Category");
+    }
+
+    #[test]
+    fn test_coord_flip_multi_layer() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+
+        // First layer: bar
+        let layer1 = Layer::new(Geom::Bar)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer1);
+
+        // Second layer: point
+        let layer2 = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer2);
+
+        // Add COORD flip
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Flip,
+            properties: HashMap::new(),
+        });
+
+        let df = df! {
+            "category" => &["A", "B", "C"],
+            "value" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check both layers have flipped encodings
+        let layers = vl_spec["layer"].as_array().unwrap();
+        assert_eq!(layers.len(), 2);
+
+        for layer in layers {
+            assert_eq!(layer["encoding"]["x"]["field"], "value");
+            assert_eq!(layer["encoding"]["y"]["field"], "category");
+        }
+    }
+
+    #[test]
+    fn test_coord_flip_preserves_other_aesthetics() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Point)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
+            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD flip
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Flip,
+            properties: HashMap::new(),
+        });
+
+        let df = df! {
+            "x" => &[1, 2, 3],
+            "y" => &[4, 5, 6],
+            "category" => &["A", "B", "C"],
+            "value" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check x and y are flipped
+        assert_eq!(vl_spec["encoding"]["x"]["field"], "y");
+        assert_eq!(vl_spec["encoding"]["y"]["field"], "x");
+
+        // Check color and size are unchanged
+        assert_eq!(vl_spec["encoding"]["color"]["field"], "category");
+        assert_eq!(vl_spec["encoding"]["size"]["field"], "value");
+    }
+
+    #[test]
+    fn test_coord_polar_basic_pie_chart() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Bar)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD polar (defaults to theta = y)
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Polar,
+            properties: HashMap::new(),
+        });
+
+        let df = df! {
+            "category" => &["A", "B", "C"],
+            "value" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Bar in polar should become arc
+        assert_eq!(vl_spec["mark"], "arc");
+
+        // y should be mapped to theta
+        assert!(vl_spec["encoding"]["theta"].is_object());
+        assert_eq!(vl_spec["encoding"]["theta"]["field"], "value");
+
+        // x should still be present (for categories/colors)
+        assert!(vl_spec["encoding"]["x"].is_object());
+        assert_eq!(vl_spec["encoding"]["x"]["field"], "category");
+    }
+
+    #[test]
+    fn test_coord_polar_with_theta_property() {
+        use crate::parser::ast::Coord;
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new(VizType::Plot);
+        let layer = Layer::new(Geom::Bar)
+            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
+        spec.layers.push(layer);
+
+        // Add COORD polar with explicit theta = y
+        let mut properties = HashMap::new();
+        properties.insert(
+            "theta".to_string(),
+            CoordPropertyValue::String("y".to_string()),
+        );
+        spec.coord = Some(Coord {
+            coord_type: CoordType::Polar,
+            properties,
+        });
+
+        let df = df! {
+            "category" => &["A", "B", "C"],
+            "value" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &df).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Should produce same result as default
+        assert_eq!(vl_spec["mark"], "arc");
+        assert_eq!(vl_spec["encoding"]["theta"]["field"], "value");
     }
 }

@@ -105,7 +105,7 @@ module.exports = grammar({
 
     scale_property_name: $ => choice(
       'type', 'limits', 'breaks', 'labels', 'expand',
-      'direction', 'na_value', 'palette'
+      'direction', 'na_value', 'palette', 'domain'
     ),
 
     scale_property_value: $ => choice(
@@ -142,25 +142,36 @@ module.exports = grammar({
       'fixed', 'free', 'free_x', 'free_y'
     ),
 
-    // COORD clause
+    // COORD clause - new syntax: COORD [type] [USING properties]
     coord_clause: $ => seq(
-      'COORD', 'USING',
-      'type', '=', $.coord_type,
-      repeat(seq(',', $.coord_property))
+      'COORD',
+      choice(
+        // Type with optional USING: COORD polar USING theta = y
+        seq($.coord_type, optional(seq('USING', $.coord_properties))),
+        // Just USING: COORD USING xlim = [0, 100] (defaults to cartesian)
+        seq('USING', $.coord_properties)
+      )
     ),
 
     coord_type: $ => choice(
       'cartesian', 'polar', 'flip', 'fixed', 'trans', 'map', 'quickmap'
     ),
 
+    coord_properties: $ => seq(
+      $.coord_property,
+      repeat(seq(',', $.coord_property))
+    ),
+
     coord_property: $ => seq(
       $.coord_property_name,
       '=',
-      choice($.string, $.number, $.boolean, $.array)
+      choice($.string, $.number, $.boolean, $.array, $.identifier)
     ),
 
     coord_property_name: $ => choice(
-      'xlim', 'ylim', 'ratio', 'theta', 'clip'
+      'xlim', 'ylim', 'ratio', 'theta', 'clip',
+      // Also allow aesthetic names as properties (for domain specification)
+      $.aesthetic_name
     ),
 
     // LABEL clause (repeatable)
@@ -249,11 +260,14 @@ module.exports = grammar({
     // Basic tokens
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
 
-    number: $ => choice(
-      /\d+/,
-      /\d+\.\d*/,
-      /\.\d+/
-    ),
+    number: $ => token(seq(
+      optional('-'),
+      choice(
+        /\d+/,
+        /\d+\.\d*/,
+        /\.\d+/
+      )
+    )),
 
     string: $ => choice(
       seq("'", repeat(choice(/[^'\\]/, seq('\\', /.*/))), "'"),

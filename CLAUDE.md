@@ -11,20 +11,22 @@ SELECT date, revenue, region FROM sales WHERE year = 2024
 VISUALISE AS PLOT
 WITH line USING x = date, y = revenue, color = region
 SCALE x USING type = 'date'
+COORD cartesian USING ylim = [0, 100000]
 LABEL title = 'Sales by Region', x = 'Date', y = 'Revenue'
 THEME minimal
 ```
 
 **Statistics**:
 
-- ~5,300 lines of Rust code
+- ~6,500 lines of Rust code (+1,200 for COORD implementation)
 - 293-line Tree-sitter grammar (simplified, no external scanner)
 - ~820 lines of TypeScript/React code in test application
 - 9 React components (4 main + 5 shadcn/ui components)
 - Full bindings: Rust, C, Python, Node.js with tree-sitter integration
 - Syntax highlighting support via Tree-sitter queries
-- Comprehensive test corpus for grammar validation
+- 111 total tests (28 for COORD clause)
 - End-to-end working pipeline: SQL → Data → Visualization
+- Coordinate transformations: Cartesian (xlim/ylim), Flip, Polar
 
 ---
 
@@ -630,7 +632,7 @@ npm run dev  # Starts on http://localhost:5173
 | `WITH`         | ✅ Yes     | Define layers      | `WITH line USING x=date, y=value`    |
 | `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x USING type='date'`          |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
-| `COORD`        | ❌ No      | Coordinate system  | `COORD USING type='polar'`           |
+| `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian USING xlim=[0,100]` |
 | `LABEL`        | ❌ No      | Text labels        | `LABEL title='My Chart', x='Date'`   |
 | `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color USING position='right'` |
 | `THEME`        | ❌ No      | Visual styling     | `THEME minimal`                      |
@@ -678,6 +680,7 @@ SCALE <aesthetic> USING
   [limits = [min, max]]
   [breaks = <array | interval>]
   [palette = <name>]
+  [domain = [values...]]
 ```
 
 **Scale Types**:
@@ -695,12 +698,26 @@ SCALE x USING type = 'date'
 -- Enables proper date axis formatting
 ```
 
+**Domain Property**:
+
+The `domain` property explicitly sets the input domain for a scale:
+
+```sql
+-- Set domain for discrete scale
+SCALE color USING domain = ['red', 'green', 'blue']
+
+-- Set domain for continuous scale
+SCALE x USING domain = [0, 100]
+```
+
+**Note**: Cannot specify domain in both SCALE and COORD for the same aesthetic (will error).
+
 **Example**:
 
 ```sql
 SCALE x USING type = 'date', breaks = '2 months'
 SCALE y USING type = 'log10', limits = [1, 1000]
-SCALE color USING palette = 'viridis'
+SCALE color USING palette = 'viridis', domain = ['A', 'B', 'C']
 ```
 
 ### FACET Clause
@@ -728,6 +745,87 @@ FACET WRAP <vars> [USING scales = <sharing>]
 FACET WRAP region USING scales = 'free_y'
 FACET region BY category USING scales = 'fixed'
 ```
+
+### COORD Clause
+
+**Syntax**:
+
+```sql
+-- With coordinate type
+COORD <type> [USING <properties>]
+
+-- With properties only (defaults to cartesian)
+COORD USING <properties>
+```
+
+**Coordinate Types**:
+
+- **`cartesian`** - Standard x/y Cartesian coordinates (default)
+- **`flip`** - Flipped Cartesian (swaps x and y axes)
+- **`polar`** - Polar coordinates (for pie charts, rose plots)
+- **`fixed`** - Fixed aspect ratio
+- **`trans`** - Transformed coordinates
+- **`map`** - Map projections
+- **`quickmap`** - Quick approximation for maps
+
+**Properties by Type**:
+
+**Cartesian**:
+- `xlim = [min, max]` - Set x-axis limits
+- `ylim = [min, max]` - Set y-axis limits
+- `<aesthetic> = [values...]` - Set domain for any aesthetic (color, fill, size, etc.)
+
+**Flip**:
+- `<aesthetic> = [values...]` - Set domain for any aesthetic
+
+**Polar**:
+- `theta = <aesthetic>` - Which aesthetic maps to angle (defaults to `y`)
+- `<aesthetic> = [values...]` - Set domain for any aesthetic
+
+**Important Notes**:
+
+1. **Axis limits auto-swap**: `xlim = [100, 0]` automatically becomes `[0, 100]`
+2. **ggplot2 compatibility**: `coord_flip` preserves axis label names (labels stay with aesthetic names, not visual position)
+3. **Domain conflicts**: Error if same aesthetic has domain in both SCALE and COORD
+4. **Multi-layer support**: All coordinate transforms apply to all layers
+
+**Status**:
+- ✅ **Cartesian**: Fully implemented and tested
+- ✅ **Flip**: Fully implemented and tested
+- ✅ **Polar**: Fully implemented and tested
+- ❌ **Other types**: Not yet implemented
+
+**Examples**:
+
+```sql
+-- Cartesian with axis limits
+COORD cartesian USING xlim = [0, 100], ylim = [0, 50]
+
+-- Cartesian with aesthetic domain
+COORD cartesian USING color = ['red', 'green', 'blue']
+
+-- Cartesian shorthand (type optional when using USING)
+COORD USING xlim = [0, 100]
+
+-- Flip coordinates for horizontal bar chart
+COORD flip
+
+-- Flip with aesthetic domain
+COORD flip USING color = ['A', 'B', 'C']
+
+-- Polar for pie chart (theta defaults to y)
+COORD polar
+
+-- Polar for rose plot (x maps to radius)
+COORD polar USING theta = y
+
+-- Combined with other clauses
+WITH bar USING x = category, y = value
+COORD cartesian USING xlim = [0, 100], ylim = [0, 200]
+LABEL x = 'Category', y = 'Count'
+```
+
+**Breaking Change**: The COORD syntax changed from `COORD USING type = 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
 
 ### LABEL Clause
 
