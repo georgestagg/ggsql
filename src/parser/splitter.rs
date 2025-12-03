@@ -69,20 +69,16 @@ pub fn split_query(query: &str) -> Result<(String, String)> {
                     // No SQL yet - just add SELECT
                     modified_sql = format!("SELECT * FROM {}", from_identifier);
                 } else {
-                    // Check if last statement is WITH - if so, no semicolon needed
+                    // VISUALISE FROM can only be used after WITH statements
                     let trimmed = modified_sql.trim();
-                    let last_is_with = trimmed.to_uppercase().starts_with("WITH");
-
-                    if last_is_with {
-                        // WITH followed by SELECT - no semicolon
-                        modified_sql = format!("{} SELECT * FROM {}", trimmed, from_identifier);
-                    } else if trimmed.ends_with(';') {
-                        // Already has semicolon - add SELECT after it
-                        modified_sql = format!("{} SELECT * FROM {}", trimmed, from_identifier);
-                    } else {
-                        // No semicolon - add one before SELECT
-                        modified_sql = format!("{}; SELECT * FROM {}", trimmed, from_identifier);
+                    if !trimmed.to_uppercase().starts_with("WITH") {
+                        return Err(GgsqlError::ParseError(
+                            "VISUALISE FROM can only be used standalone or after WITH statements. \
+                             For other SQL statements, use 'SELECT ... VISUALISE AS' instead.".to_string()
+                        ));
                     }
+                    // WITH followed by SELECT - no semicolon needed (compound statement)
+                    modified_sql = format!("{} SELECT * FROM {}", trimmed, from_identifier);
                 }
                 // Only inject once (first VISUALISE FROM found)
                 break;
@@ -173,20 +169,31 @@ mod tests {
     }
 
     #[test]
-    fn test_visualise_from_with_semicolon() {
+    fn test_visualise_from_after_create_errors() {
         let query = "CREATE TABLE x AS SELECT 1; WITH cte AS (SELECT * FROM x) VISUALISE FROM cte AS PLOT";
+        let result = split_query(query);
+
+        // Should error - VISUALISE FROM cannot be used after CREATE
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("VISUALISE FROM can only be used standalone or after WITH"));
+    }
+
+    #[test]
+    fn test_visualise_from_after_insert_not_recognized() {
+        let query = "INSERT INTO x VALUES (1) VISUALISE FROM x AS PLOT";
         let (sql, viz) = split_query(query).unwrap();
 
-        // Should have CREATE; WITH...; SELECT * FROM cte
-        assert!(sql.contains("CREATE TABLE x AS SELECT 1"));
-        assert!(sql.contains("WITH cte"));
-        assert!(sql.contains("SELECT * FROM cte"));
+        // Tree-sitter doesn't recognize VISUALISE after INSERT - it gets consumed
+        // as part of the INSERT statement. This is fine - the query is invalid anyway.
+        // The entire thing becomes SQL with no VIZ portion.
+        assert!(viz.is_empty());
+        assert!(sql.contains("INSERT"));
     }
 
     #[test]
     fn test_visualise_as_no_injection() {
         let query = "SELECT * FROM x VISUALISE AS PLOT WITH point USING x = a, y = b";
-        let (sql, viz) = split_query(query).unwrap();
+        let (sql, _viz) = split_query(query).unwrap();
 
         // Should NOT inject anything - just split normally
         assert_eq!(sql, "SELECT * FROM x");
