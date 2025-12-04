@@ -22,32 +22,25 @@ THEME minimal
 
 ## Project Status
 
-🚧 **Early Development** - Core parsing infrastructure is implemented but not yet feature-complete.
+✨ **Active Development** - Core functionality is working with ongoing feature additions.
 
 **Completed:**
 
-- ✅ Rust workspace setup with tree-sitter grammar
-- ✅ Complete AST type definitions for ggSQL specification
-- ✅ Basic regex-based query splitter (SQL from VISUALISE portions)
-- ✅ Comprehensive test suite for core AST types (6 tests passing)
-- ✅ Build system working with proper dependency management
-
-**In Progress:**
-
-- 🔄 Tree-sitter external scanner integration (currently consumes entire input as SQL)
-- 🔄 AST builder (tree-sitter CST → typed AST conversion - stub implementation)
-
-**Known Issues:**
-
-- Tree-sitter grammar tests failing (external scanner needs refinement)
-- Parser integration tests failing (expected during development)
-- Various unused variable warnings (normal for stub implementations)
+- ✅ Complete tree-sitter grammar with SQL + VISUALISE parsing
+- ✅ Full AST type system with validation
+- ✅ DuckDB reader with comprehensive type handling
+- ✅ Vega-Lite writer with multi-layer support
+- ✅ CLI tool (`ggsql`) with parse, exec, and validate commands
+- ✅ REST API server (`ggsql-rest`) with CORS support
+- ✅ Jupyter kernel (`ggsql-jupyter`) with inline Vega-Lite visualizations
+- ✅ VS Code extension (`ggsql-vscode`) with syntax highlighting for `.ggsql` files
 
 **Planned:**
 
-- 📋 Reader layer (DuckDB, PostgreSQL, CSV data sources)
-- 📋 Writer layer (ggplot2, Vega-Lite, PNG output formats)
-- 📋 CLI tool and execution engine
+- 📋 Additional readers
+- 📋 Additional writers
+- 📋 More geom types and statistical transformations
+- 📋 Enhanced theme system
 
 ## Architecture
 
@@ -58,12 +51,6 @@ ggSQL splits queries at the `VISUALISE AS` boundary:
 - **Output** → rendered via pluggable writers (ggplot2, PNG, Vega-Lite, etc.)
 
 ## Development Setup
-
-### Prerequisites
-
-- **Rust** 1.70+ with Cargo
-- **Node.js** 16+ (for tree-sitter CLI)
-- **Git**
 
 ### Getting Started
 
@@ -86,12 +73,6 @@ ggSQL splits queries at the `VISUALISE AS` boundary:
    cargo build
    ```
 
-   Note: If you encounter dependency conflicts, you can build with minimal features:
-
-   ```bash
-   cargo build --no-default-features
-   ```
-
 4. **Run tests:**
    ```bash
    cargo test
@@ -103,27 +84,20 @@ ggSQL splits queries at the `VISUALISE AS` boundary:
 ggsql/
 ├── Cargo.toml                       # Workspace root configuration
 ├── README.md                        # This file
-├── CLAUDE.md                        # Complete specification document
 │
 ├── tree-sitter-ggsql/               # Tree-sitter grammar package
-│   ├── grammar.js                   # Grammar definition
-│   ├── src/
-│   │   ├── parser.c                 # Generated parser
-│   │   ├── scanner.c                # Custom SQL scanner
-│   │   └── node-types.json          # Generated node types
-│   └── queries/
-│       └── highlights.scm           # Syntax highlighting rules
 │
-└── src/                             # Main library
-    ├── lib.rs                       # Public API and re-exports
-    ├── cli.rs                       # Command-line interface (disabled)
-    │
-    └── parser/                      # Parsing subsystem
-        ├── mod.rs                   # Parser public API
-        ├── ast.rs                   # AST type definitions
-        ├── splitter.rs              # Query splitting logic
-        ├── builder.rs               # CST → AST conversion
-        └── error.rs                 # Parse error types
+├── src/                             # Main library
+│   ├── lib.rs                       # Public API and re-exports
+│   ├── cli.rs                       # Command-line interface
+│   ├── rest.rs                      # REST API server
+│   ├── parser/                      # Parsing subsystem
+│   ├── reader/                      # Data source readers
+│   └── writer/                      # Visualization writers
+│
+├── ggsql-jupyter/                   # Jupyter kernel
+│
+└── ggsql-vscode/                    # VS Code extension
 ```
 
 ## Development Workflow
@@ -230,10 +204,10 @@ cargo test parser
 
 ## Grammar Specification
 
-See [CLAUDE.md](CLAUDE.md) for the complete ggSQL grammar specification, including:
+See [CLAUDE.md](CLAUDE.md) for the in-progress ggSQL grammar specification, including:
 
-- Complete syntax reference with examples
-- AST structure documentation
+- Syntax reference
+- AST structure
 - Implementation phases and architecture
 - Design principles and philosophy
 
@@ -242,70 +216,74 @@ Key grammar elements:
 - `VISUALISE AS PLOT` - Entry point for visualization
 - `WITH <geom> USING` - Define geometric layers (point, line, bar, etc.)
 - `SCALE <aesthetic> USING` - Configure data-to-visual mappings
-- `FACET` - Create small multiples
-- `LABELS`, `THEME`, `GUIDE` - Styling and annotation
+- `FACET` - Create small multiples (WRAP for flowing layout, BY for grid)
+- `COORD` - Coordinate transformations (cartesian, flip, polar)
+- `LABEL`, `THEME`, `GUIDE` - Styling and annotation
 
-## Contributing
+## Jupyter Kernel
 
-1. **Check existing issues** and project status
-2. **Write tests first** for new functionality
-3. **Update documentation** for API changes
-4. **Follow Rust conventions** and run `cargo fmt`
-5. **Ensure all tests pass** before submitting PRs
+The `ggsql-jupyter` package provides a Jupyter kernel for interactive ggSQL queries with inline Vega-Lite visualizations.
 
-### Code Style
+### Installation
 
-- Use `cargo fmt` for consistent formatting
-- Follow Rust naming conventions (snake_case, etc.)
-- Add comprehensive doc comments for public APIs
-- Include examples in documentation where helpful
+```bash
+cargo build --release --package ggsql-jupyter
+./target/release/ggsql-jupyter --install
+```
 
-## Debugging Tips
+### Usage
 
-### Parser Issues
+After installation, create a new notebook with the "ggSQL" kernel or use `%kernel ggsql` in an existing notebook.
 
-1. **Test grammar in isolation:**
+```sql
+-- Create data
+CREATE TABLE sales AS
+SELECT * FROM (VALUES
+    ('2024-01-01'::DATE, 100, 'North'),
+    ('2024-01-02'::DATE, 120, 'South')
+) AS t(date, revenue, region)
 
-   ```bash
-   cd tree-sitter-ggsql
-   echo "SELECT x FROM data VISUALISE AS PLOT WITH point x = x, y = y" | tree-sitter parse
-   ```
+-- Visualize with ggSQL
+SELECT * FROM sales
+VISUALISE AS PLOT
+WITH line USING x = date, y = revenue, color = region
+SCALE x USING type = 'date'
+LABEL title = 'Sales Trends'
+```
 
-2. **Check parse tree structure:**
+The kernel maintains a persistent DuckDB session across cells, so you can create tables in one cell and query them in another.
 
-   ```bash
-   tree-sitter parse --debug test/corpus/basic.txt
-   ```
+### Quarto
 
-3. **Validate AST building:**
-   ```bash
-   cargo test parser::mod::tests::test_simple_query_parsing -- --nocapture
-   ```
+A Quarto example can be found in `ggsql-jupyter/tests/quarto/doc.qmd`.
 
-### Common Issues
+## VS Code Extension
 
-**Build Failures:**
+The `ggsql-vscode` extension provides syntax highlighting for ggSQL files in Visual Studio Code.
 
-- **Dependency conflicts**: Use `cargo build --no-default-features` to build with minimal dependencies
-- **Missing modules**: Some advanced modules (readers, writers, engine) are not yet implemented and are commented out
+### Installation
 
-**Grammar Issues:**
+```bash
+# Package the extension
+cd ggsql-vscode
+npm install -g @vscode/vsce
+vsce package
 
-- **Grammar conflicts**: Check `tree-sitter generate` output for conflicts
-- **C compilation errors**: Usually in `src/scanner.c`, check includes and syntax
-- **Parse failures**: Add debug prints in AST builder to trace node walking
+# Install the VSIX file
+code --install-extension ggsql-0.1.0.vsix
+```
 
-**Development:**
+### Features
 
-- **Unused variable warnings**: Expected during development - these are stub implementations
-- **Tree-sitter scanner warnings**: The C scanner has some unused parameters - this is normal
+- **Syntax highlighting** for ggSQL keywords, geoms, aesthetics, and SQL
+- **File association** for `.ggsql`, `.ggsql.sql`, and `.gsql` extensions
+- **Bracket matching** and auto-closing for parentheses and brackets
+- **Comment support** for `--` single-line and `/* */` multi-line comments
 
-## Links
+The extension uses a TextMate grammar that highlights:
 
-- **Specification**: [CLAUDE.md](CLAUDE.md) - Complete grammar and implementation guide
-- **Grammar**: [tree-sitter-ggsql/grammar.js](tree-sitter-ggsql/grammar.js) - Tree-sitter grammar definition
-- **Examples**: [tree-sitter-ggsql/test/corpus/](tree-sitter-ggsql/test/corpus/) - Example queries and parse trees
-
----
-
-**Note**: This project is in early development. The API is not yet stable and breaking changes are expected as we implement the full specification.
+- SQL keywords (SELECT, FROM, WHERE, JOIN, etc.)
+- ggSQL clauses (VISUALISE, WITH, SCALE, COORD, FACET, etc.)
+- Geometric objects (point, line, bar, area, etc.)
+- Aesthetics (x, y, color, size, shape, etc.)
+- Scale types (linear, log10, date, viridis, etc.)
