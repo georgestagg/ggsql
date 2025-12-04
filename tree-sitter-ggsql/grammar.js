@@ -321,17 +321,21 @@ module.exports = grammar({
       seq(
         caseInsensitive('FACET'),
         $.facet_vars,
-        caseInsensitive('BY'),
+        alias(caseInsensitive('BY'), $.facet_by),
         $.facet_vars,
         optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
       ),
       // FACET WRAP vars
       seq(
-        caseInsensitive('FACET'), caseInsensitive('WRAP'),
+        caseInsensitive('FACET'),
+        alias(caseInsensitive('WRAP'), $.facet_wrap),
         $.facet_vars,
         optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
       )
     ),
+
+    facet_wrap: $ => 'WRAP',
+    facet_by: $ => 'BY',
 
     facet_vars: $ => seq(
       $.identifier,

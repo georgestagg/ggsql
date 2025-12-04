@@ -493,10 +493,10 @@ fn build_facet(node: &Node, source: &str) -> Result<Facet> {
     for child in node.children(&mut cursor) {
         match child.kind() {
             "FACET" | "USING" | "=" => continue,
-            "WRAP" => {
+            "facet_wrap" => {
                 is_wrap = true;
             }
-            "BY" => {
+            "facet_by" => {
                 next_vars_are_cols = true;
             }
             "facet_vars" => {

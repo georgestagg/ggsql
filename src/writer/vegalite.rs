@@ -1063,7 +1063,7 @@ impl Writer for VegaLiteWriter {
                     }
                     vl_spec["facet"] = Value::Object(facet_spec);
 
-                    // Move mark/encoding into spec
+                    // Move mark/encoding/layer into spec
                     let mut spec_inner = json!({});
                     if let Some(mark) = vl_spec.get("mark") {
                         spec_inner["mark"] = mark.clone();
@@ -1071,10 +1071,14 @@ impl Writer for VegaLiteWriter {
                     if let Some(encoding) = vl_spec.get("encoding") {
                         spec_inner["encoding"] = encoding.clone();
                     }
+                    if let Some(layer) = vl_spec.get("layer") {
+                        spec_inner["layer"] = layer.clone();
+                    }
 
                     vl_spec["spec"] = spec_inner;
                     vl_spec.as_object_mut().unwrap().remove("mark");
                     vl_spec.as_object_mut().unwrap().remove("encoding");
+                    vl_spec.as_object_mut().unwrap().remove("layer");
                 }
             }
         }
