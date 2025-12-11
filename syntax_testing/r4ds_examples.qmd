@@ -63,6 +63,9 @@ ggplot(diamonds, aes(x = y)) +
 #|   linear association between the two variables. All but one of the diamonds 
 #|   has length greater than 3. The one outlier has a length of 0 and a width 
 #|   of about 6.5. 
+diamonds2 <- diamonds |>
+  mutate(y = if_else(y < 3 | y > 20, NA, y))
+
 ggplot(diamonds2, aes(x = x, y = y)) + 
   geom_point()
 ```
@@ -70,6 +73,9 @@ ggplot(diamonds2, aes(x = x, y = y)) +
 ```{r}
 # Source: EDA.qmd (line 274)
 #| eval: false
+diamonds2 <- diamonds |>
+  mutate(y = if_else(y < 3 | y > 20, NA, y))
+
 ggplot(diamonds2, aes(x = x, y = y)) + 
   geom_point(na.rm = TRUE)
 ```
@@ -181,6 +187,9 @@ diamonds |>
 #| fig-alt: |
 #|   A scatterplot of price vs. carat. The relationship is positive, somewhat 
 #|   strong, and exponential.
+smaller <- diamonds |>
+  filter(carat < 3)
+
 ggplot(smaller, aes(x = carat, y = price)) +
   geom_point()
 ```
@@ -193,6 +202,9 @@ ggplot(smaller, aes(x = carat, y = price)) +
 #|   strong, and exponential. The points are transparent, showing clusters where 
 #|   the number of points is higher than other areas, The most obvious clusters 
 #|   are for diamonds with 1, 1.5, and 2 carats.
+smaller <- diamonds |>
+  filter(carat < 3)
+
 ggplot(smaller, aes(x = carat, y = price)) + 
   geom_point(alpha = 1 / 100)
 ```
@@ -205,6 +217,9 @@ ggplot(smaller, aes(x = carat, y = price)) +
 #|   Plot 1: A binned density plot of price vs. carat. Plot 2: A hexagonal bin 
 #|   plot of price vs. carat. Both plots show that the highest density of 
 #|   diamonds have low carats and low prices.
+smaller <- diamonds |>
+  filter(carat < 3)
+
 ggplot(smaller, aes(x = carat, y = price)) +
   geom_bin2d()
 
@@ -223,6 +238,9 @@ ggplot(smaller, aes(x = carat, y = price)) +
 #|   roughly symmetric price distributions, and diamonds that weigh more have 
 #|   left skewed distributions. Cheaper, smaller diamonds have outliers on the 
 #|   higher end, more expensive, bigger diamonds have outliers on the lower end.
+smaller <- diamonds |>
+  filter(carat < 3)
+
 ggplot(smaller, aes(x = carat, y = price)) + 
   geom_boxplot(aes(group = cut_width(carat, 0.1)))
 ```
@@ -261,6 +279,20 @@ ggplot(diamonds_aug, aes(x = carat, y = .resid)) +
 #|   cuts (Fair to Ideal), the y-axis ranges from 0 to almost 5. The medians are 
 #|   quite similar, between roughly 0.75 to 1.25. Each of the distributions of 
 #|   residuals is right skewed, with many outliers on the higher end.
+library(tidymodels)
+
+diamonds <- diamonds |>
+  mutate(
+    log_price = log(price),
+    log_carat = log(carat)
+  )
+
+diamonds_fit <- linear_reg() |>
+  fit(log_price ~ log_carat, data = diamonds)
+
+diamonds_aug <- augment(diamonds_fit, new_data = diamonds) |>
+  mutate(.resid = exp(.resid))
+
 ggplot(diamonds_aug, aes(x = cut, y = .resid)) + 
   geom_boxplot()
 ```
@@ -321,6 +353,19 @@ ggplot(df, aes(x, y)) +
 #|   Scatterplot of highway mileage versus engine size where points are colored 
 #|   by drive type. Smooth curves for each drive type are overlaid. 
 #|   Text labels identify the curves as front-wheel, rear-wheel, and 4-wheel.
+label_info <- mpg |>
+  group_by(drv) |>
+  arrange(desc(displ)) |>
+  slice_head(n = 1) |>
+  mutate(
+    drive_type = case_when(
+      drv == "f" ~ "front-wheel drive",
+      drv == "r" ~ "rear-wheel drive",
+      drv == "4" ~ "4-wheel drive"
+    )
+  ) |>
+  select(displ, hwy, drv, drive_type)
+
 ggplot(mpg, aes(x = displ, y = hwy, color = drv)) +
   geom_point(alpha = 0.3) +
   geom_smooth(se = FALSE) +
@@ -340,6 +385,19 @@ ggplot(mpg, aes(x = displ, y = hwy, color = drv)) +
 #|   Text labels identify the curves as front-wheel, rear-wheel, and 4-wheel.
 #|   The labels are box with white background 
 #|   and positioned to not overlap.
+label_info <- mpg |>
+  group_by(drv) |>
+  arrange(desc(displ)) |>
+  slice_head(n = 1) |>
+  mutate(
+    drive_type = case_when(
+      drv == "f" ~ "front-wheel drive",
+      drv == "r" ~ "rear-wheel drive",
+      drv == "4" ~ "4-wheel drive"
+    )
+  ) |>
+  select(displ, hwy, drv, drive_type)
+
 ggplot(mpg, aes(x = displ, y = hwy, color = drv)) +
   geom_point(alpha = 0.3) +
   geom_smooth(se = FALSE) +
@@ -378,6 +436,9 @@ ggplot(mpg, aes(x = displ, y = hwy)) +
 #|   arrow pointing down follows the trend of the points and the annotation 
 #|   placed next to the arrow reads "Larger engine sizes tend to have lower 
 #|   fuel economy". The arrow and the annotation text is red.
+trend_text <- "Larger engine sizes tend to have lower fuel economy." |>
+  str_wrap(width = 30)
+
 ggplot(mpg, aes(x = displ, y = hwy)) +
   geom_point() +
   annotate(
@@ -721,6 +782,9 @@ ggplot(compact, aes(x = displ, y = hwy, color = drv)) +
 #|   no rear-wheel drive compact cars. Since the x and y scales are the same, 
 #|   and go well beyond minimum or maximum highway mileage and displacement, 
 #|   the points do not take up the entire plotting area.
+suv <- mpg |> filter(class == "suv")
+compact <- mpg |> filter(class == "compact")
+
 x_scale <- scale_x_continuous(limits = range(mpg$displ))
 y_scale <- scale_y_continuous(limits = range(mpg$hwy))
 col_scale <- scale_color_discrete(limits = unique(mpg$drv))
@@ -901,6 +965,17 @@ ggplot(table1, aes(x = year, y = cases)) +
 #|   rapidly accelerate to a low rank, and then decay again. There are
 #|   surprisingly few tracks in the region when week is >20 and rank is
 #|   >50.
+billboard_longer <- billboard |>
+  pivot_longer(
+    cols = starts_with("wk"),
+    names_to = "week",
+    values_to = "rank",
+    values_drop_na = TRUE
+  ) |>
+  mutate(
+    week = parse_number(week)
+  )
+
 billboard_longer |> 
   ggplot(aes(x = week, y = rank, group = track)) + 
   geom_line(alpha = 0.25) + 
@@ -936,6 +1011,13 @@ ggplot(flights, aes(x = air_time - airtime2)) + geom_histogram()
 #|   from 0.2 at when n is ~100 to 0.25 when n is ~1000. Average performance
 #|   continues to increase linearly at a much shallower slope, reaching
 #|   0.3 when n is ~12,000.
+batters <- Lahman::Batting |>
+  group_by(playerID) |>
+  summarize(
+    performance = sum(H, na.rm = TRUE) / sum(AB, na.rm = TRUE),
+    n = sum(AB, na.rm = TRUE)
+  )
+
 batters |> 
   filter(n > 100) |> 
   ggplot(aes(x = n, y = performance)) +
@@ -1231,6 +1313,20 @@ ggplot(data = mpg)
 #|   on weekends. The are few days that stand out as having a surprisingly
 #|   few flights in early February, early July, late November, and late
 #|   December.
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   ggplot(aes(x = dep_time)) + 
   geom_freqpoly(binwidth = 86400) # 86400 seconds = 1 day
@@ -1244,6 +1340,20 @@ flights_dt |>
 #|   increments. It's hard to see much pattern because of high variability,
 #|   but most bins have 8-12 flights, and there are markedly fewer flights 
 #|   before 6am and after 8pm.
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   filter(dep_time < ymd(20130102)) |> 
   ggplot(aes(x = dep_time)) + 
@@ -1258,6 +1368,20 @@ flights_dt |>
 #|   flights, ~48,0000, decreasingly slightly over the course of the week.
 #|   Sunday is a little lower (~45,000), and Saturday is much lower 
 #|   (~38,000).
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   mutate(wday = wday(dep_time, label = TRUE)) |> 
   ggplot(aes(x = wday)) +
@@ -1273,6 +1397,20 @@ flights_dt |>
 #|   at ~23 minute past the hour and 9 minutes of delay. It then increases
 #|   again to (17, 35), and sharply decreases to (55, 4). It finishes off
 #|   with an increase to (60, 9).
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   mutate(minute = minute(dep_time)) |> 
   group_by(minute) |> 
@@ -1291,6 +1429,27 @@ flights_dt |>
 #|   and average delay (4-16). There is relatively little pattern, just a
 #|   small suggestion that the average delay decreases from maybe 10 minutes
 #|   to 8 minutes over the course of the hour.
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+sched_dep <- flights_dt |>
+  mutate(minute = minute(sched_dep_time)) |>
+  group_by(minute) |>
+  summarize(
+    avg_delay = mean(arr_delay, na.rm = TRUE),
+    n = n()
+  )
+
 sched_dep <- flights_dt |> 
   mutate(minute = minute(sched_dep_time)) |> 
   group_by(minute) |> 
@@ -1317,6 +1476,27 @@ ggplot(sched_dep, aes(x = minute, y = avg_delay)) +
 #|   all most all flights are scheduled to depart on multiples of five, 
 #|   with a few extra at 15, 45, and 55 minutes.
 #| echo: false
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+sched_dep <- flights_dt |>
+  mutate(minute = minute(sched_dep_time)) |>
+  group_by(minute) |>
+  summarize(
+    avg_delay = mean(arr_delay, na.rm = TRUE),
+    n = n()
+  )
+
 ggplot(sched_dep, aes(x = minute, y = n)) +
   geom_line()
 ```
@@ -1329,6 +1509,20 @@ ggplot(sched_dep, aes(x = minute, y = n)) +
 #|   February to November with around 7,000 flights per week. There are
 #|   far fewer flights on the first (approximately 4,500 flights) and last
 #|   weeks of the year (approximately 2,500 flights).
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   count(week = floor_date(dep_time, "week")) |> 
   ggplot(aes(x = week, y = n)) +
@@ -1341,6 +1535,20 @@ flights_dt |>
 #| fig-alt: |
 #|   A line plot with depature time on the x-axis. This is units of seconds
 #|   since midnight so it's hard to interpret.
+make_datetime_100 <- function(year, month, day, time) {
+  make_datetime(year, month, day, time %/% 100, time %% 100)
+}
+
+flights_dt <- flights |>
+  filter(!is.na(dep_time), !is.na(arr_time)) |>
+  mutate(
+    dep_time = make_datetime_100(year, month, day, dep_time),
+    arr_time = make_datetime_100(year, month, day, arr_time),
+    sched_dep_time = make_datetime_100(year, month, day, sched_dep_time),
+    sched_arr_time = make_datetime_100(year, month, day, sched_arr_time)
+  ) |>
+  select(origin, dest, ends_with("delay"), ends_with("time"))
+
 flights_dt |> 
   mutate(dep_hour = dep_time - floor_date(dep_time, "day")) |> 
   ggplot(aes(x = dep_hour)) +
@@ -1373,6 +1581,13 @@ ggplot(relig_summary, aes(x = tvhours, y = relig)) +
 #|   The same scatterplot as above, but now the religion is displayed in
 #|   increasing order of tvhours. "Other eastern" has the fewest tvhours
 #|   under 2, and "Don't know" has the highest (over 5).
+relig_summary <- gss_cat |>
+  group_by(relig) |>
+  summarize(
+    tvhours = mean(tvhours, na.rm = TRUE),
+    n = n()
+  )
+
 ggplot(relig_summary, aes(x = tvhours, y = fct_reorder(relig, tvhours))) +
   geom_point()
 ```
@@ -1402,6 +1617,13 @@ ggplot(rincome_summary, aes(x = age, y = fct_reorder(rincome, age))) +
 #|   bottom of the y-axis. Generally there is a positive association
 #|   between income and age, and the income band with the highethst average
 #|   age is "Not applicable".
+rincome_summary <- gss_cat |>
+  group_by(rincome) |>
+  summarize(
+    age = mean(age, na.rm = TRUE),
+    n = n()
+  )
+
 ggplot(rincome_summary, aes(x = age, y = fct_relevel(rincome, "Not applicable"))) +
   geom_point()
 ```
@@ -1421,6 +1643,14 @@ ggplot(rincome_summary, aes(x = age, y = fct_relevel(rincome, "Not applicable"))
 #|     unsurprising patterns: the proportion never married decreases with
 #|     age, married forms an upside down U shape, and widowed starts off
 #|     low but increases steeply after age 60.
+by_age <- gss_cat |>
+  filter(!is.na(age)) |>
+  count(age, marital) |>
+  group_by(age) |>
+  mutate(
+    prop = n / sum(n)
+  )
+
 by_age <- gss_cat |>
   filter(!is.na(age)) |>
   count(age, marital) |>
@@ -1604,6 +1834,9 @@ density <- function(color, facets, binwidth = 0.1) {
 #|   Histogram of carats of diamonds from the by_clarity dataset, ranging from 
 #|   0 to 5 carats. The distribution is unimodal and right skewed with a peak 
 #|   around 1 carat.
+by_clarity <- diamonds |>
+  group_nest(clarity)
+
 
 carat_histogram <- function(df) {
   ggplot(df, aes(x = carat)) + geom_histogram(binwidth = 0.1)  
@@ -1930,6 +2163,12 @@ ggplot(mpg, aes(x = drv, fill = class)) +
 #|   - A bar chart with a single value on the x-axis, "no".
 #|   - The same bar chart as the last plot, but now with two values on
 #|     the x-axis, "yes" and "no". There is no bar for the "yes" category.
+health <- tibble(
+  name   = c("Ikaia", "Oletta", "Leriah", "Dashay", "Tresaun"),
+  smoker = factor(c("no", "no", "no", "no", "no"), levels = c("yes", "no")),
+  age    = c(34, 88, 75, 47, 56),
+)
+
 ggplot(health, aes(x = smoker)) +
   geom_bar() +
   scale_x_discrete()

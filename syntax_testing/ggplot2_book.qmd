@@ -155,6 +155,8 @@ ggplot(mpg, aes(displ, hwy)) +
 ```{r}
 #| label: gghighlight
 data(Oxboys, package = "nlme")
+
+data(Oxboys, package = "nlme")
 ggplot(Oxboys, aes(age, height, group = Subject)) + 
   geom_line() + 
   geom_point() + 
@@ -250,6 +252,8 @@ p12 & theme_bw()
 
 ```{r}
 #| label: oxboys-line
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(age, height, group = Subject)) + 
   geom_point() + 
   geom_line()
@@ -257,6 +261,8 @@ ggplot(Oxboys, aes(age, height, group = Subject)) +
 
 ```{r}
 #| label: oxboys-line-bad
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(age, height)) + 
   geom_point() + 
   geom_line()
@@ -264,6 +270,8 @@ ggplot(Oxboys, aes(age, height)) +
 
 ```{r}
 #| label: layer18
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(age, height, group = Subject)) + 
   geom_line() + 
   geom_smooth(method = "lm", se = FALSE)
@@ -271,12 +279,16 @@ ggplot(Oxboys, aes(age, height, group = Subject)) +
 
 ```{r}
 #| label: oxbox
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(Occasion, height)) + 
   geom_boxplot()
 ```
 
 ```{r}
 #| label: oxbox-line-bad
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(Occasion, height)) + 
   geom_boxplot() +
   geom_line(colour = "#3366FF", alpha = 0.5)
@@ -284,6 +296,8 @@ ggplot(Oxboys, aes(Occasion, height)) +
 
 ```{r}
 #| label: oxbox-line
+data(Oxboys, package = "nlme")
+
 ggplot(Oxboys, aes(Occasion, height)) + 
   geom_boxplot() +
   geom_line(aes(group = Subject), colour = "#3366FF", alpha = 0.5)
@@ -803,6 +817,8 @@ ggplot(mpg, aes(displ, hwy)) +
 ```{r}
 #| layout-ncol: 2
 #| fig-width: 4
+mpg2 <- subset(mpg, cyl != 5 & drv %in% c("4", "f") & class != "2seater")
+
 base <- ggplot(mpg2, aes(displ, hwy)) + 
   geom_blank() + 
   xlab(NULL) + 
@@ -815,6 +831,8 @@ base + facet_wrap(~class, ncol = 3, as.table = FALSE)
 ```{r}
 #| layout-ncol: 2
 #| fig-width: 4
+mpg2 <- subset(mpg, cyl != 5 & drv %in% c("4", "f") & class != "2seater")
+
 base <- ggplot(mpg2, aes(displ, hwy)) + 
   geom_blank() + 
   xlab(NULL) + 
@@ -833,6 +851,8 @@ base + facet_wrap(~class, nrow = 3, dir = "v")
 #| label: fixed-vs-free
 #| layout-ncol: 2
 #| fig-width: 4
+mpg2 <- subset(mpg, cyl != 5 & drv %in% c("4", "f") & class != "2seater")
+
 p <- ggplot(mpg2, aes(cty, hwy)) + 
   geom_abline() +
   geom_jitter(width = 0.1, height = 0.1)
@@ -851,6 +871,8 @@ ggplot(economics_long, aes(date, value)) +
 
 ```{r}
 #| label: discrete-free
+mpg2 <- subset(mpg, cyl != 5 & drv %in% c("4", "f") & class != "2seater")
+
 mpg2$model <- reorder(mpg2$model, mpg2$cty)
 mpg2$manufacturer <- reorder(mpg2$manufacturer, -mpg2$cty)
 
@@ -912,6 +934,8 @@ ggplot(df, aes(x, y)) +
 #| label: discretising
 #| layout-ncol: 3
 #| fig-width: 3
+mpg2 <- subset(mpg, cyl != 5 & drv %in% c("4", "f") & class != "2seater")
+
 # Bins of width 1
 mpg2$disp_w <- cut_width(mpg2$displ, 1)
 # Six bins of equal length
@@ -1007,6 +1031,11 @@ ggplot(mpg, aes(manufacturer)) +
 ```{r}
 #| layout-ncol: 2
 #| fig-width: 4
+drugs <- data.frame(
+  drug = c("a", "b", "c"),
+  effect = c(4.2, 9.7, 6.1)
+)
+
 ggplot(drugs, aes(drug, effect)) + geom_bar(stat = "identity")
 ggplot(drugs, aes(drug, effect)) + geom_point()
 ```
@@ -1154,6 +1183,13 @@ p
 ```
 
 ```{r}
+mod <- loess(hwy ~ displ, data = mpg)
+grid <- tibble(displ = seq(min(mpg$displ), max(mpg$displ), length = 50))
+grid$hwy <- predict(mod, newdata = grid)
+mod <- loess(hwy ~ displ, data = mpg)
+std_resid <- resid(mod) / mod$s
+outlier <- filter(mpg, abs(std_resid) > 2)
+
 ggplot(mpg, aes(displ, hwy)) + 
   geom_point() + 
   geom_line(data = grid, colour = "blue", linewidth = 1.5) +
@@ -1162,6 +1198,13 @@ ggplot(mpg, aes(displ, hwy)) +
 
 ```{r}
 #| eval: false
+mod <- loess(hwy ~ displ, data = mpg)
+grid <- tibble(displ = seq(min(mpg$displ), max(mpg$displ), length = 50))
+grid$hwy <- predict(mod, newdata = grid)
+mod <- loess(hwy ~ displ, data = mpg)
+std_resid <- resid(mod) / mod$s
+outlier <- filter(mpg, abs(std_resid) > 2)
+
 ggplot(mapping = aes(displ, hwy)) + 
   geom_point(data = mpg) + 
   geom_line(data = grid) + 
@@ -1303,6 +1346,9 @@ ggplot(mpg, aes(displ, hwy)) +
 ```{r}
 #| layout-ncol: 2
 #| fig-width: 4
+mi_counties <- map_data("county", "michigan") %>%
+  select(lon = long, lat, group, id = subregion)
+
 ggplot(mi_counties, aes(lon, lat)) + 
   geom_point(size = .25, show.legend = FALSE) +
   coord_quickmap()
@@ -1319,6 +1365,13 @@ ggplot(oz_states) +
 ```
 
 ```{r}
+library(ozmaps)
+library(sf)
+oz_states <- ozmaps::ozmap_states %>% filter(NAME != "Other Territories")
+library(ozmaps)
+library(rmapshaper)
+oz_votes <- rmapshaper::ms_simplify(ozmaps::abs_ced)
+
 ggplot() + 
   geom_sf(data = oz_states, mapping = aes(fill = NAME), show.legend = FALSE) +
   geom_sf(data = oz_votes, fill = NA) + 
@@ -1342,6 +1395,24 @@ ggplot(sydney_map) +
 ```
 
 ```{r}
+oz_capitals <- tibble::tribble(
+  ~city,           ~lat,     ~lon,
+  "Sydney",    -33.8688, 151.2093,
+  "Melbourne", -37.8136, 144.9631,
+  "Brisbane",  -27.4698, 153.0251,
+  "Adelaide",  -34.9285, 138.6007,
+  "Perth",     -31.9505, 115.8605,
+  "Hobart",    -42.8821, 147.3272,
+  "Canberra",  -35.2809, 149.1300,
+  "Darwin",    -12.4634, 130.8456,
+)
+library(ozmaps)
+library(sf)
+oz_states <- ozmaps::ozmap_states %>% filter(NAME != "Other Territories")
+library(ozmaps)
+library(rmapshaper)
+oz_votes <- rmapshaper::ms_simplify(ozmaps::abs_ced)
+
 oz_capitals <- tibble::tribble( 
   ~city,           ~lat,     ~lon,
   "Sydney",    -33.8688, 151.2093,  
@@ -1398,6 +1469,13 @@ ggplot(dawson[-69]) +
 ```
 
 ```{r}
+library(stars)
+# Note: Requires external data file "IDE00422.202001072100.tif"
+sat_vis <- read_stars(
+  "IDE00422.202001072100.tif",
+  RasterIO = list(nBufXSize = 600, nBufYSize = 600)
+)
+
 ggplot() + 
   geom_stars(data = sat_vis) + 
   coord_equal()
@@ -1406,6 +1484,13 @@ ggplot() +
 ```{r}
 #| fig-width: 8
 #| fig-height: 4
+library(stars)
+# Note: Requires external data file "IDE00422.202001072100.tif"
+sat_vis <- read_stars(
+  "IDE00422.202001072100.tif",
+  RasterIO = list(nBufXSize = 600, nBufYSize = 600)
+)
+
 ggplot() + 
   geom_stars(data = sat_vis, show.legend = FALSE) +
   facet_wrap(vars(band)) + 
@@ -1414,6 +1499,16 @@ ggplot() +
 ```
 
 ```{r}
+library(stars)
+# Note: Requires external data file "IDE00422.202001072100.tif"
+sat_vis <- read_stars(
+  "IDE00422.202001072100.tif",
+  RasterIO = list(nBufXSize = 600, nBufYSize = 600)
+)
+library(ozmaps)
+library(sf)
+oz_states <- ozmaps::ozmap_states %>% filter(NAME != "Other Territories")
+
 ggplot() + 
   geom_stars(data = sat_vis, show.legend = FALSE) +
   geom_sf(data = oz_states, fill = NA, color = "white") + 
@@ -1834,6 +1929,14 @@ base + scale_fill_gradient(na.value = "yellow")
 #| layout-ncol: 2
 #| fig-width: 4
 #| fig-height: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(up, up, fill = big)) + 
   geom_tile() + 
   labs(x = NULL, y = NULL) 
@@ -1846,6 +1949,14 @@ base + scale_fill_continuous(limits = c(0, 10000))
 #| layout-ncol: 2
 #| fig-width: 4
 #| fig-height: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(up, up, fill = big)) + 
   geom_tile() + 
   labs(x = NULL, y = NULL) 
@@ -2203,6 +2314,14 @@ ggplot(faithfuld, aes(waiting, eruptions, alpha = density)) +
 #| fig-width: 4
 #| fig-height: 4
 #| layout-nrow: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(up, up)) + 
   geom_point(aes(colour = txt), size = 3) + 
   xlab(NULL) + 
@@ -2218,6 +2337,14 @@ base + theme(legend.position = "none")
 #| label: legend-position-man
 #| layout-ncol: 3
 #| fig-width: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(up, up)) + 
   geom_point(aes(colour = txt), size = 3)
 
@@ -2348,6 +2475,14 @@ ggplot(df, aes(val)) + geom_bar() +
 #| layout-ncol: 3
 #| fig-width: 3
 #| fig-height: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(const, up, colour = txt))
 base + geom_point()
 base + geom_point() + geom_path(aes(group = 1))
@@ -2358,6 +2493,14 @@ base + geom_raster(aes(fill = txt))
 #| layout-ncol: 2
 #| fig-width: 4
 #| fig-height: 4
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 ggplot(toy, aes(up, up)) + 
   geom_point(size = 4, colour = "grey20") +
   geom_point(aes(colour = txt), size = 2) 
@@ -2372,6 +2515,14 @@ ggplot(toy, aes(up, up)) +
 #| layout-ncol: 3
 #| fig-width: 3
 #| fig-height: 4
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(const, up)) +
   scale_x_continuous(NULL, breaks = NULL)
 base + geom_point(aes(colour = txt))
@@ -2383,6 +2534,14 @@ base + geom_point(aes(shape = txt, colour = txt))
 #| layout-ncol: 3
 #| fig-width: 3
 #| fig-height: 4
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(const, up)) + 
   geom_point(aes(shape = txt, colour = txt)) + 
   scale_x_continuous(NULL, breaks = NULL)
@@ -2432,6 +2591,16 @@ base + scale_size(range = c(1, 2))
 ```{r}
 #| layout-ncol: 2
 #| fig-width: 4
+planets <- data.frame(
+  name = c("Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"),
+  type = c(rep("Inner", 4), rep("Outer", 4)),
+  position = 1:8,
+  radius = c(2440, 6052, 6378, 3390, 71400, 60330, 25559, 24764),
+  orbit = c(57900000, 108200000, 149600000, 227900000, 778300000,
+            1427000000, 2871000000, 4497100000)
+)
+planets$name <- with(planets, factor(name, name))
+
 base <- ggplot(planets, aes(1, name, size = radius)) +
   geom_point() +
   scale_x_continuous(breaks = NULL) +
@@ -2689,6 +2858,14 @@ base +
 
 ```{r}
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2699,6 +2876,14 @@ base
 
 ```{r}
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2715,6 +2900,14 @@ base + scale_x_continuous(breaks = c(1000, 1500, 2000, 4000))
 
 ```{r}
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2732,6 +2925,14 @@ base + scale_x_continuous(breaks = scales::breaks_extended(n = 2))
 
 ```{r}
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2754,6 +2955,14 @@ base +
 #| layout-ncol: 2
 #| fig-width: 4
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(log, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2767,6 +2976,14 @@ base + scale_x_log10(minor_breaks = mb)
 #| layout-ncol: 2
 #| fig-width: 4
 #| fig-height: 2
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2785,6 +3002,14 @@ base +
 #| layout-ncol: 3
 #| fig-width: 3
 #| fig-height: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -2802,6 +3027,14 @@ base + scale_y_continuous(
 #| layout-ncol: 3
 #| fig-width: 3
 #| fig-height: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(big, const)) + 
   geom_point() + 
   labs(x = NULL, y = NULL) +
@@ -3004,6 +3237,14 @@ ggplot(mpg, aes(x = drv, y = hwy)) + geom_boxplot(width = .4)
 ```{r}
 #| layout-ncol: 3
 #| fig-width: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(const, txt)) + 
   geom_label(aes(label = txt)) +
   scale_x_continuous(breaks = NULL) +
@@ -3017,6 +3258,14 @@ base + scale_y_discrete(limits = c("d", "c", "a", "b"))
 ```{r}
 #| layout-ncol: 3
 #| fig-width: 3
+toy <- data.frame(
+  const = 1,
+  up = 1:4,
+  txt = letters[1:4],
+  big = (1:4)*1000,
+  log = c(2, 5, 10, 2000)
+)
+
 base <- ggplot(toy, aes(const, txt)) + 
   geom_label(aes(label = txt)) +
   scale_x_continuous(breaks = NULL) +
