@@ -13,7 +13,7 @@ SELECT date, revenue, region
 FROM sales
 WHERE year = 2024
 VISUALISE AS PLOT
-WITH line
+DRAW line
     x = date,
     y = revenue,
     color = region
@@ -284,7 +284,7 @@ mod integration_tests {
 
         // Create sample sales data and aggregate by day
         let sql = r#"
-            WITH sales AS (
+            DRAW sales AS (
                 SELECT
                     TIMESTAMP '2024-01-01 00:00:00' + INTERVAL (n) HOUR as sale_time,
                     (n % 3) as product_id,
