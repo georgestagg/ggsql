@@ -98,9 +98,6 @@ impl KernelServer {
     pub async fn run(&mut self) -> Result<()> {
         tracing::info!("Starting kernel event loop");
 
-        // Set up signal handler for SIGINT (Ctrl+C)
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-
         loop {
             tokio::select! {
                 msg = self.shell.recv() => {
@@ -122,7 +119,7 @@ impl KernelServer {
                         self.heartbeat.send(msg).await?;
                     }
                 }
-                _ = sigint.recv() => {
+                _ = tokio::signal::ctrl_c() => {
                     tracing::warn!("Received SIGINT, shutting down gracefully");
                     // Send a final idle status before exiting
                     // Note: We don't have a parent message here, so we'll send without one
