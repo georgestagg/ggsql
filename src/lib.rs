@@ -284,7 +284,7 @@ mod integration_tests {
 
         // Create sample sales data and aggregate by day
         let sql = r#"
-            DRAW sales AS (
+            WITH sales AS (
                 SELECT
                     TIMESTAMP '2024-01-01 00:00:00' + INTERVAL (n) HOUR as sale_time,
                     (n % 3) as product_id,
