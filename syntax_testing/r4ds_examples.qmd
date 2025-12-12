@@ -1,6 +1,7 @@
 ---
 title: "ggplot2 Examples from R for Data Science"
-format: html
+engine: jupyter
+keep-ipynb: true
 ---
 
 # Introduction
@@ -76,6 +77,13 @@ diamonds2 <- diamonds |>
 
 ggplot(diamonds2, aes(x = x, y = y)) + 
   geom_point()
+```
+
+```{ggsql}
+SELECT x, y FROM "data/diamonds.parquet"
+WHERE y > 3 && y < 20
+VISUALISE AS PLOT
+WITH point USING x = x, y = y
 ```
 
 ```{r}
