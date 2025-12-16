@@ -16,9 +16,8 @@ try {
   // Test parsing a simple ggSQL query
   const sourceCode = `
   VISUALISE AS PLOT
-  DRAW point USING
-      x = date,
-      y = revenue
+  DRAW point
+      MAPPING date AS x, revenue AS y
   `;
 
   const tree = parser.parse(sourceCode);
@@ -35,17 +34,12 @@ try {
   // Test a more complex query
   const complexQuery = `
   VISUALISE AS PLOT
-  DRAW line USING
-      x = date,
-      y = revenue,
-      color = region
-  DRAW point USING
-      x = date,
-      y = revenue,
-      color = region,
-      size = 3
-  SCALE x USING
-      type = 'date'
+  DRAW line
+      MAPPING date AS x, revenue AS y, region AS color
+  DRAW point
+      MAPPING date AS x, revenue AS y, region AS color
+      SETTING size TO 3
+  SCALE x SETTING type TO 'date'
   LABEL title = 'Revenue Analysis'
   THEME minimal
   `;

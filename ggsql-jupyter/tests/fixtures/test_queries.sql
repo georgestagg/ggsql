@@ -43,7 +43,7 @@ FROM generate_series(0, 30) as t(n)
 VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, value AS y, category AS color
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Time Series', x = 'Date', y = 'Value';
 
 -- Bar chart

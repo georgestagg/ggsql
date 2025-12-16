@@ -215,7 +215,7 @@ Key grammar elements:
 
 - `VISUALISE AS PLOT` - Entry point for visualization
 - `DRAW <geom> MAPPING` - Define geometric layers (point, line, bar, etc.)
-- `SCALE <aesthetic> USING` - Configure data-to-visual mappings
+- `SCALE <aesthetic> SETTING` - Configure data-to-visual mappings
 - `FACET` - Create small multiples (WRAP for flowing layout, BY for grid)
 - `COORD` - Coordinate transformations (cartesian, flip, polar)
 - `LABEL`, `THEME`, `GUIDE` - Styling and annotation
@@ -248,7 +248,7 @@ SELECT * FROM sales
 VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, revenue AS y, region AS color
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Sales Trends'
 ```
 

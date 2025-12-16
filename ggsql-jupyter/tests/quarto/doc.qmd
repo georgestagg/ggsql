@@ -168,7 +168,7 @@ WHERE category = 'Electronics'
 VISUALISE AS PLOT
 DRAW line
     MAPPING sale_date AS x, revenue AS y
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Electronics Revenue Over Time', x = 'Date', y = 'Revenue ($)'
 ```
 
@@ -196,7 +196,7 @@ DRAW line
 DRAW point
     MAPPING date AS x, value AS y, 'red' AS color
     SETTING size TO 30
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Time Series with Points', x = 'Date', y = 'Value'
 ```
 
@@ -207,7 +207,7 @@ SELECT date, value, category FROM 'metrics.csv'
 VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, value AS y, category AS color
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Metrics by Category', x = 'Date', y = 'Value'
 ```
 
@@ -221,7 +221,7 @@ WHERE category = 'Electronics'
 VISUALISE AS PLOT
 DRAW line
     MAPPING sale_date AS x, revenue AS y
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 FACET WRAP region
 LABEL title = 'Electronics Sales by Region', x = 'Date', y = 'Revenue ($)'
 ```
@@ -248,7 +248,7 @@ DRAW line
 DRAW point
     MAPPING month AS x, total_quantity_scaled AS y, 'orangered' AS color
     SETTING size TO 30
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 FACET region BY category
 LABEL title = 'Monthly Revenue and Quantity by Region and Category', x = 'Month', y = 'Value'
 ```
@@ -277,7 +277,7 @@ VISUALISE AS PLOT
 DRAW point
     MAPPING x AS x, y AS y, 'blue' AS color
     SETTING size TO 4
-COORD cartesian USING xlim = [0, 60], ylim = [0, 70]
+COORD cartesian SETTING xlim TO [0, 60], ylim TO [0, 70]
 LABEL title = 'Scatter Plot with Custom Axis Limits', x = 'X', y = 'Y'
 ```
 
@@ -306,7 +306,7 @@ DRAW line
 DRAW point 
     MAPPING date AS x, value AS y, 'red' AS color, 30 AS size
     FILTER value < 130
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Time Series with Points', x = 'Date', y = 'Value'
 ```
 
@@ -327,7 +327,7 @@ DRAW line
     MAPPING month AS x, total_revenue AS y
 DRAW point
     MAPPING month AS x, total_revenue AS y
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Monthly Revenue Trends', x = 'Month', y = 'Revenue ($)'
 ```
 
@@ -371,7 +371,7 @@ DRAW line
     MAPPING sale_date AS x, total_quantity AS y, region AS color
 DRAW point
     MAPPING sale_date AS x, total_quantity AS y, region AS color
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 FACET WRAP region
 LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
 ```

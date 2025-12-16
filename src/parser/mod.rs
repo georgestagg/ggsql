@@ -286,7 +286,7 @@ mod tests {
             VISUALISE AS PLOT
             DRAW line MAPPING date AS x, revenue AS y
             DRAW line MAPPING date AS x, cost AS y
-            SCALE x USING type = 'date'
+            SCALE x SETTING type TO 'date'
             LABEL title = 'Revenue and Cost Trends'
             THEME minimal
             VISUALIZE AS TABLE

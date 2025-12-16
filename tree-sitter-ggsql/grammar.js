@@ -351,11 +351,11 @@ module.exports = grammar({
       $.boolean
     ),
 
-    // SCALE clause
+    // SCALE clause - SCALE aesthetic SETTING prop TO value, ...
     scale_clause: $ => seq(
       caseInsensitive('SCALE'),
       $.aesthetic_name,
-      caseInsensitive('USING'),
+      caseInsensitive('SETTING'),
       optional(seq(
         $.scale_property,
         repeat(seq(',', $.scale_property))
@@ -364,7 +364,7 @@ module.exports = grammar({
 
     scale_property: $ => seq(
       $.scale_property_name,
-      '=',
+      caseInsensitive('TO'),
       $.scale_property_value
     ),
 
@@ -380,7 +380,7 @@ module.exports = grammar({
       $.array
     ),
 
-    // FACET clause
+    // FACET clause - FACET ... SETTING scales TO ...
     facet_clause: $ => choice(
       // FACET row_vars BY col_vars
       seq(
@@ -388,14 +388,14 @@ module.exports = grammar({
         $.facet_vars,
         alias(caseInsensitive('BY'), $.facet_by),
         $.facet_vars,
-        optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
+        optional(seq(caseInsensitive('SETTING'), caseInsensitive('scales'), caseInsensitive('TO'), $.facet_scales))
       ),
       // FACET WRAP vars
       seq(
         caseInsensitive('FACET'),
         alias(caseInsensitive('WRAP'), $.facet_wrap),
         $.facet_vars,
-        optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
+        optional(seq(caseInsensitive('SETTING'), caseInsensitive('scales'), caseInsensitive('TO'), $.facet_scales))
       )
     ),
 
@@ -411,14 +411,14 @@ module.exports = grammar({
       'fixed', 'free', 'free_x', 'free_y'
     ),
 
-    // COORD clause - new syntax: COORD [type] [USING properties]
+    // COORD clause - COORD [type] [SETTING prop TO value, ...]
     coord_clause: $ => seq(
       caseInsensitive('COORD'),
       choice(
-        // Type with optional USING: COORD polar USING theta = y
-        seq($.coord_type, optional(seq(caseInsensitive('USING'), $.coord_properties))),
-        // Just USING: COORD USING xlim = [0, 100] (defaults to cartesian)
-        seq(caseInsensitive('USING'), $.coord_properties)
+        // Type with optional SETTING: COORD polar SETTING theta TO y
+        seq($.coord_type, optional(seq(caseInsensitive('SETTING'), $.coord_properties))),
+        // Just SETTING: COORD SETTING xlim TO [0, 100] (defaults to cartesian)
+        seq(caseInsensitive('SETTING'), $.coord_properties)
       )
     ),
 
@@ -433,7 +433,7 @@ module.exports = grammar({
 
     coord_property: $ => seq(
       $.coord_property_name,
-      '=',
+      caseInsensitive('TO'),
       choice($.string, $.number, $.boolean, $.array, $.identifier)
     ),
 
@@ -464,11 +464,11 @@ module.exports = grammar({
       'color', 'colour', 'fill', 'size', 'shape', 'linetype'
     ),
 
-    // GUIDE clause
+    // GUIDE clause - GUIDE aesthetic SETTING prop TO value, ...
     guide_clause: $ => seq(
       caseInsensitive('GUIDE'),
       $.aesthetic_name,
-      caseInsensitive('USING'),
+      caseInsensitive('SETTING'),
       optional(seq(
         $.guide_property,
         repeat(seq(',', $.guide_property))
@@ -476,8 +476,8 @@ module.exports = grammar({
     ),
 
     guide_property: $ => choice(
-      seq('type', '=', $.guide_type),
-      seq($.guide_property_name, '=', choice($.string, $.number, $.boolean))
+      seq('type', caseInsensitive('TO'), $.guide_type),
+      seq($.guide_property_name, caseInsensitive('TO'), choice($.string, $.number, $.boolean))
     ),
 
     guide_type: $ => choice(
@@ -490,19 +490,19 @@ module.exports = grammar({
       'reverse', 'order'
     ),
 
-    // THEME clause
+    // THEME clause - THEME [name] [SETTING prop TO value, ...]
     theme_clause: $ => choice(
       // Just theme name
       seq(caseInsensitive('THEME'), $.theme_name),
       // Theme name with properties
       seq(
-        caseInsensitive('THEME'), $.theme_name, caseInsensitive('USING'),
+        caseInsensitive('THEME'), $.theme_name, caseInsensitive('SETTING'),
         $.theme_property,
         repeat(seq(',', $.theme_property))
       ),
       // Just properties (custom theme)
       seq(
-        caseInsensitive('THEME'), caseInsensitive('USING'),
+        caseInsensitive('THEME'), caseInsensitive('SETTING'),
         $.theme_property,
         repeat(seq(',', $.theme_property))
       )
@@ -514,7 +514,7 @@ module.exports = grammar({
 
     theme_property: $ => seq(
       $.theme_property_name,
-      '=',
+      caseInsensitive('TO'),
       choice($.string, $.number, $.boolean)
     ),
 

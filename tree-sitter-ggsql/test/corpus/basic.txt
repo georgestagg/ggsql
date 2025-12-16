@@ -305,8 +305,8 @@ Plot with scales and theme
 
 VISUALISE AS PLOT
 DRAW point MAPPING x AS x, y AS y, group AS color
-SCALE x USING type = 'linear', limits = [0, 100]
-SCALE color USING palette = 'viridis'
+SCALE x SETTING type TO 'linear', limits TO [0, 100]
+SCALE color SETTING palette TO 'viridis'
 THEME minimal
 
 --------------------------------------------------------------------------------
@@ -404,7 +404,7 @@ COORD cartesian with xlim
 
 VISUALISE AS PLOT
 DRAW point MAPPING x AS x, y AS y
-COORD cartesian USING xlim = [0, 100]
+COORD cartesian SETTING xlim TO [0, 100]
 
 --------------------------------------------------------------------------------
 

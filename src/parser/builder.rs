@@ -638,7 +638,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "SCALE" | "USING" | "," => continue, // Skip keywords
+            "SCALE" | "SETTING" | "TO" | "," => continue, // Skip keywords
             "aesthetic_name" => {
                 aesthetic = get_node_text(&child, source);
             }
@@ -656,7 +656,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
                         "scale_property_value" => {
                             prop_value = Some(parse_scale_property_value(&prop_child, source)?);
                         }
-                        "=" => continue,
+                        "TO" => continue,
                         _ => {}
                     }
                 }
@@ -785,7 +785,7 @@ fn build_facet(node: &Node, source: &str) -> Result<Facet> {
 
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "FACET" | "USING" | "=" => continue,
+            "FACET" | "SETTING" | "TO" => continue,
             "facet_wrap" => {
                 is_wrap = true;
             }
@@ -865,7 +865,7 @@ fn build_coord(node: &Node, source: &str) -> Result<Coord> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "COORD" | "USING" | "=" | "," => continue,
+            "COORD" | "SETTING" | "TO" | "," => continue,
             "coord_type" => {
                 coord_type = parse_coord_type(&child, source)?;
             }
@@ -1119,7 +1119,7 @@ fn build_guide(node: &Node, source: &str) -> Result<Guide> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "GUIDE" | "USING" | "," => continue, // Skip keywords
+            "GUIDE" | "SETTING" | "TO" | "," => continue, // Skip keywords
             "aesthetic_name" => {
                 aesthetic = get_node_text(&child, source);
             }
@@ -1135,15 +1135,15 @@ fn build_guide(node: &Node, source: &str) -> Result<Guide> {
                         // Regular property: name = value
                         let prop_name = get_node_text(&prop_child, source);
 
-                        // Find the value (next sibling after '=')
-                        let mut found_equals = false;
+                        // Find the value (next sibling after 'TO')
+                        let mut found_to = false;
                         let mut value_cursor = child.walk();
                         for value_child in child.children(&mut value_cursor) {
-                            if value_child.kind() == "=" {
-                                found_equals = true;
+                            if value_child.kind() == "TO" {
+                                found_to = true;
                                 continue;
                             }
-                            if found_equals {
+                            if found_to {
                                 let prop_value = parse_guide_property_value(&value_child, source)?;
                                 properties.insert(prop_name.clone(), prop_value);
                                 break;
@@ -1218,7 +1218,7 @@ fn build_theme(node: &Node, source: &str) -> Result<Theme> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "THEME" | "USING" | "," => continue,
+            "THEME" | "SETTING" | "TO" | "," => continue,
             "theme_name" => {
                 style = Some(get_node_text(&child, source));
             }
@@ -1236,7 +1236,7 @@ fn build_theme(node: &Node, source: &str) -> Result<Theme> {
                         "string" | "number" | "boolean" => {
                             prop_value = Some(parse_theme_property_value(&prop_child, source)?);
                         }
-                        "=" => continue,
+                        "TO" => continue,
                         _ => {}
                     }
                 }
@@ -1386,7 +1386,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y
-            COORD cartesian USING xlim = [0, 100]
+            COORD cartesian SETTING xlim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1404,7 +1404,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y
-            COORD cartesian USING ylim = [-10, 50]
+            COORD cartesian SETTING ylim TO [-10, 50]
         "#;
 
         let result = parse_test_query(query);
@@ -1420,7 +1420,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y, category AS color
-            COORD cartesian USING color = ['red', 'green', 'blue']
+            COORD cartesian SETTING color TO ['red', 'green', 'blue']
         "#;
 
         let result = parse_test_query(query);
@@ -1436,7 +1436,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y
-            COORD cartesian USING theta = y
+            COORD cartesian SETTING theta TO y
         "#;
 
         let result = parse_test_query(query);
@@ -1450,7 +1450,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y, region AS color
-            COORD flip USING color = ['A', 'B', 'C']
+            COORD flip SETTING color TO ['A', 'B', 'C']
         "#;
 
         let result = parse_test_query(query);
@@ -1467,7 +1467,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD flip USING xlim = [0, 100]
+            COORD flip SETTING xlim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1481,7 +1481,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD flip USING ylim = [0, 100]
+            COORD flip SETTING ylim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1495,7 +1495,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD flip USING theta = y
+            COORD flip SETTING theta TO y
         "#;
 
         let result = parse_test_query(query);
@@ -1509,7 +1509,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD polar USING theta = y
+            COORD polar SETTING theta TO y
         "#;
 
         let result = parse_test_query(query);
@@ -1526,7 +1526,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y, region AS color
-            COORD polar USING color = ['North', 'South', 'East', 'West']
+            COORD polar SETTING color TO ['North', 'South', 'East', 'West']
         "#;
 
         let result = parse_test_query(query);
@@ -1542,7 +1542,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD polar USING xlim = [0, 100]
+            COORD polar SETTING xlim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1556,7 +1556,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y
-            COORD polar USING ylim = [0, 100]
+            COORD polar SETTING ylim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1574,8 +1574,8 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y
-            SCALE x USING domain = [0, 100]
-            COORD cartesian USING x = [0, 50]
+            SCALE x SETTING domain TO [0, 100]
+            COORD cartesian SETTING x TO [0, 50]
         "#;
 
         let result = parse_test_query(query);
@@ -1589,8 +1589,8 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y, category AS color
-            SCALE color USING domain = ['A', 'B']
-            COORD cartesian USING color = ['A', 'B', 'C']
+            SCALE color SETTING domain TO ['A', 'B']
+            COORD cartesian SETTING color TO ['A', 'B', 'C']
         "#;
 
         let result = parse_test_query(query);
@@ -1604,8 +1604,8 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y, category AS color
-            SCALE color USING domain = ['A', 'B']
-            COORD cartesian USING xlim = [0, 100]
+            SCALE color SETTING domain TO ['A', 'B']
+            COORD cartesian SETTING xlim TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1617,8 +1617,8 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y
-            SCALE x USING type = 'linear'
-            COORD cartesian USING x = [0, 100]
+            SCALE x SETTING type TO 'linear'
+            COORD cartesian SETTING x TO [0, 100]
         "#;
 
         let result = parse_test_query(query);
@@ -1634,7 +1634,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW point MAPPING x AS x, y AS y, category AS color
-            COORD cartesian USING xlim = [0, 100], ylim = [-10, 50], color = ['A', 'B']
+            COORD cartesian SETTING xlim TO [0, 100], ylim TO [-10, 50], color TO ['A', 'B']
         "#;
 
         let result = parse_test_query(query);
@@ -1652,7 +1652,7 @@ mod tests {
         let query = r#"
             VISUALISE AS PLOT
             DRAW bar MAPPING category AS x, value AS y, region AS color
-            COORD polar USING theta = y, color = ['North', 'South']
+            COORD polar SETTING theta TO y, color TO ['North', 'South']
         "#;
 
         let result = parse_test_query(query);
@@ -1673,7 +1673,7 @@ mod tests {
         let query = r#"
             visualise as plot
             draw point MAPPING x AS x, y AS y
-            coord cartesian using xlim = [0, 100]
+            coord cartesian setting xlim to [0, 100]
             label title = 'Test Chart'
         "#;
 
@@ -1695,7 +1695,7 @@ mod tests {
         let query = r#"
             ViSuAlIsE As PlOt
             DrAw line MAPPING date AS x, revenue AS y
-            ScAlE x uSiNg type = 'date'
+            ScAlE x SeTtInG type tO 'date'
             ThEmE minimal
         "#;
 

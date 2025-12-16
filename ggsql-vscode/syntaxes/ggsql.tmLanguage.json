@@ -188,6 +188,14 @@
           "match": "\\b(?i:SCALE)\\b"
         },
         {
+          "name": "keyword.control.setting.ggsql",
+          "match": "\\b(?i:SETTING)\\b"
+        },
+        {
+          "name": "keyword.control.to.ggsql",
+          "match": "\\b(?i:TO)\\b"
+        },
+        {
           "name": "variable.parameter.scale-property.ggsql",
           "match": "\\b(type|limits|breaks|labels|expand|direction|na_value|palette|domain|range)\\b"
         },
@@ -204,6 +212,14 @@
           "match": "\\b(?i:FACET|WRAP|BY)\\b"
         },
         {
+          "name": "keyword.control.setting.ggsql",
+          "match": "\\b(?i:SETTING)\\b"
+        },
+        {
+          "name": "keyword.control.to.ggsql",
+          "match": "\\b(?i:TO)\\b"
+        },
+        {
           "name": "constant.language.facet-scales.ggsql",
           "match": "\\b(fixed|free|free_x|free_y)\\b"
         },
@@ -218,6 +234,14 @@
         {
           "name": "keyword.control.coord.ggsql",
           "match": "\\b(?i:COORD)\\b"
+        },
+        {
+          "name": "keyword.control.setting.ggsql",
+          "match": "\\b(?i:SETTING)\\b"
+        },
+        {
+          "name": "keyword.control.to.ggsql",
+          "match": "\\b(?i:TO)\\b"
         },
         {
           "name": "support.type.geom.ggsql",
@@ -248,6 +272,14 @@
           "match": "\\b(?i:GUIDE)\\b"
         },
         {
+          "name": "keyword.control.setting.ggsql",
+          "match": "\\b(?i:SETTING)\\b"
+        },
+        {
+          "name": "keyword.control.to.ggsql",
+          "match": "\\b(?i:TO)\\b"
+        },
+        {
           "name": "constant.language.guide-type.ggsql",
           "match": "\\b(legend|colorbar|axis|none)\\b"
         },
@@ -262,6 +294,14 @@
         {
           "name": "keyword.control.theme.ggsql",
           "match": "\\b(?i:THEME)\\b"
+        },
+        {
+          "name": "keyword.control.setting.ggsql",
+          "match": "\\b(?i:SETTING)\\b"
+        },
+        {
+          "name": "keyword.control.to.ggsql",
+          "match": "\\b(?i:TO)\\b"
         },
         {
           "name": "support.type.geom.ggsql",

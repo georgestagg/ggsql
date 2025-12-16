@@ -31,9 +31,9 @@ DRAW line
 DRAW point
     MAPPING month AS x, total_quantity AS y, region AS color
     SETTING size TO 3
-SCALE x USING type = 'date'
-SCALE color USING palette = 'viridis'
-FACET WRAP region USING scales = 'free_y'
+SCALE x SETTING type TO 'date'
+SCALE color SETTING palette TO 'viridis'
+FACET WRAP region SETTING scales TO 'free_y'
 LABEL title = 'Sales Trends by Region',
       x = 'Month',
       y = 'Total Quantity',
@@ -56,7 +56,7 @@ COORD flip
 LABEL title = 'Top 10 Product Categories',
       x = 'Category',
       y = 'Total Sales'
-GUIDE fill USING type = 'none'
+GUIDE fill SETTING type TO 'none'
 THEME dark
 
 -- ============================================================================
@@ -68,7 +68,7 @@ GROUP BY region
 VISUALISE AS PLOT
 DRAW bar
     MAPPING region AS x, count AS y, region AS fill
-COORD polar USING theta = y
+COORD polar SETTING theta TO y
 LABEL title = 'Customer Distribution by Region'
 
 -- ============================================================================
@@ -80,8 +80,8 @@ WHERE age BETWEEN 18 AND 80
 VISUALISE AS PLOT
 DRAW histogram
     MAPPING age AS x, gender AS fill
-SCALE x USING type = 'linear', limits = [18, 80]
-FACET WRAP gender USING scales = 'fixed'
+SCALE x SETTING type TO 'linear', limits TO [18, 80]
+FACET WRAP gender SETTING scales TO 'fixed'
 LABEL title = 'Age Distribution by Gender',
       x = 'Age',
       y = 'Count'
@@ -107,9 +107,9 @@ DRAW ribbon
 DRAW line
     MAPPING date AS x, avg_temp AS y, 'blue' AS color
     SETTING size TO 2
-SCALE x USING type = 'date'
-SCALE y USING type = 'linear', limits = [0, 100]
-COORD cartesian USING xlim = ['2024-01-01', '2024-12-31']
+SCALE x SETTING type TO 'date'
+SCALE y SETTING type TO 'linear', limits TO [0, 100]
+COORD cartesian SETTING xlim TO ['2024-01-01', '2024-12-31']
 LABEL title = 'Temperature Range (Last 30 Days)',
       x = 'Date',
       y = 'Temperature (°C)',
@@ -133,19 +133,19 @@ WHERE s.sale_date >= '2024-01-01'
 VISUALISE AS PLOT
 DRAW point
     MAPPING sale_date AS x, revenue AS y, category AS color, quantity AS size, category AS shape
-SCALE x USING type = 'date'
-SCALE y USING type = 'log10'
-SCALE color USING domain = ['Electronics', 'Clothing', 'Food', 'Books']
-FACET category BY employee_name USING scales = 'free_y'
+SCALE x SETTING type TO 'date'
+SCALE y SETTING type TO 'log10'
+SCALE color SETTING domain TO ['Electronics', 'Clothing', 'Food', 'Books']
+FACET category BY employee_name SETTING scales TO 'free_y'
 LABEL title = 'Sales Performance Analysis',
       x = 'Sale Date',
       y = 'Revenue (log scale)',
       color = 'Product Category',
       size = 'Quantity Sold'
-GUIDE color USING
-    type = 'legend',
-    position = 'right',
-    title = 'Categories'
+GUIDE color SETTING
+    type TO 'legend',
+    position TO 'right',
+    title TO 'Categories'
 THEME grey
 
 -- ============================================================================
@@ -164,8 +164,8 @@ VISUALISE FROM quarterly_breakdown AS PLOT
 DRAW area
     MAPPING quarter AS x, revenue AS y, category AS fill
     SETTING alpha TO 0.7
-SCALE x USING type = 'date'
-SCALE fill USING palette = 'plasma', domain = ['A', 'B', 'C', 'D']
+SCALE x SETTING type TO 'date'
+SCALE fill SETTING palette TO 'plasma', domain TO ['A', 'B', 'C', 'D']
 LABEL title = 'Quarterly Revenue by Category',
       x = 'Quarter',
       y = 'Revenue ($)',
@@ -183,7 +183,7 @@ DRAW boxplot
 DRAW violin
     MAPPING category AS x, price AS y
     SETTING alpha TO 0.3
-COORD cartesian USING ylim = [0, 500]
+COORD cartesian SETTING ylim TO [0, 500]
 LABEL title = 'Price Distribution by Category',
       x = 'Product Category',
       y = 'Price ($)'
@@ -204,14 +204,14 @@ DRAW point
     MAPPING price AS x, rating AS y, sales_count AS size, sales_count AS color
 DRAW text
     MAPPING price AS x, rating AS y, product_name AS label
-SCALE color USING palette = 'viridis'
-SCALE size USING limits = [0, 10000]
-COORD cartesian USING xlim = [0, 1000], ylim = [0, 5]
+SCALE color SETTING palette TO 'viridis'
+SCALE size SETTING limits TO [0, 10000]
+COORD cartesian SETTING xlim TO [0, 1000], ylim TO [0, 5]
 LABEL title = 'Featured Products: Price vs Rating',
       x = 'Price ($)',
       y = 'Customer Rating',
       size = 'Total Sales'
-GUIDE size USING type = 'legend', position = 'bottom'
+GUIDE size SETTING type TO 'legend', position TO 'bottom'
 
 -- ============================================================================
 -- Example 11: Multiple VISUALISE Statements
@@ -244,7 +244,7 @@ DRAW line
 DRAW point
     MAPPING date AS x, value AS y, category AS color
     FILTER value > 50
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 LABEL title = 'Metrics with Highlighted Points Above 50'
 
 -- ============================================================================
