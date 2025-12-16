@@ -9,7 +9,7 @@
 ```sql
 SELECT date, revenue, region FROM sales WHERE year = 2024
 VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue, color = region
+DRAW line MAPPING date AS x, revenue AS y, region AS color
 SCALE x USING type = 'date'
 COORD cartesian USING ylim = [0, 100000]
 LABEL title = 'Sales by Region', x = 'Date', y = 'Revenue'
@@ -40,7 +40,7 @@ The original syntax where SQL and visualization are separated by `VISUALISE AS`:
 ```sql
 SELECT * FROM sales WHERE year = 2024
 VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue
+DRAW line MAPPING date AS x, revenue AS y
 ```
 
 ### Shorthand Pattern: VISUALISE FROM ... AS
@@ -50,7 +50,7 @@ A concise syntax that automatically injects `SELECT * FROM <source>`:
 ```sql
 -- Direct table visualization
 VISUALISE FROM sales AS PLOT
-DRAW bar USING x = region, y = total
+DRAW bar MAPPING region AS x, total AS y
 
 -- CTE visualization (no trailing SELECT)
 WITH monthly_totals AS (
@@ -59,7 +59,7 @@ WITH monthly_totals AS (
     GROUP BY month
 )
 VISUALISE FROM monthly_totals AS PLOT
-DRAW line USING x = month, y = total
+DRAW line MAPPING month AS x, total AS y
 ```
 
 ---
@@ -196,10 +196,10 @@ pub struct VizSpec {
 }
 
 pub struct Layer {
-    pub name: Option<String>,        // Layer name (from AS clause)
     pub geom: Geom,                  // Geometric object type
-    pub aesthetics: HashMap<String, AestheticValue>,  // Aesthetic mappings
-    pub parameters: HashMap<String, ParameterValue>,  // Geom parameters (not aesthetics)
+    pub aesthetics: HashMap<String, AestheticValue>,  // Aesthetic mappings (from MAPPING)
+    pub parameters: HashMap<String, ParameterValue>,  // Geom parameters (from USING)
+    pub filter: Option<FilterExpression>,  // Layer filter (from FILTER)
 }
 
 pub enum Geom {
@@ -310,7 +310,6 @@ pub struct Theme {
 
 - `VizSpec::new(viz_type)` - Create a new empty VizSpec
 - `VizSpec::find_scale(aesthetic)` - Look up scale specification for an aesthetic
-- `VizSpec::find_layer(name)` - Find a layer by name
 - `VizSpec::find_guide(aesthetic)` - Find a guide specification for an aesthetic
 - `VizSpec::has_layers()` - Check if VizSpec has any layers
 - `VizSpec::layer_count()` - Get the number of layers
@@ -318,7 +317,7 @@ pub struct Theme {
 **Layer methods:**
 
 - `Layer::new(geom)` - Create a new layer with a geom
-- `Layer::with_name(name)` - Set the layer name (builder pattern)
+- `Layer::with_filter(filter)` - Set the layer filter (builder pattern)
 - `Layer::with_aesthetic(aesthetic, value)` - Add an aesthetic mapping (builder pattern)
 - `Layer::with_parameter(parameter, value)` - Add a geom parameter (builder pattern)
 - `Layer::get_column(aesthetic)` - Get column name for an aesthetic (if mapped to column)
@@ -671,7 +670,7 @@ SELECT * FROM (VALUES
 -- Cell 2: Visualize
 SELECT * FROM sales
 VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue, color = region
+DRAW line MAPPING date AS x, revenue AS y, region AS color
 SCALE x USING type = 'date'
 LABEL title = 'Sales Trends'
 ```
@@ -807,7 +806,7 @@ cargo build --all-features
 | Clause         | Repeatable | Purpose            | Example                              |
 | -------------- | ---------- | ------------------ | ------------------------------------ |
 | `VISUALISE AS` | ✅ Yes     | Entry point        | `VISUALISE AS PLOT`                  |
-| `DRAW`         | ✅ Yes     | Define layers      | `DRAW line USING x=date, y=value`    |
+| `DRAW`         | ✅ Yes     | Define layers      | `DRAW line MAPPING date AS x, value AS y` |
 | `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x USING type='date'`          |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
 | `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian USING xlim=[0,100]` |
@@ -820,8 +819,10 @@ cargo build --all-features
 **Syntax**:
 
 ```sql
-DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
+DRAW <geom> [MAPPING <value> AS <aesthetic>, ...] [USING <param> := <value>, ...] [FILTER <condition>]
 ```
+
+All clauses (MAPPING, USING, FILTER) are optional.
 
 **Geom Types**:
 
@@ -829,7 +830,9 @@ DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
 - **Statistical**: `histogram`, `density`, `smooth`, `boxplot`, `violin`
 - **Annotation**: `text`, `label`, `segment`, `arrow`, `hline`, `vline`, `abline`, `errorbar`
 
-**Common Aesthetics**:
+**MAPPING Clause** (Aesthetic Mappings):
+
+Maps data values (columns or literals) to visual aesthetics. Syntax: `value AS aesthetic`
 
 - **Position**: `x`, `y`, `xmin`, `xmax`, `ymin`, `ymax`
 - **Color**: `color`, `fill`, `alpha`
@@ -838,14 +841,39 @@ DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
 
 **Literal vs Column**:
 
-- Unquoted → column reference: `color = region`
-- Quoted → literal value: `color = 'blue'`, `size = 3`
+- Unquoted → column reference: `region AS color`
+- Quoted → literal value: `'blue' AS color`, `3 AS size`
 
-**Example**:
+**USING Clause** (Parameters):
+
+Sets layer/geom parameters (not mapped to data). Syntax: `param := value`
+
+- Parameters like `opacity`, `size` (fixed), `stroke_width`, etc.
+
+**FILTER Clause** (Layer Filtering):
+
+Applies a filter to the layer data. Supports basic comparison operators.
+
+- Operators: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
+- Logical: `AND`, `OR`, parentheses for grouping
+
+**Examples**:
 
 ```sql
-DRAW line USING x = date, y = revenue, color = region, size = 2
-DRAW point USING x = date, y = revenue, color = region AS "data_points"
+-- Basic mapping
+DRAW line MAPPING date AS x, revenue AS y, region AS color
+
+-- Mapping with literal
+DRAW point MAPPING date AS x, revenue AS y, 'red' AS color
+
+-- Using parameters
+DRAW point MAPPING x AS x, y AS y USING size := 5, opacity := 0.7
+
+-- With filter
+DRAW point MAPPING x AS x, y AS y, category AS color FILTER value > 100
+
+-- Combined
+DRAW line MAPPING date AS x, value AS y USING stroke_width := 2 FILTER category = 'A' AND year >= 2024
 ```
 
 ### SCALE Clause
@@ -1002,7 +1030,7 @@ COORD polar
 COORD polar USING theta = y
 
 -- Combined with other clauses
-DRAW bar USING x = category, y = value
+DRAW bar MAPPING category AS x, value AS y
 COORD cartesian USING xlim = [0, 100], ylim = [0, 200]
 LABEL x = 'Category', y = 'Count'
 ```
@@ -1064,8 +1092,8 @@ WHERE sale_date >= '2024-01-01'
 GROUP BY sale_date, region
 ORDER BY sale_date
 VISUALISE AS PLOT
-DRAW line USING x = sale_date, y = total, color = region
-DRAW point USING x = sale_date, y = total, color = region
+DRAW line MAPPING sale_date AS x, total AS y, region AS color
+DRAW point MAPPING sale_date AS x, total AS y, region AS color
 SCALE x USING type = 'date'
 FACET WRAP region
 LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
@@ -1079,7 +1107,7 @@ THEME minimal
 ```rust
 // splitter.rs
 SQL:  "SELECT sale_date, region, SUM(quantity) as total FROM sales ..."
-VIZ:  "VISUALISE AS PLOT DRAW line USING x = sale_date, ..."
+VIZ:  "VISUALISE AS PLOT DRAW line MAPPING sale_date AS x, ..."
 ```
 
 **2. SQL Execution** (DuckDB Reader)

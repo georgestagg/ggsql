@@ -78,7 +78,7 @@ Create a new file with `.gsql` extension:
 -- test.gsql
 SELECT * FROM sales WHERE year = 2024
 VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue
+DRAW line MAPPING date AS x, revenue AS y
 SCALE x USING type = 'date'
 LABEL title = 'Sales Trends'
 ```
