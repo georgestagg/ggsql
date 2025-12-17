@@ -128,3 +128,10 @@ pkg/
 
 # Claude Code specific
 .claude/
+
+# R specific
+*.Rproj.user
+*.Rproj
+*.Rhistory
+*.Rdata
+.Rproj.user
