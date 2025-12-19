@@ -27,7 +27,7 @@ let query = r#"
     DRAW line
         MAPPING date AS x, revenue AS y, region AS color
     LABEL
-        title = 'Sales by Region'
+        title AS 'Sales by Region'
 "#;
 
 let specs = parse_query(query)?;
