@@ -22,7 +22,7 @@ FROM generate_series(1, 10) as t(n)
 VISUALISE AS PLOT
 DRAW line
     MAPPING x AS x, y AS y
-LABEL title = 'Quadratic Function', x = 'X', y = 'Y';
+LABEL title AS 'Quadratic Function', x AS 'X', y AS 'Y';
 
 -- Multi-layer visualization
 SELECT n as x, n * n as y
@@ -32,7 +32,7 @@ DRAW line
     MAPPING x AS x, y AS y
 DRAW point
     MAPPING x AS x, y AS y
-LABEL title = 'Line with Points';
+LABEL title AS 'Line with Points';
 
 -- Date-based visualization
 SELECT
@@ -44,7 +44,7 @@ VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, value AS y, category AS color
 SCALE x SETTING type TO 'date'
-LABEL title = 'Time Series', x = 'Date', y = 'Value';
+LABEL title AS 'Time Series', x AS 'Date', y AS 'Value';
 
 -- Bar chart
 SELECT
@@ -54,7 +54,7 @@ FROM generate_series(0, 4) as t(n)
 VISUALISE AS PLOT
 DRAW bar
     MAPPING category AS x, value AS y
-LABEL title = 'Bar Chart', x = 'Category', y = 'Value';
+LABEL title AS 'Bar Chart', x AS 'Category', y AS 'Value';
 
 -- Faceted visualization
 SELECT
@@ -66,7 +66,7 @@ VISUALISE AS PLOT
 DRAW point
     MAPPING x AS x, y AS y
 FACET WRAP group
-LABEL title = 'Faceted Plot';
+LABEL title AS 'Faceted Plot';
 
 -- Visualization with FILTER clause
 SELECT
@@ -79,7 +79,7 @@ DRAW line
 DRAW point
     MAPPING x AS x, y AS y
     FILTER y > 25
-LABEL title = 'Filtered Points';
+LABEL title AS 'Filtered Points';
 
 -- Visualization with SETTING parameters
 SELECT
@@ -90,7 +90,7 @@ VISUALISE AS PLOT
 DRAW point
     MAPPING x AS x, y AS y
     SETTING size TO 10, opacity TO 0.5
-LABEL title = 'Points with Parameters';
+LABEL title AS 'Points with Parameters';
 
 -- Error case: invalid table
 SELECT * FROM nonexistent_table;

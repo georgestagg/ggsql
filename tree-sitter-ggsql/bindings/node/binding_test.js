@@ -40,7 +40,7 @@ try {
       MAPPING date AS x, revenue AS y, region AS color
       SETTING size TO 3
   SCALE x SETTING type TO 'date'
-  LABEL title = 'Revenue Analysis'
+  LABEL title AS 'Revenue Analysis'
   THEME minimal
   `;
 

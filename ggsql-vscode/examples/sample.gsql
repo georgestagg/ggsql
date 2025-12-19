@@ -7,9 +7,9 @@
 VISUALISE FROM 'mtcars.csv' AS PLOT
 DRAW point
     MAPPING hp AS x, mpg AS y, cyl AS color
-LABEL title = 'Horsepower vs Fuel Efficiency',
-      x = 'Horsepower',
-      y = 'Miles per Gallon'
+LABEL title AS 'Horsepower vs Fuel Efficiency',
+      x AS 'Horsepower',
+      y AS 'Miles per Gallon'
 THEME minimal
 
 -- ============================================================================
@@ -34,10 +34,10 @@ DRAW point
 SCALE x SETTING type TO 'date'
 SCALE color SETTING palette TO 'viridis'
 FACET WRAP region SETTING scales TO 'free_y'
-LABEL title = 'Sales Trends by Region',
-      x = 'Month',
-      y = 'Total Quantity',
-      caption = 'Data from 2024'
+LABEL title AS 'Sales Trends by Region',
+      x AS 'Month',
+      y AS 'Total Quantity',
+      caption AS 'Data from 2024'
 THEME classic
 
 -- ============================================================================
@@ -53,9 +53,9 @@ VISUALISE AS PLOT
 DRAW bar
     MAPPING category AS x, total AS y, category AS fill
 COORD flip
-LABEL title = 'Top 10 Product Categories',
-      x = 'Category',
-      y = 'Total Sales'
+LABEL title AS 'Top 10 Product Categories',
+      x AS 'Category',
+      y AS 'Total Sales'
 GUIDE fill SETTING type TO 'none'
 THEME dark
 
@@ -69,7 +69,7 @@ VISUALISE AS PLOT
 DRAW bar
     MAPPING region AS x, count AS y, region AS fill
 COORD polar SETTING theta TO y
-LABEL title = 'Customer Distribution by Region'
+LABEL title AS 'Customer Distribution by Region'
 
 -- ============================================================================
 -- Example 5: Faceted Histogram
@@ -82,9 +82,9 @@ DRAW histogram
     MAPPING age AS x, gender AS fill
 SCALE x SETTING type TO 'linear', limits TO [18, 80]
 FACET WRAP gender SETTING scales TO 'fixed'
-LABEL title = 'Age Distribution by Gender',
-      x = 'Age',
-      y = 'Count'
+LABEL title AS 'Age Distribution by Gender',
+      x AS 'Age',
+      y AS 'Count'
 
 -- ============================================================================
 -- Example 6: Time Series with Custom Scale
@@ -110,10 +110,10 @@ DRAW line
 SCALE x SETTING type TO 'date'
 SCALE y SETTING type TO 'linear', limits TO [0, 100]
 COORD cartesian SETTING xlim TO ['2024-01-01', '2024-12-31']
-LABEL title = 'Temperature Range (Last 30 Days)',
-      x = 'Date',
-      y = 'Temperature (°C)',
-      caption = 'Source: Weather Station Alpha'
+LABEL title AS 'Temperature Range (Last 30 Days)',
+      x AS 'Date',
+      y AS 'Temperature (°C)',
+      caption AS 'Source: Weather Station Alpha'
 THEME minimal
 
 -- ============================================================================
@@ -137,11 +137,11 @@ SCALE x SETTING type TO 'date'
 SCALE y SETTING type TO 'log10'
 SCALE color SETTING domain TO ['Electronics', 'Clothing', 'Food', 'Books']
 FACET category BY employee_name SETTING scales TO 'free_y'
-LABEL title = 'Sales Performance Analysis',
-      x = 'Sale Date',
-      y = 'Revenue (log scale)',
-      color = 'Product Category',
-      size = 'Quantity Sold'
+LABEL title AS 'Sales Performance Analysis',
+      x AS 'Sale Date',
+      y AS 'Revenue (log scale)',
+      color AS 'Product Category',
+      size AS 'Quantity Sold'
 GUIDE color SETTING
     type TO 'legend',
     position TO 'right',
@@ -166,10 +166,10 @@ DRAW area
     SETTING alpha TO 0.7
 SCALE x SETTING type TO 'date'
 SCALE fill SETTING palette TO 'plasma', domain TO ['A', 'B', 'C', 'D']
-LABEL title = 'Quarterly Revenue by Category',
-      x = 'Quarter',
-      y = 'Revenue ($)',
-      subtitle = 'Stacked Area Chart'
+LABEL title AS 'Quarterly Revenue by Category',
+      x AS 'Quarter',
+      y AS 'Revenue ($)',
+      subtitle AS 'Stacked Area Chart'
 
 -- ============================================================================
 -- Example 9: Boxplot with Violin Overlay
@@ -184,9 +184,9 @@ DRAW violin
     MAPPING category AS x, price AS y
     SETTING alpha TO 0.3
 COORD cartesian SETTING ylim TO [0, 500]
-LABEL title = 'Price Distribution by Category',
-      x = 'Product Category',
-      y = 'Price ($)'
+LABEL title AS 'Price Distribution by Category',
+      x AS 'Product Category',
+      y AS 'Price ($)'
 THEME bw
 
 -- ============================================================================
@@ -207,10 +207,10 @@ DRAW text
 SCALE color SETTING palette TO 'viridis'
 SCALE size SETTING limits TO [0, 10000]
 COORD cartesian SETTING xlim TO [0, 1000], ylim TO [0, 5]
-LABEL title = 'Featured Products: Price vs Rating',
-      x = 'Price ($)',
-      y = 'Customer Rating',
-      size = 'Total Sales'
+LABEL title AS 'Featured Products: Price vs Rating',
+      x AS 'Price ($)',
+      y AS 'Customer Rating',
+      size AS 'Total Sales'
 GUIDE size SETTING type TO 'legend', position TO 'bottom'
 
 -- ============================================================================
@@ -225,13 +225,13 @@ WITH sales_summary AS (
 VISUALISE FROM sales_summary AS PLOT
 DRAW bar
     MAPPING region AS x, total AS y, region AS fill
-LABEL title = 'Sales by Region'
+LABEL title AS 'Sales by Region'
 -- Second visualization: by category
 VISUALISE FROM sales_summary AS PLOT
 DRAW bar
     MAPPING category AS x, total AS y, category AS fill
 COORD flip
-LABEL title = 'Sales by Category'
+LABEL title AS 'Sales by Category'
 
 -- ============================================================================
 -- Example 12: FILTER clause for layer-specific filtering
@@ -245,7 +245,7 @@ DRAW point
     MAPPING date AS x, value AS y, category AS color
     FILTER value > 50
 SCALE x SETTING type TO 'date'
-LABEL title = 'Metrics with Highlighted Points Above 50'
+LABEL title AS 'Metrics with Highlighted Points Above 50'
 
 -- ============================================================================
 -- Comments and String Handling

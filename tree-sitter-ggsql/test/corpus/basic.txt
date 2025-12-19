@@ -365,7 +365,7 @@ Plot with labels
 
 VISUALISE AS PLOT
 DRAW point MAPPING x AS x, y AS y
-LABEL title = 'My Plot', x = 'X Axis', y = 'Y Axis'
+LABEL title AS 'My Plot', x AS 'X Axis', y AS 'Y Axis'
 
 --------------------------------------------------------------------------------
 

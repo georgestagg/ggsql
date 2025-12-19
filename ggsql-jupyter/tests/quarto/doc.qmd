@@ -164,12 +164,12 @@ DRAW point
 
 ```{ggsql}
 SELECT sale_date, revenue FROM 'sales.csv'
-WHERE category = 'Electronics'
+WHERE category AS 'Electronics'
 VISUALISE AS PLOT
 DRAW line
     MAPPING sale_date AS x, revenue AS y
 SCALE x SETTING type TO 'date'
-LABEL title = 'Electronics Revenue Over Time', x = 'Date', y = 'Revenue ($)'
+LABEL title AS 'Electronics Revenue Over Time', x AS 'Date', y AS 'Revenue ($)'
 ```
 
 ### Bar Chart by Category
@@ -181,7 +181,7 @@ GROUP BY category
 VISUALISE AS PLOT
 DRAW bar
     MAPPING category AS x, total AS y, category AS fill
-LABEL title = 'Total Revenue by Category', x = 'Category', y = 'Total Revenue ($)'
+LABEL title AS 'Total Revenue by Category', x AS 'Category', y AS 'Total Revenue ($)'
 ```
 
 ## Multiple Layers
@@ -197,7 +197,7 @@ DRAW point
     MAPPING date AS x, value AS y, 'red' AS color
     SETTING size TO 30
 SCALE x SETTING type TO 'date'
-LABEL title = 'Time Series with Points', x = 'Date', y = 'Value'
+LABEL title AS 'Time Series with Points', x AS 'Date', y AS 'Value'
 ```
 
 ### Colored Lines by Category
@@ -208,7 +208,7 @@ VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, value AS y, category AS color
 SCALE x SETTING type TO 'date'
-LABEL title = 'Metrics by Category', x = 'Date', y = 'Value'
+LABEL title AS 'Metrics by Category', x AS 'Date', y AS 'Value'
 ```
 
 ## Faceting
@@ -217,13 +217,13 @@ LABEL title = 'Metrics by Category', x = 'Date', y = 'Value'
 
 ```{ggsql}
 SELECT sale_date, revenue, region FROM 'sales.csv'
-WHERE category = 'Electronics'
+WHERE category AS 'Electronics'
 VISUALISE AS PLOT
 DRAW line
     MAPPING sale_date AS x, revenue AS y
 SCALE x SETTING type TO 'date'
 FACET WRAP region
-LABEL title = 'Electronics Sales by Region', x = 'Date', y = 'Revenue ($)'
+LABEL title AS 'Electronics Sales by Region', x AS 'Date', y AS 'Revenue ($)'
 ```
 
 ### Facet Grid
@@ -250,7 +250,7 @@ DRAW point
     SETTING size TO 30
 SCALE x SETTING type TO 'date'
 FACET region BY category
-LABEL title = 'Monthly Revenue and Quantity by Region and Category', x = 'Month', y = 'Value'
+LABEL title AS 'Monthly Revenue and Quantity by Region and Category', x AS 'Month', y AS 'Value'
 ```
 
 ## Coordinate Transformations
@@ -266,7 +266,7 @@ VISUALISE AS PLOT
 DRAW bar
     MAPPING region AS x, total AS y, region AS fill
 COORD flip
-LABEL title = 'Total Revenue by Region', x = 'Region', y = 'Total Revenue ($)'
+LABEL title AS 'Total Revenue by Region', x AS 'Region', y AS 'Total Revenue ($)'
 ```
 
 ### Cartesian with Axis Limits
@@ -278,7 +278,7 @@ DRAW point
     MAPPING x AS x, y AS y, 'blue' AS color
     SETTING size TO 4
 COORD cartesian SETTING xlim TO [0, 60], ylim TO [0, 70]
-LABEL title = 'Scatter Plot with Custom Axis Limits', x = 'X', y = 'Y'
+LABEL title AS 'Scatter Plot with Custom Axis Limits', x AS 'X', y AS 'Y'
 ```
 
 ### Pie Chart with Polar Coordinates
@@ -291,7 +291,7 @@ VISUALISE AS PLOT
 DRAW bar
     MAPPING total AS y, category AS fill
 COORD polar
-LABEL title = 'Revenue Distribution by Category'
+LABEL title AS 'Revenue Distribution by Category'
 ```
 
 ## Layer filtering
@@ -307,7 +307,7 @@ DRAW point
     MAPPING date AS x, value AS y, 'red' AS color, 30 AS size
     FILTER value < 130
 SCALE x SETTING type TO 'date'
-LABEL title = 'Time Series with Points', x = 'Date', y = 'Value'
+LABEL title AS 'Time Series with Points', x AS 'Date', y AS 'Value'
 ```
 
 ## Common Table Expressions (CTEs)
@@ -328,7 +328,7 @@ DRAW line
 DRAW point
     MAPPING month AS x, total_revenue AS y
 SCALE x SETTING type TO 'date'
-LABEL title = 'Monthly Revenue Trends', x = 'Month', y = 'Revenue ($)'
+LABEL title AS 'Monthly Revenue Trends', x AS 'Month', y AS 'Revenue ($)'
 ```
 
 ### Multiple CTEs
@@ -348,7 +348,7 @@ VISUALISE FROM regional_totals AS PLOT
 DRAW bar
     MAPPING region AS x, total AS y, region AS fill
 COORD flip
-LABEL title = 'Total Revenue by Region', x = 'Region', y = 'Total Revenue ($)'
+LABEL title AS 'Total Revenue by Region', x AS 'Region', y AS 'Total Revenue ($)'
 ```
 
 
@@ -373,7 +373,7 @@ DRAW point
     MAPPING sale_date AS x, total_quantity AS y, region AS color
 SCALE x SETTING type TO 'date'
 FACET WRAP region
-LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
+LABEL title AS 'Sales Trends by Region', x AS 'Date', y AS 'Total Quantity'
 ```
 
 ### Multi-Category Analysis
@@ -388,6 +388,6 @@ GROUP BY category, region
 VISUALISE AS PLOT
 DRAW bar
     MAPPING category AS x, total_revenue AS y, region AS fill
-LABEL title = 'Revenue by Category and Region', x = 'Category', y = 'Revenue ($)'
+LABEL title AS 'Revenue by Category and Region', x AS 'Category', y AS 'Revenue ($)'
 ```
 

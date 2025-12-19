@@ -135,7 +135,7 @@ FROM generate_series(0, 30) as t(n)
 VISUALISE AS PLOT
 DRAW line MAPPING date AS x, revenue AS y
 SCALE x SETTING type TO 'date'
-LABEL title = 'Revenue Growth', x = 'Date', y = 'Revenue ($)'
+LABEL title AS 'Revenue Growth', x AS 'Date', y AS 'Revenue ($)'
 ```
 
 #### Multi-Layer Plot
@@ -146,7 +146,7 @@ FROM generate_series(1, 10) as t(x)
 VISUALISE AS PLOT
 DRAW line MAPPING x AS x, y AS y
 DRAW line MAPPING x AS x, z AS y
-LABEL title = 'Polynomial Functions'
+LABEL title AS 'Polynomial Functions'
 ```
 
 #### Pure SQL (Data Tables)
@@ -176,5 +176,5 @@ Cell 2:
 SELECT * FROM products
 VISUALISE AS PLOT
 DRAW bar MAPPING name AS x, price AS y
-LABEL title = 'Product Prices', y = 'Price ($)'
+LABEL title AS 'Product Prices', y AS 'Price ($)'
 ```

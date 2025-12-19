@@ -80,7 +80,7 @@ SELECT * FROM sales WHERE year = 2024
 VISUALISE AS PLOT
 DRAW line MAPPING date AS x, revenue AS y
 SCALE x SETTING type TO 'date'
-LABEL title = 'Sales Trends'
+LABEL title AS 'Sales Trends'
 ```
 
 Verify that all keywords are highlighted correctly.
