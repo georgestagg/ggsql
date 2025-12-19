@@ -12,7 +12,7 @@ VISUALISE AS PLOT
 DRAW line MAPPING date AS x, revenue AS y, region AS color
 SCALE x SETTING type TO 'date'
 COORD cartesian SETTING ylim TO [0, 100000]
-LABEL title = 'Sales by Region', x = 'Date', y = 'Revenue'
+LABEL title AS 'Sales by Region', x AS 'Date', y AS 'Revenue'
 THEME minimal
 ```
 
@@ -213,7 +213,7 @@ pub enum Geom {
 
 pub enum AestheticValue {
     Column(String),                  // Unquoted column reference: x = revenue
-    Literal(LiteralValue),           // Quoted literal: color = 'blue'
+    Literal(LiteralValue),           // Quoted literal: color AS 'blue'
 }
 
 pub enum LiteralValue {
@@ -672,7 +672,7 @@ SELECT * FROM sales
 VISUALISE AS PLOT
 DRAW line MAPPING date AS x, revenue AS y, region AS color
 SCALE x SETTING type TO 'date'
-LABEL title = 'Sales Trends'
+LABEL title AS 'Sales Trends'
 ```
 
 **Key Implementation Details**:
@@ -810,7 +810,7 @@ cargo build --all-features
 | `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x SETTING type TO 'date'`          |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
 | `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian SETTING xlim TO [0,100]` |
-| `LABEL`        | ❌ No      | Text labels        | `LABEL title='My Chart', x='Date'`   |
+| `LABEL`        | ❌ No      | Text labels        | `LABEL title AS 'My Chart', x AS 'Date'`   |
 | `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color SETTING position TO 'right'` |
 | `THEME`        | ❌ No      | Visual styling     | `THEME minimal`                      |
 
@@ -885,7 +885,7 @@ DRAW point
 DRAW line
     MAPPING date AS x, value AS y
     SETTING stroke_width TO 2
-    FILTER category = 'A' AND year >= 2024
+    FILTER category AS 'A' AND year >= 2024
 ```
 
 ### SCALE Clause
@@ -933,7 +933,7 @@ SCALE x SETTING domain TO [0, 100]
 **Example**:
 
 ```sql
-SCALE x SETTING type TO 'date', breaks = '2 months'
+SCALE x SETTING type TO 'date', breaks AS '2 months'
 SCALE y SETTING type TO 'log10', limits TO [1, 1000]
 SCALE color SETTING palette TO 'viridis', domain TO ['A', 'B', 'C']
 ```
@@ -1044,7 +1044,7 @@ COORD polar SETTING theta TO y
 -- Combined with other clauses
 DRAW bar MAPPING category AS x, value AS y
 COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 200]
-LABEL x = 'Category', y = 'Count'
+LABEL x AS 'Category', y AS 'Count'
 ```
 
 **Breaking Change**: The COORD syntax changed from `COORD SETTING type TO 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
@@ -1068,10 +1068,10 @@ LABEL
 
 ```sql
 LABEL
-  title = 'Sales by Region',
-  x = 'Date',
-  y = 'Revenue (USD)',
-  caption = 'Data from Q4 2024'
+  title AS 'Sales by Region',
+  x AS 'Date',
+  y AS 'Revenue (USD)',
+  caption AS 'Data from Q4 2024'
 ```
 
 ### THEME Clause
@@ -1110,7 +1110,7 @@ DRAW point
     MAPPING sale_date AS x, total AS y, region AS color
 SCALE x SETTING type TO 'date'
 FACET WRAP region
-LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
+LABEL title AS 'Sales Trends by Region', x AS 'Date', y AS 'Total Quantity'
 THEME minimal
 ```
 

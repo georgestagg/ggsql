@@ -16,7 +16,7 @@ DRAW line MAPPING
     revenue AS y,
     region AS color
 LABEL
-    title = 'Sales by Region'
+    title AS 'Sales by Region'
 THEME minimal
 ```
 
@@ -249,7 +249,7 @@ VISUALISE AS PLOT
 DRAW line
     MAPPING date AS x, revenue AS y, region AS color
 SCALE x SETTING type TO 'date'
-LABEL title = 'Sales Trends'
+LABEL title AS 'Sales Trends'
 ```
 
 The kernel maintains a persistent DuckDB session across cells, so you can create tables in one cell and query them in another.
