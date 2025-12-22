@@ -5,14 +5,14 @@ Provides commands for executing ggSQL queries with various data sources and outp
 */
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 use ggsql::{parser, VERSION};
+use std::path::PathBuf;
 
 #[cfg(feature = "duckdb")]
-use ggsql::reader::{Reader, DuckDBReader};
+use ggsql::reader::{DuckDBReader, Reader};
 
 #[cfg(feature = "vegalite")]
-use ggsql::writer::{Writer, VegaLiteWriter};
+use ggsql::writer::{VegaLiteWriter, Writer};
 
 #[derive(Parser)]
 #[command(name = "ggsql")]
@@ -94,313 +94,219 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Exec { query, reader, writer, output, verbose } => {
+        Commands::Exec {
+            query,
+            reader,
+            writer,
+            output,
+            verbose,
+        } => {
             if verbose {
                 eprintln!("Executing query: {}", query);
-                eprintln!("Reader: {}", reader);
-                eprintln!("Writer: {}", writer);
-                if let Some(ref output_file) = output {
-                    eprintln!("Output: {}", output_file.display());
-                }
             }
-
-            // Split query into SQL and ggSQL portions
-            match parser::split_query(&query) {
-                Ok((sql_part, viz_part)) => {
-                    if verbose {
-                        eprintln!("\nQuery split:");
-                        eprintln!("  SQL portion: {} chars", sql_part.len());
-                        eprintln!("  ggSQL portion: {} chars", viz_part.len());
-                    }
-
-                    // Execute SQL portion using the reader
-                    #[cfg(feature = "duckdb")]
-                    if reader.starts_with("duckdb://") {
-                        match DuckDBReader::from_connection_string(&reader) {
-                            Ok(db_reader) => {
-                                match db_reader.execute(&sql_part) {
-                                    Ok(df) => {
-                                        if verbose {
-                                            eprintln!("\nQuery executed successfully!");
-                                            eprintln!("Result shape: {:?}", df.shape());
-                                            eprintln!("Columns: {:?}", df.get_column_names());
-                                        }
-
-                                        // Parse ggSQL portion
-                                        match parser::parse_query(&query) {
-                                            Ok(specs) => {
-                                                if verbose {
-                                                    eprintln!("\nParsed {} visualization spec(s)", specs.len());
-                                                }
-
-                                                // Generate visualization output using writer
-                                                #[cfg(feature = "vegalite")]
-                                                if writer == "vegalite" {
-                                                    let vl_writer = VegaLiteWriter::new();
-
-                                                    // For now, render the first spec only
-                                                    if let Some(spec) = specs.first() {
-                                                        match vl_writer.write(spec, &df) {
-                                                            Ok(json_output) => {
-                                                                if let Some(output_path) = &output {
-                                                                    // Write to file
-                                                                    match std::fs::write(output_path, &json_output) {
-                                                                        Ok(_) => {
-                                                                            if verbose {
-                                                                                eprintln!("\nVega-Lite JSON written to: {}", output_path.display());
-                                                                            }
-                                                                        }
-                                                                        Err(e) => {
-                                                                            eprintln!("Failed to write output file: {}", e);
-                                                                            std::process::exit(1);
-                                                                        }
-                                                                    }
-                                                                } else {
-                                                                    // Print to stdout (always output the result)
-                                                                    println!("{}", json_output);
-                                                                }
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!("Failed to generate Vega-Lite output: {}", e);
-                                                                std::process::exit(1);
-                                                            }
-                                                        }
-                                                    } else {
-                                                        eprintln!("No visualization specifications found");
-                                                        std::process::exit(1);
-                                                    }
-                                                }
-
-                                                #[cfg(not(feature = "vegalite"))]
-                                                {
-                                                    if writer == "vegalite" {
-                                                        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
-                                                        std::process::exit(1);
-                                                    }
-                                                }
-
-                                                if writer != "vegalite" {
-                                                    eprintln!("\nNote: Writer '{}' not yet implemented", writer);
-                                                    eprintln!("Available writers: vegalite");
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Failed to parse ggSQL portion: {}", e);
-                                                std::process::exit(1);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to execute SQL query: {}", e);
-                                        std::process::exit(1);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to create DuckDB reader: {}", e);
-                                std::process::exit(1);
-                            }
-                        }
-                    } else {
-                        eprintln!("Unsupported reader: {}", reader);
-                        eprintln!("Currently only 'duckdb://' readers are supported");
-                        std::process::exit(1);
-                    }
-
-                    #[cfg(not(feature = "duckdb"))]
-                    {
-                        eprintln!("No reader support compiled in. Rebuild with --features duckdb");
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to split query: {}", e);
-                    std::process::exit(1);
-                }
-            }
+            cmd_exec(query, reader, writer, output, verbose);
         }
 
-        Commands::Run { file, reader, writer, output, verbose } => {
+        Commands::Run {
+            file,
+            reader,
+            writer,
+            output,
+            verbose,
+        } => {
             if verbose {
                 eprintln!("Running query from file: {}", file.display());
-                eprintln!("Reader: {}", reader);
-                eprintln!("Writer: {}", writer);
-                if let Some(ref output_file) = output {
-                    eprintln!("Output: {}", output_file.display());
-                }
             }
-
-            // Read query from file
-            match std::fs::read_to_string(&file) {
-                Ok(query) => {
-                    // Execute the query (reuse exec logic)
-                    match parser::split_query(&query) {
-                        Ok((sql_part, viz_part)) => {
-                            if verbose {
-                                eprintln!("\nQuery split:");
-                                eprintln!("  SQL portion: {} chars", sql_part.len());
-                                eprintln!("  ggSQL portion: {} chars", viz_part.len());
-                            }
-
-                            // Execute SQL portion using the reader
-                            #[cfg(feature = "duckdb")]
-                            if reader.starts_with("duckdb://") {
-                                match DuckDBReader::from_connection_string(&reader) {
-                                    Ok(db_reader) => {
-                                        match db_reader.execute(&sql_part) {
-                                            Ok(df) => {
-                                                if verbose {
-                                                    eprintln!("\nQuery executed successfully!");
-                                                    eprintln!("Result shape: {:?}", df.shape());
-                                                    eprintln!("Columns: {:?}", df.get_column_names());
-                                                }
-
-                                                // Parse ggSQL portion
-                                                match parser::parse_query(&query) {
-                                                    Ok(specs) => {
-                                                        if verbose {
-                                                            eprintln!("\nParsed {} visualization spec(s)", specs.len());
-                                                        }
-
-                                                        // Generate visualization output using writer
-                                                        #[cfg(feature = "vegalite")]
-                                                        if writer == "vegalite" {
-                                                            let vl_writer = VegaLiteWriter::new();
-
-                                                            // For now, render the first spec only
-                                                            if let Some(spec) = specs.first() {
-                                                                match vl_writer.write(spec, &df) {
-                                                                    Ok(json_output) => {
-                                                                        if let Some(output_path) = &output {
-                                                                            // Write to file
-                                                                            match std::fs::write(output_path, &json_output) {
-                                                                                Ok(_) => {
-                                                                                    if verbose {
-                                                                                        eprintln!("\nVega-Lite JSON written to: {}", output_path.display());
-                                                                                    }
-                                                                                }
-                                                                                Err(e) => {
-                                                                                    eprintln!("Failed to write output file: {}", e);
-                                                                                    std::process::exit(1);
-                                                                                }
-                                                                            }
-                                                                        } else {
-                                                                            // Print to stdout (always output the result)
-                                                                            println!("{}", json_output);
-                                                                        }
-                                                                    }
-                                                                    Err(e) => {
-                                                                        eprintln!("Failed to generate Vega-Lite output: {}", e);
-                                                                        std::process::exit(1);
-                                                                    }
-                                                                }
-                                                            } else {
-                                                                eprintln!("No visualization specifications found");
-                                                                std::process::exit(1);
-                                                            }
-                                                        }
-
-                                                        #[cfg(not(feature = "vegalite"))]
-                                                        {
-                                                            if writer == "vegalite" {
-                                                                eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
-                                                                std::process::exit(1);
-                                                            }
-                                                        }
-
-                                                        if writer != "vegalite" {
-                                                            eprintln!("\nNote: Writer '{}' not yet implemented", writer);
-                                                            eprintln!("Available writers: vegalite");
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!("Failed to parse ggSQL portion: {}", e);
-                                                        std::process::exit(1);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Failed to execute SQL query: {}", e);
-                                                std::process::exit(1);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to create DuckDB reader: {}", e);
-                                        std::process::exit(1);
-                                    }
-                                }
-                            } else {
-                                eprintln!("Unsupported reader: {}", reader);
-                                eprintln!("Currently only 'duckdb://' readers are supported");
-                                std::process::exit(1);
-                            }
-
-                            #[cfg(not(feature = "duckdb"))]
-                            {
-                                eprintln!("No reader support compiled in. Rebuild with --features duckdb");
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to split query: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to read file {}: {}", file.display(), e);
-                    std::process::exit(1);
-                }
-            }
+            cmd_run(file, reader, writer, output, verbose);
         }
 
         Commands::Parse { query, format } => {
-            println!("Parsing query: {}", query);
-            println!("Format: {}", format);
-            // TODO: Implement parsing logic
-            match parser::parse_query(&query) {
-                Ok(specs) => {
-                    match format.as_str() {
-                        "json" => println!("{}", serde_json::to_string_pretty(&specs)?),
-                        "debug" => println!("{:#?}", specs),
-                        "pretty" => {
-                            println!("ggSQL Specifications: {} total", specs.len());
-                            for (i, spec) in specs.iter().enumerate() {
-                                println!("\nVisualization #{}:", i + 1);
-                                println!("  Global Mapping: {:?}", spec.global_mapping);
-                                println!("  Layers: {}", spec.layers.len());
-                                println!("  Scales: {}", spec.scales.len());
-                                if spec.facet.is_some() {
-                                    println!("  Faceting: Yes");
-                                }
-                                if spec.theme.is_some() {
-                                    println!("  Theme: Yes");
-                                }
-                            }
-                        }
-                        _ => {
-                            eprintln!("Unknown format: {}", format);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Parse error: {}", e);
-                    std::process::exit(1);
-                }
-            }
+            cmd_parse(query, format);
         }
 
         Commands::Validate { query, reader } => {
-            println!("Validating query: {}", query);
-            if let Some(reader) = reader {
-                println!("Reader: {}", reader);
-            }
-            // TODO: Implement validation logic
-            println!("Validation not yet implemented");
+            cmd_validate(query, reader);
         }
     }
 
     Ok(())
+}
+
+fn cmd_run(file: PathBuf, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+    match std::fs::read_to_string(&file) {
+        Ok(query) => cmd_exec(query, reader, writer, output, verbose),
+        Err(e) => {
+            eprintln!("Failed to read file {}: {}", file.display(), e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+    if verbose {
+        eprintln!("Reader: {}", reader);
+        eprintln!("Writer: {}", writer);
+        if let Some(ref output_file) = output {
+            eprintln!("Output: {}", output_file.display());
+        }
+    }
+
+    // Split query into sql and ggsql part
+    let parsed = parser::split_query(&query);
+    if let Err(e) = parsed {
+        eprintln!("Failed to split query: {}", e);
+        std::process::exit(1);
+    }
+    let (sql_part, viz_part) = parsed.unwrap();
+
+    if verbose {
+        eprintln!("\nQuery split:");
+        eprintln!("  SQL portion: {} chars", sql_part.len());
+        eprintln!("  ggSQL portion: {} chars", viz_part.len());
+    }
+
+    // Setup reader
+    #[cfg(feature = "duckdb")]
+    if !reader.starts_with("duckdb://") {
+        eprintln!("Unsupported reader: {}", reader);
+        eprintln!("Currently only 'duckdb://' readers are supported");
+        std::process::exit(1);
+    }
+
+    let db_reader = DuckDBReader::from_connection_string(&reader);
+    if let Err(e) = db_reader {
+        eprintln!("Failed to create DuckDB reader: {}", e);
+        std::process::exit(1);
+    }
+    let db_reader = db_reader.unwrap();
+
+    // Execute sql query
+    let sql_result = db_reader.execute(&sql_part);
+    if let Err(e) = sql_result {
+        eprintln!("Failed to execute SQL query: {}", e);
+        std::process::exit(1);
+    }
+    let df = sql_result.unwrap();
+
+    if verbose {
+        eprintln!("\nQuery executed successfully!");
+        eprintln!("Result shape: {:?}", df.shape());
+        eprintln!("Columns: {:?}", df.get_column_names());
+    }
+
+    // Parse ggSQL portion
+    if viz_part.len() < 1 {
+        if verbose {
+            eprintln!("The ggSQL portion is empty. No specifications produced.");
+        }
+        return ();
+    }
+
+    let parsed = parser::parse_query(&query);
+    if let Err(e) = parsed {
+        eprintln!("Failed to parse ggSQL portion: {}", e);
+        std::process::exit(1);
+    }
+    let specs = parsed.unwrap();
+
+    let first_spec = specs.first();
+    if let None = first_spec {
+        eprintln!("No visualization specifications found");
+        std::process::exit(1);
+    }
+    let first_spec = first_spec.unwrap();
+
+    if verbose {
+        eprintln!("\nParsed {} visualisation spec(s)", specs.len());
+    }
+
+    // Check writer
+    if writer != "vegalite" {
+        eprintln!("\nNote: Writer '{}' not yet implemented", writer);
+        eprintln!("Available writers: vegalite")
+    }
+
+    #[cfg(not(feature = "vegalite"))]
+    {
+        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
+        std::process::exit(1)
+    }
+
+    // Write
+    let vl_writer = VegaLiteWriter::new();
+    let json_output = vl_writer.write(first_spec, &df);
+    if let Err(ref e) = json_output {
+        eprintln!("Failed to generate Vega-Lite output: {}", e);
+    }
+    let json_output = json_output.unwrap();
+
+    if let None = output {
+        // Empty output location, write to stdout
+        println!("{}", json_output);
+        return ();
+    }
+    let output = output.unwrap();
+
+    // Write to file
+    match std::fs::write(&output, &json_output) {
+        Ok(_) => {
+            if verbose {
+                eprintln!("\nVega-Lite JSON written to: {}", output.display());
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to write to output file: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_parse(query: String, format: String) {
+    println!("Parsing query: {}", query);
+    println!("Format: {}", format);
+
+    let parsed = parser::parse_query(&query);
+
+    if let Err(e) = parsed {
+        eprintln!("Parse error: {}", e);
+        std::process::exit(1);
+    }
+    // TODO: implement parsing logic
+    let specs = parsed.unwrap();
+
+    match format.as_str() {
+        "json" => match serde_json::to_string_pretty(&specs) {
+            Ok(pretty) => println!("{}", pretty),
+            Err(error) => eprintln!("{}", error),
+        },
+        "debug" => println!("{:#?}", specs),
+        "pretty" => {
+            println!("ggSQL Specifications: {} total", specs.len());
+            for (i, spec) in specs.iter().enumerate() {
+                println!("\nVisualization #{}:", i + 1);
+                println!("  Global Mapping: {:?}", spec.global_mapping);
+                println!("  Layers: {}", spec.layers.len());
+                println!("  Scales: {}", spec.scales.len());
+                if spec.facet.is_some() {
+                    println!("  Faceting: Yes");
+                }
+                if spec.theme.is_some() {
+                    println!("  Theme: Yes");
+                }
+            }
+        }
+        _ => {
+            eprintln!("Unknown format: {}", format);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_validate(query: String, reader: Option<String>) {
+    println!("Validating query: {}", query);
+    if let Some(reader) = reader {
+        println!("Reader: {}", reader);
+    }
+    // TODO: Implement validation logic
+    println!("Validation not yet implemented");
 }
