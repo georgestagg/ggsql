@@ -274,11 +274,28 @@ module.exports = grammar({
       'text', 'label', 'segment', 'arrow', 'hline', 'vline', 'abline', 'errorbar'
     ),
 
-    // MAPPING clause for aesthetic mappings: MAPPING col AS x, "blue" AS color
+    // MAPPING clause for aesthetic mappings: MAPPING col AS x, "blue" AS color [FROM source]
+    // Supports: MAPPING x AS x, y AS y FROM cte
+    //           MAPPING FROM cte (inherits global mappings)
+    // Requires at least one of: aesthetic mappings or FROM clause
     mapping_clause: $ => seq(
       caseInsensitive('MAPPING'),
-      $.mapping_item,
-      repeat(seq(',', $.mapping_item))
+      choice(
+        // Option 1: Just FROM (inherit global mappings)
+        seq(
+          caseInsensitive('FROM'),
+          field('layer_source', choice($.identifier, $.string))
+        ),
+        // Option 2: Mapping items, optionally followed by FROM
+        seq(
+          $.mapping_item,
+          repeat(seq(',', $.mapping_item)),
+          optional(seq(
+            caseInsensitive('FROM'),
+            field('layer_source', choice($.identifier, $.string))
+          ))
+        )
+      )
     ),
 
     mapping_item: $ => seq(
