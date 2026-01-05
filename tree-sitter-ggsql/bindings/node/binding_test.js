@@ -13,12 +13,10 @@ try {
   const parser = new Parser();
   parser.setLanguage(ggSQL.language);
 
-  // Test parsing a simple ggSQL query
+  // Test parsing a simple ggSQL query with global mapping
   const sourceCode = `
-  VISUALISE AS PLOT
-  DRAW point USING
-      x = date,
-      y = revenue
+  VISUALISE date AS x, revenue AS y
+  DRAW point
   `;
 
   const tree = parser.parse(sourceCode);
@@ -32,20 +30,12 @@ try {
     console.log('Child count:', tree.rootNode.childCount);
   }
 
-  // Test a more complex query
+  // Test a more complex query with global mapping
   const complexQuery = `
-  VISUALISE AS PLOT
-  DRAW line USING
-      x = date,
-      y = revenue,
-      color = region
-  DRAW point USING
-      x = date,
-      y = revenue,
-      color = region,
-      size = 3
-  SCALE x USING
-      type = 'date'
+  VISUALISE date AS x, revenue AS y, region AS color
+  DRAW line
+  DRAW point SETTING size TO 3
+  SCALE x SETTING type TO 'date'
   LABEL title = 'Revenue Analysis'
   THEME minimal
   `;

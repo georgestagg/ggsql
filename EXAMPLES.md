@@ -21,8 +21,8 @@ This document provides a collection of basic examples demonstrating how to use g
 
 ```sql
 SELECT x, y FROM data
-VISUALISE AS PLOT
-DRAW point USING x = x, y = y
+VISUALISE x, y
+DRAW point
 ```
 
 ### Line Chart
@@ -30,8 +30,8 @@ DRAW point USING x = x, y = y
 ```sql
 SELECT date, revenue FROM sales
 WHERE year = 2024
-VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue
+VISUALISE date AS x, revenue AS y
+DRAW line
 ```
 
 ### Bar Chart
@@ -39,16 +39,16 @@ DRAW line USING x = date, y = revenue
 ```sql
 SELECT category, total FROM sales
 GROUP BY category
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = total
+VISUALISE category AS x, total AS y
+DRAW bar
 ```
 
 ### Area Chart
 
 ```sql
 SELECT date, cumulative FROM metrics
-VISUALISE AS PLOT
-DRAW area USING x = date, y = cumulative
+VISUALISE date AS x, cumulative AS y
+DRAW area
 ```
 
 ---
@@ -57,11 +57,13 @@ DRAW area USING x = date, y = cumulative
 
 ### Line with Points
 
+Using global mapping to share aesthetics across layers:
+
 ```sql
 SELECT date, value FROM timeseries
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value
-DRAW point USING x = date, y = value
+VISUALISE date AS x, value AS y
+DRAW line
+DRAW point
 ```
 
 ### Bar Chart with Colored Regions
@@ -69,16 +71,16 @@ DRAW point USING x = date, y = value
 ```sql
 SELECT category, revenue, region FROM sales
 GROUP BY category, region
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = revenue, fill = region
+VISUALISE category AS x, revenue AS y, region AS fill
+DRAW bar
 ```
 
 ### Multiple Lines by Group
 
 ```sql
 SELECT date, value, category FROM metrics
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value, color = category
+VISUALISE date AS x, value AS y, category AS color
+DRAW line
 ```
 
 ---
@@ -89,36 +91,36 @@ DRAW line USING x = date, y = value, color = category
 
 ```sql
 SELECT sale_date, revenue FROM sales
-VISUALISE AS PLOT
-DRAW line USING x = sale_date, y = revenue
-SCALE x USING type = 'date'
+VISUALISE sale_date AS x, revenue AS y
+DRAW line
+SCALE x SETTING type TO 'date'
 ```
 
 ### Logarithmic Scale
 
 ```sql
 SELECT x, y FROM exponential_data
-VISUALISE AS PLOT
-DRAW point USING x = x, y = y
-SCALE y USING type = 'log10'
+VISUALISE x, y
+DRAW point
+SCALE y SETTING type TO 'log10'
 ```
 
 ### Color Palette
 
 ```sql
 SELECT date, temperature, station FROM weather
-VISUALISE AS PLOT
-DRAW line USING x = date, y = temperature, color = station
-SCALE color USING palette = 'viridis'
+VISUALISE date AS x, temperature AS y, station AS color
+DRAW line
+SCALE color SETTING palette TO 'viridis'
 ```
 
 ### Custom Domain
 
 ```sql
 SELECT category, value FROM data
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = value, fill = category
-SCALE fill USING domain = ['A', 'B', 'C', 'D']
+VISUALISE category AS x, value AS y, category AS fill
+DRAW bar
+SCALE fill SETTING domain TO ['A', 'B', 'C', 'D']
 ```
 
 ---
@@ -129,9 +131,9 @@ SCALE fill USING domain = ['A', 'B', 'C', 'D']
 
 ```sql
 SELECT x, y FROM data
-VISUALISE AS PLOT
-DRAW point USING x = x, y = y
-COORD cartesian USING xlim = [0, 100], ylim = [0, 50]
+VISUALISE x, y
+DRAW point
+COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 50]
 ```
 
 ### Flipped Coordinates (Horizontal Bar Chart)
@@ -139,8 +141,8 @@ COORD cartesian USING xlim = [0, 100], ylim = [0, 50]
 ```sql
 SELECT category, value FROM data
 ORDER BY value DESC
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = value
+VISUALISE category AS x, value AS y
+DRAW bar
 COORD flip
 ```
 
@@ -149,8 +151,8 @@ COORD flip
 ```sql
 SELECT category, SUM(value) as total FROM data
 GROUP BY category
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = total
+VISUALISE category AS x, total AS y
+DRAW bar
 COORD polar
 ```
 
@@ -158,9 +160,9 @@ COORD polar
 
 ```sql
 SELECT category, value FROM data
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = value
-COORD polar USING theta = y
+VISUALISE category AS x, value AS y
+DRAW bar
+COORD polar SETTING theta TO y
 ```
 
 ---
@@ -171,8 +173,8 @@ COORD polar USING theta = y
 
 ```sql
 SELECT date, revenue FROM sales
-VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue
+VISUALISE date AS x, revenue AS y
+DRAW line
 LABEL title = 'Monthly Revenue Trends',
       x = 'Date',
       y = 'Revenue ($)'
@@ -182,8 +184,8 @@ LABEL title = 'Monthly Revenue Trends',
 
 ```sql
 SELECT date, value FROM metrics
-VISUALISE AS PLOT
-DRAW area USING x = date, y = value
+VISUALISE date AS x, value AS y
+DRAW area
 LABEL title = 'Performance Metrics',
       subtitle = 'Q4 2024',
       x = 'Date',
@@ -195,8 +197,8 @@ LABEL title = 'Performance Metrics',
 
 ```sql
 SELECT category, value FROM data
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = value
+VISUALISE category AS x, value AS y
+DRAW bar
 THEME minimal
 ```
 
@@ -204,9 +206,9 @@ THEME minimal
 
 ```sql
 SELECT x, y FROM data
-VISUALISE AS PLOT
-DRAW point USING x = x, y = y
-THEME dark USING background = '#1a1a1a'
+VISUALISE x, y
+DRAW point
+THEME dark SETTING background TO '#1a1a1a'
 ```
 
 ---
@@ -217,8 +219,8 @@ THEME dark USING background = '#1a1a1a'
 
 ```sql
 SELECT date, value, region FROM sales
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value
+VISUALISE date AS x, value AS y
+DRAW line
 FACET WRAP region
 ```
 
@@ -226,8 +228,8 @@ FACET WRAP region
 
 ```sql
 SELECT date, value, region, product FROM sales
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value
+VISUALISE date AS x, value AS y
+DRAW line
 FACET region BY product
 ```
 
@@ -235,9 +237,9 @@ FACET region BY product
 
 ```sql
 SELECT date, value, category FROM metrics
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value
-FACET WRAP category USING scales = 'free_y'
+VISUALISE date AS x, value AS y
+DRAW line
+FACET WRAP category SETTING scales TO 'free_y'
 ```
 
 ---
@@ -246,8 +248,8 @@ FACET WRAP category USING scales = 'free_y'
 
 ggSQL supports two patterns for working with CTEs:
 
-1. **Traditional Pattern**: `WITH ... SELECT ... VISUALISE AS`
-2. **Shorthand Pattern**: `WITH ... VISUALISE FROM <cte> AS` (injected SELECT)
+1. **Traditional Pattern**: `WITH ... SELECT ... VISUALISE`
+2. **Shorthand Pattern**: `WITH ... VISUALISE FROM <cte>` (injected SELECT)
 
 ### Simple CTE with VISUALISE FROM
 
@@ -261,9 +263,9 @@ WITH monthly_sales AS (
     FROM sales
     GROUP BY DATE_TRUNC('month', sale_date)
 )
-VISUALISE FROM monthly_sales AS PLOT
-DRAW line USING x = month, y = total_revenue
-SCALE x USING type = 'date'
+VISUALISE month AS x, total_revenue AS y FROM monthly_sales
+DRAW line
+SCALE x SETTING type TO 'date'
 LABEL title = 'Monthly Revenue Trends',
       x = 'Month',
       y = 'Revenue ($)'
@@ -283,9 +285,9 @@ WITH monthly_sales AS (
     GROUP BY DATE_TRUNC('month', sale_date), region
 )
 SELECT * FROM monthly_sales WHERE region = 'North'
-VISUALISE AS PLOT
-DRAW line USING x = month, y = total_revenue
-SCALE x USING type = 'date'
+VISUALISE month AS x, total_revenue AS y
+DRAW line
+SCALE x SETTING type TO 'date'
 ```
 
 ### Multiple CTEs
@@ -303,8 +305,8 @@ regional_totals AS (
     FROM daily_sales
     GROUP BY region
 )
-VISUALISE FROM regional_totals AS PLOT
-DRAW bar USING x = region, y = total, fill = region
+VISUALISE region AS x, total AS y, region AS fill FROM regional_totals
+DRAW bar
 COORD flip
 LABEL title = 'Total Revenue by Region',
       x = 'Region',
@@ -327,8 +329,8 @@ WITH product_metrics AS (
     WHERE s.sale_date >= '2024-01-01'
     GROUP BY p.product_name, p.category
 )
-VISUALISE FROM product_metrics AS PLOT
-DRAW point USING x = total_sold, y = total_revenue, color = category
+VISUALISE total_sold AS x, total_revenue AS y, category AS color FROM product_metrics
+DRAW point
 LABEL title = 'Product Performance',
       x = 'Units Sold',
       y = 'Revenue ($)'
@@ -346,10 +348,10 @@ WITH RECURSIVE series AS (
     FROM series
     WHERE n < 10
 )
-VISUALISE FROM series AS PLOT
-DRAW line USING x = n, y = value
-DRAW point USING x = n, y = value
-SCALE y USING type = 'log10'
+VISUALISE n AS x, value AS y FROM series
+DRAW line
+DRAW point
+SCALE y SETTING type TO 'log10'
 LABEL title = 'Exponential Growth',
       x = 'Step',
       y = 'Value (log scale)'
@@ -369,9 +371,9 @@ WITH ranked_products AS (
     FROM product_sales
 )
 SELECT * FROM ranked_products WHERE rank <= 5
-VISUALISE AS PLOT
-DRAW bar USING x = product_name, y = revenue, color = category
-FACET WRAP category USING scales = 'free_x'
+VISUALISE product_name AS x, revenue AS y, category AS color
+DRAW bar
+FACET WRAP category SETTING scales TO 'free_x'
 COORD flip
 LABEL title = 'Top 5 Products per Category',
       x = 'Product',
@@ -393,25 +395,29 @@ WITH daily_metrics AS (
     WHERE timestamp >= NOW() - INTERVAL '30 days'
     GROUP BY DATE_TRUNC('day', timestamp)
 )
-VISUALISE FROM daily_metrics AS PLOT
-DRAW ribbon USING x = day, ymin = min_temp, ymax = max_temp, fill = 'lightblue', alpha = 0.3
-DRAW line USING x = day, y = avg_temp, color = 'blue', size = 2
-SCALE x USING type = 'date'
+VISUALISE day AS x FROM daily_metrics
+DRAW ribbon
+    MAPPING min_temp AS ymin, max_temp AS ymax, 'lightblue' AS fill
+    SETTING alpha TO 0.3
+DRAW line
+    MAPPING avg_temp AS y, 'blue' AS color
+    SETTING size TO 2
+SCALE x SETTING type TO 'date'
 LABEL title = 'Temperature Range (Last 30 Days)',
       x = 'Date',
-      y = 'Temperature (°C)'
+      y = 'Temperature (C)'
 ```
 
 ### Important Rules
 
-**✅ Valid Combinations:**
-- `WITH cte AS (...) VISUALISE FROM cte AS PLOT` - Shorthand (SELECT injected)
-- `WITH cte AS (...) SELECT * FROM cte VISUALISE AS PLOT` - Traditional
-- `CREATE TABLE x ...; WITH cte AS (...) VISUALISE FROM cte AS PLOT` - Multiple statements
+**Valid Combinations:**
+- `WITH cte AS (...) VISUALISE FROM cte` - Shorthand (SELECT injected)
+- `WITH cte AS (...) SELECT * FROM cte VISUALISE` - Traditional
+- `CREATE TABLE x ...; WITH cte AS (...) VISUALISE FROM cte` - Multiple statements
 
-**❌ Invalid Combinations:**
-- `WITH cte AS (...) SELECT * FROM cte VISUALISE FROM cte AS PLOT` - Cannot mix SELECT with VISUALISE FROM
-- `SELECT * FROM x VISUALISE FROM y AS PLOT` - Cannot use VISUALISE FROM after SELECT
+**Invalid Combinations:**
+- `WITH cte AS (...) SELECT * FROM cte VISUALISE FROM cte` - Cannot mix SELECT with VISUALISE FROM
+- `SELECT * FROM x VISUALISE FROM y` - Cannot use VISUALISE FROM after SELECT
 
 **Why VISUALISE FROM?**
 
@@ -420,7 +426,7 @@ The shorthand syntax (`VISUALISE FROM`) is useful when:
 2. You're working with tables or views directly
 3. You want concise syntax for simple visualizations
 
-Use the traditional pattern (`SELECT ... VISUALISE AS`) when:
+Use the traditional pattern (`SELECT ... VISUALISE`) when:
 1. You need to filter or transform CTE results
 2. You're using set operations (UNION, INTERSECT, EXCEPT)
 3. You need complex SELECT logic before visualization
@@ -440,10 +446,10 @@ FROM sales
 WHERE sale_date >= '2024-01-01'
 GROUP BY sale_date, region
 ORDER BY sale_date
-VISUALISE AS PLOT
-DRAW line USING x = sale_date, y = total_quantity, color = region
-DRAW point USING x = sale_date, y = total_quantity, color = region
-SCALE x USING type = 'date'
+VISUALISE sale_date AS x, total_quantity AS y, region AS color
+DRAW line
+DRAW point
+SCALE x SETTING type TO 'date'
 FACET WRAP region
 LABEL title = 'Sales Trends by Region',
       x = 'Date',
@@ -461,13 +467,13 @@ SELECT
     station
 FROM weather_data
 WHERE timestamp >= NOW() - INTERVAL '7 days'
-VISUALISE AS PLOT
-DRAW line USING x = timestamp, y = temperature, color = station, linetype = station
-SCALE x USING type = 'datetime'
-SCALE color USING palette = 'viridis'
+VISUALISE timestamp AS x, temperature AS y, station AS color, station AS linetype
+DRAW line
+SCALE x SETTING type TO 'datetime'
+SCALE color SETTING palette TO 'viridis'
 LABEL title = 'Temperature Trends',
       x = 'Time',
-      y = 'Temperature (°C)'
+      y = 'Temperature (C)'
 ```
 
 ### Categorical Analysis with Flipped Coordinates
@@ -480,9 +486,9 @@ FROM sales
 GROUP BY product_name
 ORDER BY total_revenue DESC
 LIMIT 10
-VISUALISE AS PLOT
-DRAW bar USING x = product_name, y = total_revenue, fill = product_name
-COORD flip USING color = ['red', 'orange', 'yellow', 'green', 'blue',
+VISUALISE product_name AS x, total_revenue AS y, product_name AS fill
+DRAW bar
+COORD flip SETTING color TO ['red', 'orange', 'yellow', 'green', 'blue',
                           'indigo', 'violet', 'pink', 'brown', 'gray']
 LABEL title = 'Top 10 Products by Revenue',
       x = 'Product',
@@ -499,12 +505,12 @@ SELECT
     category
 FROM measurements
 WHERE category IN ('A', 'B', 'C')
-VISUALISE AS PLOT
-DRAW point USING x = date, y = value, color = category, size = value
-SCALE x USING type = 'date'
-SCALE color USING domain = ['A', 'B', 'C']
-SCALE size USING limits = [0, 100]
-COORD cartesian USING ylim = [0, 150]
+VISUALISE date AS x, value AS y, category AS color, value AS size
+DRAW point
+SCALE x SETTING type TO 'date'
+SCALE color SETTING domain TO ['A', 'B', 'C']
+SCALE size SETTING limits TO [0, 100]
+COORD cartesian SETTING ylim TO [0, 150]
 LABEL title = 'Measurement Distribution',
       x = 'Date',
       y = 'Value'
@@ -519,11 +525,11 @@ SELECT
     category,
     label
 FROM data_points
-VISUALISE AS PLOT
-DRAW point USING x = x, y = y, color = category, size = 5
-DRAW text USING x = x, y = y, label = label
-SCALE color USING palette = 'viridis'
-COORD cartesian USING xlim = [0, 100], ylim = [0, 100]
+VISUALISE x, y, category AS color
+DRAW point SETTING size TO 5
+DRAW text MAPPING label AS label
+SCALE color SETTING palette TO 'viridis'
+COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 100]
 LABEL title = 'Annotated Scatter Plot',
       x = 'X Axis',
       y = 'Y Axis'
@@ -537,12 +543,61 @@ FROM data_points
 WHERE cyl IN (4, 6, 8)
 GROUP BY cyl
 ORDER BY cyl
-VISUALISE AS PLOT
-DRAW bar USING x = cyl, y = vehicle_count
-SCALE x USING domain = [4, 6, 8]
+VISUALISE cyl AS x, vehicle_count AS y
+DRAW bar
+SCALE x SETTING domain TO [4, 6, 8]
 LABEL title = 'Distribution of Vehicles by Number of Cylinders',
       x = 'Number of Cylinders',
-      y = 'Number of Vehicles'"
+      y = 'Number of Vehicles'
+```
+
+---
+
+## Global Mapping
+
+ggSQL supports global mappings at the VISUALISE level, which apply to all layers. This is the preferred style when multiple layers share the same aesthetic mappings.
+
+### Implicit Global Mapping
+
+When column names match aesthetic names, use implicit mapping:
+
+```sql
+-- Columns named x, y map to x, y aesthetics automatically
+SELECT x, y FROM data
+VISUALISE x, y
+DRAW point
+```
+
+### Explicit Global Mapping
+
+Map columns to aesthetics with different names:
+
+```sql
+SELECT date, revenue, region FROM sales
+VISUALISE date AS x, revenue AS y, region AS color
+DRAW line
+DRAW point
+```
+
+### Wildcard Global Mapping
+
+Map all columns automatically (useful for exploration):
+
+```sql
+SELECT * FROM data
+VISUALISE *
+DRAW point
+```
+
+### Mixed Global and Layer Mappings
+
+Use global mapping for shared aesthetics, layer mapping for layer-specific ones:
+
+```sql
+SELECT date, avg_temp, min_temp, max_temp FROM weather
+VISUALISE date AS x
+DRAW ribbon MAPPING min_temp AS ymin, max_temp AS ymax
+DRAW line MAPPING avg_temp AS y
 ```
 
 ---
@@ -553,37 +608,39 @@ ggSQL keywords are case-insensitive. All of the following are valid:
 
 ```sql
 -- Uppercase (traditional)
-VISUALISE AS PLOT
-DRAW line USING x = date, y = value
+VISUALISE date AS x, revenue AS y
+DRAW line
 
 -- Lowercase
-visualise as plot
-draw line using x = date, y = value
+visualise date as x, revenue as y
+draw line
 
 -- Mixed case
-Visualise As Plot
-Draw Line Using x = date, y = value
+Visualise date AS x, revenue AS y
+Draw Line
 ```
 
 ---
 
 ## Tips and Best Practices
 
-1. **Date Handling**: Always use `SCALE x USING type = 'date'` for date columns to ensure proper axis formatting.
+1. **Use Global Mappings**: Prefer global mappings (`VISUALISE date AS x, revenue AS y`) over per-layer mappings when aesthetics are shared across layers.
 
-2. **Color Mappings**: Use `color` for continuous data and `fill` for categorical data in bars/areas.
+2. **Date Handling**: Always use `SCALE x SETTING type TO 'date'` for date columns to ensure proper axis formatting.
 
-3. **Coordinate Limits**: Set explicit limits with `COORD cartesian USING xlim = [min, max]` to control axis ranges.
+3. **Color Mappings**: Use `color` for continuous data and `fill` for categorical data in bars/areas.
 
-4. **Faceting**: Use faceting to create small multiples when comparing across categories.
+4. **Coordinate Limits**: Set explicit limits with `COORD cartesian SETTING xlim TO [min, max]` to control axis ranges.
 
-5. **Multiple Layers**: Combine layers (e.g., line + point) for richer visualizations.
+5. **Faceting**: Use faceting to create small multiples when comparing across categories.
 
-6. **Themes**: Apply themes last in your specification for consistent styling.
+6. **Multiple Layers**: Combine layers (e.g., line + point) for richer visualizations.
 
-7. **Labels**: Always provide meaningful titles and axis labels for clarity.
+7. **Themes**: Apply themes last in your specification for consistent styling.
 
-8. **Domain Specification**: Use either SCALE or COORD for domain/limit specification, but not both for the same aesthetic.
+8. **Labels**: Always provide meaningful titles and axis labels for clarity.
+
+9. **Domain Specification**: Use either SCALE or COORD for domain/limit specification, but not both for the same aesthetic.
 
 ---
 
@@ -611,7 +668,7 @@ ggsql-rest --load-sample-data --port 3334
 # Execute a query via HTTP
 curl -X POST http://localhost:3334/api/v1/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "SELECT * FROM products VISUALISE AS PLOT DRAW bar USING x = name, y = price"}'
+  -d '{"query": "SELECT * FROM products VISUALISE name AS x, price AS y DRAW bar"}'
 ```
 
 ### Using the Test Application

@@ -91,8 +91,8 @@ class GGSQLKernelTests(jkt.KernelTests):
 
         code = """
         SELECT 1 as x, 2 as y
-        VISUALISE AS PLOT
-        DRAW point USING x = x, y = y
+        VISUALISE x, y
+        DRAW point
         """
 
         reply, output_msgs = self.execute_helper(code=code)

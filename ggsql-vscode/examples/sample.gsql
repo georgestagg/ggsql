@@ -4,8 +4,8 @@
 -- ============================================================================
 -- Example 1: Basic Scatter Plot with File Path
 -- ============================================================================
-VISUALISE FROM 'mtcars.csv' AS PLOT
-DRAW point USING x = hp, y = mpg, color = cyl
+VISUALISE hp AS x, mpg AS y, cyl AS color FROM 'mtcars.csv'
+DRAW point
 LABEL title = 'Horsepower vs Fuel Efficiency',
       x = 'Horsepower',
       y = 'Miles per Gallon'
@@ -24,12 +24,12 @@ WITH monthly_sales AS (
     WHERE sale_date >= '2024-01-01'
     GROUP BY DATE_TRUNC('month', sale_date), region
 )
-VISUALISE FROM monthly_sales AS PLOT
-DRAW line USING x = month, y = total_quantity, color = region
-DRAW point USING x = month, y = total_quantity, color = region, size = 3
-SCALE x USING type = 'date'
-SCALE color USING palette = 'viridis'
-FACET WRAP region USING scales = 'free_y'
+VISUALISE month AS x, total_quantity AS y, region AS color FROM monthly_sales
+DRAW line
+DRAW point SETTING size TO 3
+SCALE x SETTING type TO 'date'
+SCALE color SETTING palette TO 'viridis'
+FACET WRAP region SETTING scales TO 'free_y'
 LABEL title = 'Sales Trends by Region',
       x = 'Month',
       y = 'Total Quantity',
@@ -45,13 +45,13 @@ WHERE year = 2024
 GROUP BY category
 ORDER BY total DESC
 LIMIT 10
-VISUALISE AS PLOT
-DRAW bar USING x = category, y = total, fill = category
+VISUALISE category AS x, total AS y, category AS fill
+DRAW bar
 COORD flip
 LABEL title = 'Top 10 Product Categories',
       x = 'Category',
       y = 'Total Sales'
-GUIDE fill USING type = 'none'
+GUIDE fill SETTING type TO 'none'
 THEME dark
 
 -- ============================================================================
@@ -60,9 +60,9 @@ THEME dark
 SELECT region, COUNT(*) as count
 FROM customers
 GROUP BY region
-VISUALISE AS PLOT
-DRAW bar USING x = region, y = count, fill = region
-COORD polar USING theta = y
+VISUALISE region AS x, count AS y, region AS fill
+DRAW bar
+COORD polar SETTING theta TO y
 LABEL title = 'Customer Distribution by Region'
 
 -- ============================================================================
@@ -71,16 +71,17 @@ LABEL title = 'Customer Distribution by Region'
 SELECT age, gender, income
 FROM demographics
 WHERE age BETWEEN 18 AND 80
-VISUALISE AS PLOT
-DRAW histogram USING x = age, fill = gender
-SCALE x USING type = 'linear', limits = [18, 80]
-FACET WRAP gender USING scales = 'fixed'
+VISUALISE age AS x, gender AS fill
+DRAW histogram
+SCALE x SETTING type TO 'linear', limits TO [18, 80]
+FACET WRAP gender SETTING scales TO 'fixed'
 LABEL title = 'Age Distribution by Gender',
       x = 'Age',
       y = 'Count'
 
 -- ============================================================================
 -- Example 6: Time Series with Custom Scale
+-- Uses layer-specific mappings when aesthetics differ between layers
 -- ============================================================================
 WITH daily_metrics AS (
     SELECT
@@ -93,15 +94,19 @@ WITH daily_metrics AS (
     GROUP BY timestamp::DATE
 )
 SELECT * FROM daily_metrics
-VISUALISE AS PLOT
-DRAW ribbon USING x = date, ymin = min_temp, ymax = max_temp, fill = 'lightblue', alpha = 0.3
-DRAW line USING x = date, y = avg_temp, color = 'blue', size = 2
-SCALE x USING type = 'date'
-SCALE y USING type = 'linear', limits = [0, 100]
-COORD cartesian USING xlim = ['2024-01-01', '2024-12-31']
+VISUALISE date AS x
+DRAW ribbon
+    MAPPING min_temp AS ymin, max_temp AS ymax, 'lightblue' AS fill
+    SETTING alpha TO 0.3
+DRAW line
+    MAPPING avg_temp AS y, 'blue' AS color
+    SETTING size TO 2
+SCALE x SETTING type TO 'date'
+SCALE y SETTING type TO 'linear', limits TO [0, 100]
+COORD cartesian SETTING xlim TO ['2024-01-01', '2024-12-31']
 LABEL title = 'Temperature Range (Last 30 Days)',
       x = 'Date',
-      y = 'Temperature (°C)',
+      y = 'Temperature (C)',
       caption = 'Source: Weather Station Alpha'
 THEME minimal
 
@@ -119,26 +124,21 @@ FROM products p
 JOIN sales s ON p.product_id = s.product_id
 JOIN employees e ON s.employee_id = e.employee_id
 WHERE s.sale_date >= '2024-01-01'
-VISUALISE AS PLOT
-DRAW point USING
-    x = sale_date,
-    y = revenue,
-    color = category,
-    size = quantity,
-    shape = category
-SCALE x USING type = 'date'
-SCALE y USING type = 'log10'
-SCALE color USING domain = ['Electronics', 'Clothing', 'Food', 'Books']
-FACET category BY employee_name USING scales = 'free_y'
+VISUALISE sale_date AS x, revenue AS y, category AS color, quantity AS size, category AS shape
+DRAW point
+SCALE x SETTING type TO 'date'
+SCALE y SETTING type TO 'log10'
+SCALE color SETTING domain TO ['Electronics', 'Clothing', 'Food', 'Books']
+FACET category BY employee_name SETTING scales TO 'free_y'
 LABEL title = 'Sales Performance Analysis',
       x = 'Sale Date',
       y = 'Revenue (log scale)',
       color = 'Product Category',
       size = 'Quantity Sold'
-GUIDE color USING
-    type = 'legend',
-    position = 'right',
-    title = 'Categories'
+GUIDE color SETTING
+    type TO 'legend',
+    position TO 'right',
+    title TO 'Categories'
 THEME grey
 
 -- ============================================================================
@@ -153,10 +153,10 @@ WITH quarterly_breakdown AS (
     WHERE sale_date >= '2023-01-01'
     GROUP BY DATE_TRUNC('quarter', sale_date), category
 )
-VISUALISE FROM quarterly_breakdown AS PLOT
-DRAW area USING x = quarter, y = revenue, fill = category, alpha = 0.7
-SCALE x USING type = 'date'
-SCALE fill USING palette = 'plasma', domain = ['A', 'B', 'C', 'D']
+VISUALISE quarter AS x, revenue AS y, category AS fill FROM quarterly_breakdown
+DRAW area SETTING alpha TO 0.7
+SCALE x SETTING type TO 'date'
+SCALE fill SETTING palette TO 'plasma', domain TO ['A', 'B', 'C', 'D']
 LABEL title = 'Quarterly Revenue by Category',
       x = 'Quarter',
       y = 'Revenue ($)',
@@ -168,10 +168,10 @@ LABEL title = 'Quarterly Revenue by Category',
 SELECT category, price, rating
 FROM products
 WHERE rating IS NOT NULL
-VISUALISE AS PLOT
-DRAW boxplot USING x = category, y = price
-DRAW violin USING x = category, y = price, alpha = 0.3
-COORD cartesian USING ylim = [0, 500]
+VISUALISE category AS x, price AS y
+DRAW boxplot
+DRAW violin SETTING alpha TO 0.3
+COORD cartesian SETTING ylim TO [0, 500]
 LABEL title = 'Price Distribution by Category',
       x = 'Product Category',
       y = 'Price ($)'
@@ -179,6 +179,7 @@ THEME bw
 
 -- ============================================================================
 -- Example 10: Annotated Scatter Plot
+-- Uses layer-specific mappings for different aesthetics per layer
 -- ============================================================================
 SELECT
     product_name,
@@ -187,17 +188,19 @@ SELECT
     sales_count
 FROM products
 WHERE featured = TRUE
-VISUALISE AS PLOT
-DRAW point USING x = price, y = rating, size = sales_count, color = sales_count
-DRAW text USING x = price, y = rating, label = product_name
-SCALE color USING palette = 'viridis'
-SCALE size USING limits = [0, 10000]
-COORD cartesian USING xlim = [0, 1000], ylim = [0, 5]
+VISUALISE price AS x, rating AS y
+DRAW point
+    MAPPING sales_count AS size, sales_count AS color
+DRAW text
+    MAPPING product_name AS label
+SCALE color SETTING palette TO 'viridis'
+SCALE size SETTING limits TO [0, 10000]
+COORD cartesian SETTING xlim TO [0, 1000], ylim TO [0, 5]
 LABEL title = 'Featured Products: Price vs Rating',
       x = 'Price ($)',
       y = 'Customer Rating',
       size = 'Total Sales'
-GUIDE size USING type = 'legend', position = 'bottom'
+GUIDE size SETTING type TO 'legend', position TO 'bottom'
 
 -- ============================================================================
 -- Example 11: Multiple VISUALISE Statements
@@ -208,14 +211,25 @@ WITH sales_summary AS (
     GROUP BY region, category
 )
 -- First visualization: by region
-VISUALISE FROM sales_summary AS PLOT
-DRAW bar USING x = region, y = total, fill = region
+VISUALISE region AS x, total AS y, region AS fill FROM sales_summary
+DRAW bar
 LABEL title = 'Sales by Region'
 -- Second visualization: by category
-VISUALISE FROM sales_summary AS PLOT
-DRAW bar USING x = category, y = total, fill = category
+VISUALISE category AS x, total AS y, category AS fill FROM sales_summary
+DRAW bar
 COORD flip
 LABEL title = 'Sales by Category'
+
+-- ============================================================================
+-- Example 12: FILTER clause for layer-specific filtering
+-- ============================================================================
+SELECT date, value, category
+FROM metrics
+VISUALISE date AS x, value AS y, category AS color
+DRAW line
+DRAW point FILTER value > 50
+SCALE x SETTING type TO 'date'
+LABEL title = 'Metrics with Highlighted Points Above 50'
 
 -- ============================================================================
 -- Comments and String Handling
@@ -227,7 +241,7 @@ LABEL title = 'Sales by Category'
 */
 
 SELECT
-    'VISUALISE AS PLOT' as text,  -- String containing ggSQL keywords
+    'VISUALISE' as text,  -- String containing ggSQL keywords
     "This is a string" as quoted,
     123 as number,
     45.67 as decimal,
@@ -236,4 +250,4 @@ SELECT
     TRUE as bool_true,
     FALSE as bool_false
 FROM test_data
-VISUALISE AS TABLE
+VISUALISE *

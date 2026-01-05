@@ -158,8 +158,8 @@ class TestExecution:
         """Test executing a query with visualization."""
         code = """
         SELECT 1 as x, 2 as y
-        VISUALISE AS PLOT
-        DRAW point USING x = x, y = y
+        VISUALISE x, y
+        DRAW point
         """
         msg_id = client.execute(code, silent=False, store_history=True)
 

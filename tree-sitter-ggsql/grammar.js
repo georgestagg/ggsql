@@ -210,22 +210,43 @@ module.exports = grammar({
       caseInsensitive('SCHEMA')
     ),
 
-    // VISUALISE/VISUALIZE [FROM source] AS <type> with clauses
+    // VISUALISE/VISUALIZE [global_mapping] [FROM source] with clauses
+    // Global mapping sets default aesthetics for all layers
     // FROM source can be an identifier (table/CTE) or string (file path)
     visualise_statement: $ => seq(
       choice(caseInsensitive('VISUALISE'), caseInsensitive('VISUALIZE')),
-      optional(seq(caseInsensitive('FROM'), choice($.identifier, $.string))),
-      caseInsensitive('AS'),
-      $.viz_type,
+      optional($.global_mapping),
+      optional(seq(caseInsensitive('FROM'), field('source', choice($.identifier, $.string)))),
       repeat($.viz_clause)
     ),
 
-    // Visualization output types
-    viz_type: $ => choice(
-      caseInsensitive('PLOT'),
-      caseInsensitive('TABLE'),
-      caseInsensitive('MAP')
+    // Global mapping: wildcard (*), or list of explicit/implicit mappings
+    global_mapping: $ => choice(
+      $.wildcard_mapping,
+      seq(
+        $.global_mapping_item,
+        repeat(seq(',', $.global_mapping_item))
+      )
     ),
+
+    // Wildcard mapping: VISUALISE * (maps all columns implicitly)
+    wildcard_mapping: $ => '*',
+
+    // Global mapping item: explicit (col AS aes) or implicit (col)
+    global_mapping_item: $ => choice(
+      $.explicit_mapping,   // date AS x
+      $.implicit_mapping    // x (becomes x AS x)
+    ),
+
+    // Explicit mapping: value AS aesthetic
+    explicit_mapping: $ => seq(
+      field('value', $.mapping_value),
+      caseInsensitive('AS'),
+      field('aesthetic', $.aesthetic_name)
+    ),
+
+    // Implicit mapping: just an identifier (column name = aesthetic name)
+    implicit_mapping: $ => $.identifier,
 
     // All the visualization clauses (same as current grammar)
     viz_clause: $ => choice(
@@ -238,14 +259,13 @@ module.exports = grammar({
       $.theme_clause,
     ),
 
-    // WITH clause
+    // DRAW clause - syntax: DRAW geom [MAPPING ...] [SETTING ...] [FILTER ...]
     draw_clause: $ => seq(
       caseInsensitive('DRAW'),
       $.geom_type,
-      caseInsensitive('USING'),
-      $.aesthetic_mapping,
-      repeat(seq(',', $.aesthetic_mapping)),
-      optional(seq(caseInsensitive('AS'), $.identifier))
+      optional($.mapping_clause),
+      optional($.setting_clause),
+      optional($.filter_clause)
     ),
 
     geom_type: $ => choice(
@@ -254,11 +274,82 @@ module.exports = grammar({
       'text', 'label', 'segment', 'arrow', 'hline', 'vline', 'abline', 'errorbar'
     ),
 
-    aesthetic_mapping: $ => seq(
-      field('aesthetic', $.aesthetic_name),
-      '=',
-      field('value', $.aesthetic_value)
+    // MAPPING clause for aesthetic mappings: MAPPING col AS x, "blue" AS color
+    mapping_clause: $ => seq(
+      caseInsensitive('MAPPING'),
+      $.mapping_item,
+      repeat(seq(',', $.mapping_item))
     ),
+
+    mapping_item: $ => seq(
+      field('value', $.mapping_value),
+      caseInsensitive('AS'),
+      field('aesthetic', $.aesthetic_name)
+    ),
+
+    mapping_value: $ => choice(
+      $.column_reference,
+      $.literal_value
+    ),
+
+    // SETTING clause for parameters: SETTING opacity TO 0.5, size TO 3
+    setting_clause: $ => seq(
+      caseInsensitive('SETTING'),
+      $.parameter_assignment,
+      repeat(seq(',', $.parameter_assignment))
+    ),
+
+    parameter_assignment: $ => seq(
+      field('param', $.parameter_name),
+      caseInsensitive('TO'),
+      field('value', $.parameter_value)
+    ),
+
+    parameter_name: $ => $.identifier,
+
+    parameter_value: $ => choice(
+      $.string,
+      $.number,
+      $.boolean
+    ),
+
+    // FILTER clause for layer filtering: FILTER x > 10 AND y < 20
+    filter_clause: $ => seq(
+      caseInsensitive('FILTER'),
+      $.filter_expression
+    ),
+
+    filter_expression: $ => choice(
+      $.filter_and_expression,
+      $.filter_or_expression,
+      $.filter_primary
+    ),
+
+    filter_primary: $ => choice(
+      $.filter_comparison,
+      seq('(', $.filter_expression, ')')
+    ),
+
+    filter_and_expression: $ => prec.left(2, seq(
+      $.filter_primary,
+      caseInsensitive('AND'),
+      $.filter_expression
+    )),
+
+    filter_or_expression: $ => prec.left(1, seq(
+      $.filter_primary,
+      caseInsensitive('OR'),
+      $.filter_expression
+    )),
+
+    filter_comparison: $ => seq(
+      $.identifier,
+      $.comparison_operator,
+      choice($.string, $.number, $.boolean, $.identifier)
+    ),
+
+    // Basic comparison operators only
+    comparison_operator: $ => choice('=', '!=', '<>', '<', '>', '<=', '>='),
 
     aesthetic_name: $ => choice(
       // Position aesthetics
@@ -273,11 +364,6 @@ module.exports = grammar({
       'group'
     ),
 
-    aesthetic_value: $ => choice(
-      $.column_reference,
-      $.literal_value
-    ),
-
     column_reference: $ => $.identifier,
 
     literal_value: $ => choice(
@@ -286,11 +372,11 @@ module.exports = grammar({
       $.boolean
     ),
 
-    // SCALE clause
+    // SCALE clause - SCALE aesthetic SETTING prop TO value, ...
     scale_clause: $ => seq(
       caseInsensitive('SCALE'),
       $.aesthetic_name,
-      caseInsensitive('USING'),
+      caseInsensitive('SETTING'),
       optional(seq(
         $.scale_property,
         repeat(seq(',', $.scale_property))
@@ -299,7 +385,7 @@ module.exports = grammar({
 
     scale_property: $ => seq(
       $.scale_property_name,
-      '=',
+      caseInsensitive('TO'),
       $.scale_property_value
     ),
 
@@ -315,7 +401,7 @@ module.exports = grammar({
       $.array
     ),
 
-    // FACET clause
+    // FACET clause - FACET ... SETTING scales TO ...
     facet_clause: $ => choice(
       // FACET row_vars BY col_vars
       seq(
@@ -323,14 +409,14 @@ module.exports = grammar({
         $.facet_vars,
         alias(caseInsensitive('BY'), $.facet_by),
         $.facet_vars,
-        optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
+        optional(seq(caseInsensitive('SETTING'), caseInsensitive('scales'), caseInsensitive('TO'), $.facet_scales))
       ),
       // FACET WRAP vars
       seq(
         caseInsensitive('FACET'),
         alias(caseInsensitive('WRAP'), $.facet_wrap),
         $.facet_vars,
-        optional(seq(caseInsensitive('USING'), caseInsensitive('scales'), '=', $.facet_scales))
+        optional(seq(caseInsensitive('SETTING'), caseInsensitive('scales'), caseInsensitive('TO'), $.facet_scales))
       )
     ),
 
@@ -346,14 +432,14 @@ module.exports = grammar({
       'fixed', 'free', 'free_x', 'free_y'
     ),
 
-    // COORD clause - new syntax: COORD [type] [USING properties]
+    // COORD clause - COORD [type] [SETTING prop TO value, ...]
     coord_clause: $ => seq(
       caseInsensitive('COORD'),
       choice(
-        // Type with optional USING: COORD polar USING theta = y
-        seq($.coord_type, optional(seq(caseInsensitive('USING'), $.coord_properties))),
-        // Just USING: COORD USING xlim = [0, 100] (defaults to cartesian)
-        seq(caseInsensitive('USING'), $.coord_properties)
+        // Type with optional SETTING: COORD polar SETTING theta TO y
+        seq($.coord_type, optional(seq(caseInsensitive('SETTING'), $.coord_properties))),
+        // Just SETTING: COORD SETTING xlim TO [0, 100] (defaults to cartesian)
+        seq(caseInsensitive('SETTING'), $.coord_properties)
       )
     ),
 
@@ -368,7 +454,7 @@ module.exports = grammar({
 
     coord_property: $ => seq(
       $.coord_property_name,
-      '=',
+      caseInsensitive('TO'),
       choice($.string, $.number, $.boolean, $.array, $.identifier)
     ),
 
@@ -399,11 +485,11 @@ module.exports = grammar({
       'color', 'colour', 'fill', 'size', 'shape', 'linetype'
     ),
 
-    // GUIDE clause
+    // GUIDE clause - GUIDE aesthetic SETTING prop TO value, ...
     guide_clause: $ => seq(
       caseInsensitive('GUIDE'),
       $.aesthetic_name,
-      caseInsensitive('USING'),
+      caseInsensitive('SETTING'),
       optional(seq(
         $.guide_property,
         repeat(seq(',', $.guide_property))
@@ -411,8 +497,8 @@ module.exports = grammar({
     ),
 
     guide_property: $ => choice(
-      seq('type', '=', $.guide_type),
-      seq($.guide_property_name, '=', choice($.string, $.number, $.boolean))
+      seq('type', caseInsensitive('TO'), $.guide_type),
+      seq($.guide_property_name, caseInsensitive('TO'), choice($.string, $.number, $.boolean))
     ),
 
     guide_type: $ => choice(
@@ -425,19 +511,19 @@ module.exports = grammar({
       'reverse', 'order'
     ),
 
-    // THEME clause
+    // THEME clause - THEME [name] [SETTING prop TO value, ...]
     theme_clause: $ => choice(
       // Just theme name
       seq(caseInsensitive('THEME'), $.theme_name),
       // Theme name with properties
       seq(
-        caseInsensitive('THEME'), $.theme_name, caseInsensitive('USING'),
+        caseInsensitive('THEME'), $.theme_name, caseInsensitive('SETTING'),
         $.theme_property,
         repeat(seq(',', $.theme_property))
       ),
       // Just properties (custom theme)
       seq(
-        caseInsensitive('THEME'), caseInsensitive('USING'),
+        caseInsensitive('THEME'), caseInsensitive('SETTING'),
         $.theme_property,
         repeat(seq(',', $.theme_property))
       )
@@ -449,7 +535,7 @@ module.exports = grammar({
 
     theme_property: $ => seq(
       $.theme_property_name,
-      '=',
+      caseInsensitive('TO'),
       choice($.string, $.number, $.boolean)
     ),
 

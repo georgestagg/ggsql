@@ -4,14 +4,14 @@
 
 **ggSQL** is a SQL extension for declarative data visualization based on Grammar of Graphics principles. It allows users to combine SQL data queries with visualization specifications in a single, composable syntax.
 
-**Core Innovation**: ggSQL extends standard SQL with a `VISUALISE AS` clause that separates data retrieval (SQL) from visual encoding (Grammar of Graphics), enabling terminal visualization operations that produce charts instead of relational data.
+**Core Innovation**: ggSQL extends standard SQL with a `VISUALISE` clause that separates data retrieval (SQL) from visual encoding (Grammar of Graphics), enabling terminal visualization operations that produce charts instead of relational data.
 
 ```sql
 SELECT date, revenue, region FROM sales WHERE year = 2024
-VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue, color = region
-SCALE x USING type = 'date'
-COORD cartesian USING ylim = [0, 100000]
+VISUALISE date AS x, revenue AS y, region AS color
+DRAW line
+SCALE x SETTING type TO 'date'
+COORD cartesian SETTING ylim TO [0, 100000]
 LABEL title = 'Sales by Region', x = 'Date', y = 'Revenue'
 THEME minimal
 ```
@@ -29,37 +29,61 @@ THEME minimal
 
 ---
 
-## VISUALISE FROM Feature
+## Global Mapping Feature
 
-ggSQL supports two patterns for creating visualizations:
+ggSQL supports global aesthetic mappings at the VISUALISE level that apply to all layers:
 
-### Traditional Pattern: SELECT ... VISUALISE AS
+### Explicit Global Mapping
 
-The original syntax where SQL and visualization are separated by `VISUALISE AS`:
+Map columns to specific aesthetics at the VISUALISE level:
 
 ```sql
 SELECT * FROM sales WHERE year = 2024
-VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue
+VISUALISE date AS x, revenue AS y, region AS color
+DRAW line
+DRAW point
+-- Both layers inherit x, y, and color mappings
 ```
 
-### Shorthand Pattern: VISUALISE FROM ... AS
+### Implicit Global Mapping
 
-A concise syntax that automatically injects `SELECT * FROM <source>`:
+Use column names directly when they match aesthetic names:
+
+```sql
+SELECT x, y FROM data
+VISUALISE x, y
+DRAW point
+-- Equivalent to: VISUALISE x AS x, y AS y
+```
+
+### Wildcard Mapping
+
+Map all columns automatically (resolved at execution time):
+
+```sql
+SELECT * FROM data
+VISUALISE *
+DRAW point
+-- All columns mapped to aesthetics with matching names
+```
+
+### VISUALISE FROM Shorthand
+
+Direct visualization from tables/CTEs (auto-injects `SELECT * FROM`):
 
 ```sql
 -- Direct table visualization
-VISUALISE FROM sales AS PLOT
-DRAW bar USING x = region, y = total
+VISUALISE FROM sales
+DRAW bar MAPPING region AS x, total AS y
 
--- CTE visualization (no trailing SELECT)
+-- CTE visualization
 WITH monthly_totals AS (
     SELECT DATE_TRUNC('month', sale_date) as month, SUM(revenue) as total
     FROM sales
     GROUP BY month
 )
-VISUALISE FROM monthly_totals AS PLOT
-DRAW line USING x = month, y = total
+VISUALISE FROM monthly_totals
+DRAW line MAPPING month AS x, total AS y
 ```
 
 ---
@@ -71,7 +95,7 @@ DRAW line USING x = month, y = total
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                       ggSQL Query                            │
-│  "SELECT ... FROM ... WHERE ... VISUALISE AS PLOT DRAW ..."  │
+│  "SELECT ... FROM ... WHERE ... VISUALISE x, y DRAW ..."     │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
@@ -159,7 +183,7 @@ Key grammar rules:
 - `sql_portion`: Zero or more SQL statements before VISUALISE
 - `with_statement`: WITH clause with optional trailing SELECT (compound statement)
 - `subquery`: Fully recursive subquery rule supporting nested parentheses
-- `visualise_statement`: VISUALISE AS/FROM clause with viz_type and clauses
+- `visualise_statement`: VISUALISE clause with optional global mappings and FROM source
 
 **Critical Grammar Features**:
 
@@ -184,22 +208,34 @@ Core data structures representing visualization specifications:
 
 ```rust
 pub struct VizSpec {
-    pub viz_type: VizType,           // PLOT, TABLE, MAP
-    pub source: Option<String>,      // FROM source (for VISUALISE FROM)
-    pub layers: Vec<Layer>,          // DRAW clauses
-    pub scales: Vec<Scale>,          // SCALE clauses
-    pub facet: Option<Facet>,        // FACET clause
-    pub coord: Option<Coord>,        // COORD clause
-    pub labels: Option<Labels>,      // LABEL clause
-    pub guides: Vec<Guide>,          // GUIDE clauses
-    pub theme: Option<Theme>,        // THEME clause
+    pub global_mapping: GlobalMapping, // From VISUALISE clause: Empty, Wildcard, or Mappings
+    pub source: Option<String>,        // FROM source (for VISUALISE FROM)
+    pub layers: Vec<Layer>,            // DRAW clauses
+    pub scales: Vec<Scale>,            // SCALE clauses
+    pub facet: Option<Facet>,          // FACET clause
+    pub coord: Option<Coord>,          // COORD clause
+    pub labels: Option<Labels>,        // LABEL clause
+    pub guides: Vec<Guide>,            // GUIDE clauses
+    pub theme: Option<Theme>,          // THEME clause
+}
+
+/// Global mapping specification from VISUALISE clause
+pub enum GlobalMapping {
+    Empty,                           // No mapping: VISUALISE
+    Wildcard,                        // Wildcard: VISUALISE *
+    Mappings(Vec<GlobalMappingItem>), // List: VISUALISE x, y, date AS x
+}
+
+pub enum GlobalMappingItem {
+    Explicit { column: String, aesthetic: String }, // date AS x
+    Implicit { name: String },                      // x (maps column x to aesthetic x)
 }
 
 pub struct Layer {
-    pub name: Option<String>,        // Layer name (from AS clause)
     pub geom: Geom,                  // Geometric object type
-    pub aesthetics: HashMap<String, AestheticValue>,  // Aesthetic mappings
-    pub parameters: HashMap<String, ParameterValue>,  // Geom parameters (not aesthetics)
+    pub aesthetics: HashMap<String, AestheticValue>,  // Aesthetic mappings (from MAPPING)
+    pub parameters: HashMap<String, ParameterValue>,  // Geom parameters (from SETTING)
+    pub filter: Option<FilterExpression>,  // Layer filter (from FILTER)
 }
 
 pub enum Geom {
@@ -308,9 +344,9 @@ pub struct Theme {
 
 **VizSpec methods:**
 
-- `VizSpec::new(viz_type)` - Create a new empty VizSpec
+- `VizSpec::new()` - Create a new empty VizSpec
+- `VizSpec::with_global_mapping(mapping)` - Create VizSpec with a global mapping
 - `VizSpec::find_scale(aesthetic)` - Look up scale specification for an aesthetic
-- `VizSpec::find_layer(name)` - Find a layer by name
 - `VizSpec::find_guide(aesthetic)` - Find a guide specification for an aesthetic
 - `VizSpec::has_layers()` - Check if VizSpec has any layers
 - `VizSpec::layer_count()` - Get the number of layers
@@ -318,7 +354,7 @@ pub struct Theme {
 **Layer methods:**
 
 - `Layer::new(geom)` - Create a new layer with a geom
-- `Layer::with_name(name)` - Set the layer name (builder pattern)
+- `Layer::with_filter(filter)` - Set the layer filter (builder pattern)
 - `Layer::with_aesthetic(aesthetic, value)` - Add an aesthetic mapping (builder pattern)
 - `Layer::with_parameter(parameter, value)` - Add a geom parameter (builder pattern)
 - `Layer::get_column(aesthetic)` - Get column name for an aesthetic (if mapped to column)
@@ -529,7 +565,7 @@ impl Writer for VegaLiteWriter {
 // POST /api/v1/query - Execute ggSQL query
 // Request:
 {
-  "query": "SELECT ... VISUALISE AS PLOT ...",
+  "query": "SELECT ... VISUALISE ...",
   "reader": "duckdb://memory",  // optional, default
   "writer": "vegalite"            // optional, default
 }
@@ -542,7 +578,7 @@ impl Writer for VegaLiteWriter {
     "metadata": {
       "rows": 100,
       "columns": ["date", "revenue", "region", "..."],
-      "viz_type": "PLOT",
+      "global_mapping": "Mappings",
       "layers": 2
     }
   }
@@ -600,10 +636,10 @@ ggsql-rest --cors-origin "http://localhost:5173,http://localhost:3000"
 
 ```bash
 # Parse query and show AST
-ggsql parse "SELECT ... VISUALISE AS PLOT ..."
+ggsql parse "SELECT ... VISUALISE ..."
 
 # Execute query and generate output
-ggsql exec "SELECT ... VISUALISE AS PLOT ..." \
+ggsql exec "SELECT ... VISUALISE ..." \
   --reader duckdb://memory \
   --writer vegalite \
   --output viz.vl.json
@@ -670,9 +706,9 @@ SELECT * FROM (VALUES
 
 -- Cell 2: Visualize
 SELECT * FROM sales
-VISUALISE AS PLOT
-DRAW line USING x = date, y = revenue, color = region
-SCALE x USING type = 'date'
+VISUALISE
+DRAW line MAPPING date AS x, revenue AS y, region AS color
+SCALE x SETTING type TO 'date'
 LABEL title = 'Sales Trends'
 ```
 
@@ -799,20 +835,25 @@ cargo build --all-features
 ### ggSQL Grammar Structure
 
 ```sql
-[SELECT ...] VISUALISE AS <type> [clauses]...
+[SELECT ...] VISUALISE [<global_mapping>] [FROM <source>] [clauses]...
 ```
+
+Where `<global_mapping>` can be:
+- Empty: `VISUALISE` (layers must define all mappings)
+- Mappings: `VISUALISE x, y, date AS x` (mixed implicit/explicit)
+- Wildcard: `VISUALISE *` (map all columns)
 
 ### Clause Types
 
 | Clause         | Repeatable | Purpose            | Example                              |
 | -------------- | ---------- | ------------------ | ------------------------------------ |
-| `VISUALISE AS` | ✅ Yes     | Entry point        | `VISUALISE AS PLOT`                  |
-| `DRAW`         | ✅ Yes     | Define layers      | `DRAW line USING x=date, y=value`    |
-| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x USING type='date'`          |
+| `VISUALISE`    | ✅ Yes     | Entry point        | `VISUALISE date AS x, revenue AS y`  |
+| `DRAW`         | ✅ Yes     | Define layers      | `DRAW line MAPPING date AS x, value AS y` |
+| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x SETTING type TO 'date'`          |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
-| `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian USING xlim=[0,100]` |
+| `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian SETTING xlim TO [0,100]` |
 | `LABEL`        | ❌ No      | Text labels        | `LABEL title='My Chart', x='Date'`   |
-| `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color USING position='right'` |
+| `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color SETTING position TO 'right'` |
 | `THEME`        | ❌ No      | Visual styling     | `THEME minimal`                      |
 
 ### DRAW Clause (Layers)
@@ -820,8 +861,13 @@ cargo build --all-features
 **Syntax**:
 
 ```sql
-DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
+DRAW <geom>
+    [MAPPING <value> AS <aesthetic>, ...]
+    [SETTING <param> TO <value>, ...]
+    [FILTER <condition>]
 ```
+
+All clauses (MAPPING, SETTING, FILTER) are optional.
 
 **Geom Types**:
 
@@ -829,7 +875,9 @@ DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
 - **Statistical**: `histogram`, `density`, `smooth`, `boxplot`, `violin`
 - **Annotation**: `text`, `label`, `segment`, `arrow`, `hline`, `vline`, `abline`, `errorbar`
 
-**Common Aesthetics**:
+**MAPPING Clause** (Aesthetic Mappings):
+
+Maps data values (columns or literals) to visual aesthetics. Syntax: `value AS aesthetic`
 
 - **Position**: `x`, `y`, `xmin`, `xmax`, `ymin`, `ymax`
 - **Color**: `color`, `fill`, `alpha`
@@ -838,14 +886,48 @@ DRAW <geom> USING <aesthetic> = <value>, ... [AS <name>]
 
 **Literal vs Column**:
 
-- Unquoted → column reference: `color = region`
-- Quoted → literal value: `color = 'blue'`, `size = 3`
+- Unquoted → column reference: `region AS color`
+- Quoted → literal value: `'blue' AS color`, `3 AS size`
 
-**Example**:
+**SETTING Clause** (Parameters):
+
+Sets layer/geom parameters (not mapped to data). Syntax: `param TO value`
+
+- Parameters like `opacity`, `size` (fixed), `stroke_width`, etc.
+
+**FILTER Clause** (Layer Filtering):
+
+Applies a filter to the layer data. Supports basic comparison operators.
+
+- Operators: `=`, `!=`, `<>`, `<`, `>`, `<=`, `>=`
+- Logical: `AND`, `OR`, parentheses for grouping
+
+**Examples**:
 
 ```sql
-DRAW line USING x = date, y = revenue, color = region, size = 2
-DRAW point USING x = date, y = revenue, color = region AS "data_points"
+-- Basic mapping
+DRAW line
+    MAPPING date AS x, revenue AS y, region AS color
+
+-- Mapping with literal
+DRAW point
+    MAPPING date AS x, revenue AS y, 'red' AS color
+
+-- Setting parameters
+DRAW point
+    MAPPING x AS x, y AS y
+    SETTING size TO 5, opacity TO 0.7
+
+-- With filter
+DRAW point
+    MAPPING x AS x, y AS y, category AS color
+    FILTER value > 100
+
+-- Combined
+DRAW line
+    MAPPING date AS x, value AS y
+    SETTING stroke_width TO 2
+    FILTER category = 'A' AND year >= 2024
 ```
 
 ### SCALE Clause
@@ -853,12 +935,12 @@ DRAW point USING x = date, y = revenue, color = region AS "data_points"
 **Syntax**:
 
 ```sql
-SCALE <aesthetic> USING
-  [type = <scale_type>]
-  [limits = [min, max]]
-  [breaks = <array | interval>]
-  [palette = <name>]
-  [domain = [values...]]
+SCALE <aesthetic> SETTING
+  [type TO <scale_type>]
+  [limits TO [min, max]]
+  [breaks TO <array | interval>]
+  [palette TO <name>]
+  [domain TO [values...]]
 ```
 
 **Scale Types**:
@@ -871,7 +953,7 @@ SCALE <aesthetic> USING
 **Critical for Date Formatting**:
 
 ```sql
-SCALE x USING type = 'date'
+SCALE x SETTING type TO 'date'
 -- Maps to Vega-Lite field type = "temporal"
 -- Enables proper date axis formatting
 ```
@@ -882,10 +964,10 @@ The `domain` property explicitly sets the input domain for a scale:
 
 ```sql
 -- Set domain for discrete scale
-SCALE color USING domain = ['red', 'green', 'blue']
+SCALE color SETTING domain TO ['red', 'green', 'blue']
 
 -- Set domain for continuous scale
-SCALE x USING domain = [0, 100]
+SCALE x SETTING domain TO [0, 100]
 ```
 
 **Note**: Cannot specify domain in both SCALE and COORD for the same aesthetic (will error).
@@ -893,9 +975,9 @@ SCALE x USING domain = [0, 100]
 **Example**:
 
 ```sql
-SCALE x USING type = 'date', breaks = '2 months'
-SCALE y USING type = 'log10', limits = [1, 1000]
-SCALE color USING palette = 'viridis', domain = ['A', 'B', 'C']
+SCALE x SETTING type TO 'date', breaks = '2 months'
+SCALE y SETTING type TO 'log10', limits TO [1, 1000]
+SCALE color SETTING palette TO 'viridis', domain TO ['A', 'B', 'C']
 ```
 
 ### FACET Clause
@@ -904,10 +986,10 @@ SCALE color USING palette = 'viridis', domain = ['A', 'B', 'C']
 
 ```sql
 -- Grid layout
-FACET <row_vars> BY <col_vars> [USING scales = <sharing>]
+FACET <row_vars> BY <col_vars> [SETTING scales TO <sharing>]
 
 -- Wrapped layout
-FACET WRAP <vars> [USING scales = <sharing>]
+FACET WRAP <vars> [SETTING scales TO <sharing>]
 ```
 
 **Scale Sharing**:
@@ -920,8 +1002,8 @@ FACET WRAP <vars> [USING scales = <sharing>]
 **Example**:
 
 ```sql
-FACET WRAP region USING scales = 'free_y'
-FACET region BY category USING scales = 'fixed'
+FACET WRAP region SETTING scales TO 'free_y'
+FACET region BY category SETTING scales TO 'fixed'
 ```
 
 ### COORD Clause
@@ -930,10 +1012,10 @@ FACET region BY category USING scales = 'fixed'
 
 ```sql
 -- With coordinate type
-COORD <type> [USING <properties>]
+COORD <type> [SETTING <properties>]
 
 -- With properties only (defaults to cartesian)
-COORD USING <properties>
+COORD SETTING <properties>
 ```
 
 **Coordinate Types**:
@@ -950,22 +1032,22 @@ COORD USING <properties>
 
 **Cartesian**:
 
-- `xlim = [min, max]` - Set x-axis limits
-- `ylim = [min, max]` - Set y-axis limits
-- `<aesthetic> = [values...]` - Set domain for any aesthetic (color, fill, size, etc.)
+- `xlim TO [min, max]` - Set x-axis limits
+- `ylim TO [min, max]` - Set y-axis limits
+- `<aesthetic> TO [values...]` - Set domain for any aesthetic (color, fill, size, etc.)
 
 **Flip**:
 
-- `<aesthetic> = [values...]` - Set domain for any aesthetic
+- `<aesthetic> TO [values...]` - Set domain for any aesthetic
 
 **Polar**:
 
-- `theta = <aesthetic>` - Which aesthetic maps to angle (defaults to `y`)
-- `<aesthetic> = [values...]` - Set domain for any aesthetic
+- `theta TO <aesthetic>` - Which aesthetic maps to angle (defaults to `y`)
+- `<aesthetic> TO [values...]` - Set domain for any aesthetic
 
 **Important Notes**:
 
-1. **Axis limits auto-swap**: `xlim = [100, 0]` automatically becomes `[0, 100]`
+1. **Axis limits auto-swap**: `xlim TO [100, 0]` automatically becomes `[0, 100]`
 2. **ggplot2 compatibility**: `coord_flip` preserves axis label names (labels stay with aesthetic names, not visual position)
 3. **Domain conflicts**: Error if same aesthetic has domain in both SCALE and COORD
 4. **Multi-layer support**: All coordinate transforms apply to all layers
@@ -981,33 +1063,33 @@ COORD USING <properties>
 
 ```sql
 -- Cartesian with axis limits
-COORD cartesian USING xlim = [0, 100], ylim = [0, 50]
+COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 50]
 
 -- Cartesian with aesthetic domain
-COORD cartesian USING color = ['red', 'green', 'blue']
+COORD cartesian SETTING color TO ['red', 'green', 'blue']
 
--- Cartesian shorthand (type optional when using USING)
-COORD USING xlim = [0, 100]
+-- Cartesian shorthand (type optional when using SETTING)
+COORD SETTING xlim TO [0, 100]
 
 -- Flip coordinates for horizontal bar chart
 COORD flip
 
 -- Flip with aesthetic domain
-COORD flip USING color = ['A', 'B', 'C']
+COORD flip SETTING color TO ['A', 'B', 'C']
 
 -- Polar for pie chart (theta defaults to y)
 COORD polar
 
 -- Polar for rose plot (x maps to radius)
-COORD polar USING theta = y
+COORD polar SETTING theta TO y
 
 -- Combined with other clauses
-DRAW bar USING x = category, y = value
-COORD cartesian USING xlim = [0, 100], ylim = [0, 200]
+DRAW bar MAPPING category AS x, value AS y
+COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 200]
 LABEL x = 'Category', y = 'Count'
 ```
 
-**Breaking Change**: The COORD syntax changed from `COORD USING type = 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
+**Breaking Change**: The COORD syntax changed from `COORD SETTING type TO 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
 
 ### LABEL Clause
 
@@ -1039,7 +1121,7 @@ LABEL
 **Syntax**:
 
 ```sql
-THEME <name> [USING <overrides>]
+THEME <name> [SETTING <overrides>]
 ```
 
 **Base Themes**: `minimal`, `classic`, `gray`, `bw`, `dark`, `void`
@@ -1048,7 +1130,7 @@ THEME <name> [USING <overrides>]
 
 ```sql
 THEME minimal
-THEME dark USING background = '#1a1a1a'
+THEME dark SETTING background TO '#1a1a1a'
 ```
 
 ---
@@ -1063,10 +1145,12 @@ FROM sales
 WHERE sale_date >= '2024-01-01'
 GROUP BY sale_date, region
 ORDER BY sale_date
-VISUALISE AS PLOT
-DRAW line USING x = sale_date, y = total, color = region
-DRAW point USING x = sale_date, y = total, color = region
-SCALE x USING type = 'date'
+VISUALISE
+DRAW line
+    MAPPING sale_date AS x, total AS y, region AS color
+DRAW point
+    MAPPING sale_date AS x, total AS y, region AS color
+SCALE x SETTING type TO 'date'
 FACET WRAP region
 LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
 THEME minimal
@@ -1079,7 +1163,7 @@ THEME minimal
 ```rust
 // splitter.rs
 SQL:  "SELECT sale_date, region, SUM(quantity) as total FROM sales ..."
-VIZ:  "VISUALISE AS PLOT DRAW line USING x = sale_date, ..."
+VIZ:  "VISUALISE DRAW line MAPPING sale_date AS x, ..."
 ```
 
 **2. SQL Execution** (DuckDB Reader)
@@ -1100,7 +1184,7 @@ ResultSet → DataFrame (Polars)
 Tree-sitter CST → AST
 
 VizSpec {
-  viz_type: VizType::Plot,
+  global_mapping: GlobalMapping::Empty,
   layers: [
     Layer { geom: Geom::Line, aesthetics: {"x": "sale_date", "y": "total", "color": "region"} },
     Layer { geom: Geom::Point, aesthetics: {"x": "sale_date", "y": "total", "color": "region"} }
