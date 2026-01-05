@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use polars::frame::DataFrame;
-use ggsql::{parser, reader::{DuckDBReader, Reader}, writer::{VegaLiteWriter, Writer}};
+use ggsql::{parser, execute::prepare_data, reader::{DuckDBReader, Reader}, writer::{VegaLiteWriter, Writer}};
 
 /// Result of executing a ggSQL query
 #[derive(Debug)]
@@ -51,45 +51,41 @@ impl QueryExecutor {
     pub fn execute(&self, code: &str) -> Result<ExecutionResult> {
         tracing::debug!("Executing query: {} chars", code.len());
 
-        // 1. Split query into SQL and VIZ parts
-        let (sql_part, viz_part) = parser::split_query(code)?;
+        // 1. Split query to check if there's a visualization
+        let (_sql_part, viz_part) = parser::split_query(code)?;
 
-        tracing::debug!("SQL part: {} chars", sql_part.len());
-        tracing::debug!("VIZ part: {} chars", viz_part.len());
-
-        // 2. Execute SQL part
-        let df = self.reader.execute(&sql_part)?;
-        tracing::info!("Query executed: {} rows, {} cols", df.height(), df.width());
-
-        // 3. Check if there's a visualization
+        // 2. Check if there's a visualization
         if viz_part.is_empty() {
-            // Pure SQL query - return DataFrame
+            // Pure SQL query - execute directly and return DataFrame
+            let df = self.reader.execute(code)?;
+            tracing::info!("Pure SQL executed: {} rows, {} cols", df.height(), df.width());
             return Ok(ExecutionResult::DataFrame(df));
         }
 
-        // 4. Parse VIZ specification
-        let mut viz_specs = parser::parse_query(code)?;
+        // 3. Prepare data using shared execution logic (handles layer sources)
+        let prepared = prepare_data(code, &self.reader)?;
 
-        if viz_specs.is_empty() {
-            anyhow::bail!("No visualization specification found despite VISUALISE keyword");
-        }
+        tracing::info!("Data sources prepared: {} sources", prepared.data.len());
 
-        // 5. Resolve global mappings into layer aesthetics
-        let column_names: Vec<&str> = df.get_column_names().iter().map(|s| s.as_str()).collect();
-        for spec in &mut viz_specs {
-            spec.resolve_global_mappings(&column_names)?;
-        }
+        // 4. Get metadata from available data
+        let (data_rows, data_cols) = if let Some(df) = prepared.data.get("__global__") {
+            (df.height(), df.width())
+        } else {
+            // Use first available data for metadata
+            let df = prepared.data.values().next().unwrap();
+            (df.height(), df.width())
+        };
 
-        // 6. Generate Vega-Lite spec (use first spec if multiple)
-        let vega_json = self.writer.write(&viz_specs[0], &df)?;
+        // 5. Generate Vega-Lite spec (use first spec if multiple)
+        let vega_json = self.writer.write(&prepared.specs[0], &prepared.data)?;
 
         tracing::debug!("Generated Vega-Lite spec: {} chars", vega_json.len());
 
-        // 7. Return result
+        // 6. Return result
         Ok(ExecutionResult::Visualization {
             spec: vega_json,
-            data_rows: df.height(),
-            data_cols: df.width(),
+            data_rows,
+            data_cols,
         })
     }
 }
