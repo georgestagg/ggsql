@@ -253,8 +253,27 @@ module.exports = grammar({
     )),
 
     function_args: $ => seq(
-      choice($.identifier, $.number, $.string, '*'),
-      repeat(seq(',', choice($.identifier, $.number, $.string, '*')))
+      $.function_arg,
+      repeat(seq(',', $.function_arg))
+    ),
+
+    // Function argument: positional or named
+    function_arg: $ => choice(
+      $.named_arg,
+      $.positional_arg
+    ),
+
+    named_arg: $ => seq(
+      field('name', $.identifier),
+      choice(':=', '=>'),
+      field('value', $.positional_arg)
+    ),
+
+    positional_arg: $ => choice(
+      $.identifier,
+      $.number,
+      $.string,
+      '*'
     ),
 
     window_specification: $ => seq(
