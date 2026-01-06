@@ -2046,7 +2046,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Grammar does not yet support window functions (ROW_NUMBER() OVER ...)"]
     fn test_window_function_with_visualise_as() {
         let query = r#"
             SELECT x, y, ROW_NUMBER() OVER (ORDER BY x) as row_num FROM data
@@ -2244,7 +2243,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Grammar does not yet support nested WITH statements"]
     fn test_nested_ctes() {
         let query = r#"
             WITH outer_cte AS (
