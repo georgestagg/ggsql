@@ -10,8 +10,8 @@
 SELECT date, revenue, region FROM sales WHERE year = 2024
 VISUALISE date AS x, revenue AS y, region AS color
 DRAW line
-SCALE x SETTING type TO 'date'
-COORD cartesian SETTING ylim TO [0, 100000]
+SCALE x SETTING type => 'date'
+COORD cartesian SETTING ylim => [0, 100000]
 LABEL title = 'Sales by Region', x = 'Date', y = 'Revenue'
 THEME minimal
 ```
@@ -709,7 +709,7 @@ SELECT * FROM (VALUES
 SELECT * FROM sales
 VISUALISE
 DRAW line MAPPING date AS x, revenue AS y, region AS color
-SCALE x SETTING type TO 'date'
+SCALE x SETTING type => 'date'
 LABEL title = 'Sales Trends'
 ```
 
@@ -850,11 +850,11 @@ Where `<global_mapping>` can be:
 | -------------- | ---------- | ------------------ | ------------------------------------ |
 | `VISUALISE`    | ✅ Yes     | Entry point        | `VISUALISE date AS x, revenue AS y`  |
 | `DRAW`         | ✅ Yes     | Define layers      | `DRAW line MAPPING date AS x, value AS y` |
-| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x SETTING type TO 'date'`          |
+| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x SETTING type => 'date'`          |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
-| `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian SETTING xlim TO [0,100]` |
+| `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian SETTING xlim => [0,100]` |
 | `LABEL`        | ❌ No      | Text labels        | `LABEL title='My Chart', x='Date'`   |
-| `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color SETTING position TO 'right'` |
+| `GUIDE`        | ✅ Yes     | Legend/axis config | `GUIDE color SETTING position => 'right'` |
 | `THEME`        | ❌ No      | Visual styling     | `THEME minimal`                      |
 
 ### DRAW Clause (Layers)
@@ -864,7 +864,7 @@ Where `<global_mapping>` can be:
 ```sql
 DRAW <geom>
     [MAPPING <value> AS <aesthetic>, ...]
-    [SETTING <param> TO <value>, ...]
+    [SETTING <param> => <value>, ...]
     [PARTITION BY <column>, ...]
     [FILTER <condition>]
 ```
@@ -893,7 +893,7 @@ Maps data values (columns or literals) to visual aesthetics. Syntax: `value AS a
 
 **SETTING Clause** (Parameters):
 
-Sets layer/geom parameters (not mapped to data). Syntax: `param TO value`
+Sets layer/geom parameters (not mapped to data). Syntax: `param => value`
 
 - Parameters like `opacity`, `size` (fixed), `stroke_width`, etc.
 
@@ -926,7 +926,7 @@ DRAW point
 -- Setting parameters
 DRAW point
     MAPPING x AS x, y AS y
-    SETTING size TO 5, opacity TO 0.7
+    SETTING size => 5, opacity => 0.7
 
 -- With filter
 DRAW point
@@ -936,7 +936,7 @@ DRAW point
 -- Combined
 DRAW line
     MAPPING date AS x, value AS y
-    SETTING stroke_width TO 2
+    SETTING stroke_width => 2
     FILTER category = 'A' AND year >= 2024
 
 -- With PARTITION BY (single column)
@@ -957,7 +957,7 @@ DRAW line
 -- All clauses combined
 DRAW line
     MAPPING date AS x, value AS y
-    SETTING stroke_width TO 2
+    SETTING stroke_width => 2
     PARTITION BY category, region
     FILTER year >= 2020
 ```
@@ -985,7 +985,7 @@ SCALE <aesthetic> SETTING
 **Critical for Date Formatting**:
 
 ```sql
-SCALE x SETTING type TO 'date'
+SCALE x SETTING type => 'date'
 -- Maps to Vega-Lite field type = "temporal"
 -- Enables proper date axis formatting
 ```
@@ -996,10 +996,10 @@ The `domain` property explicitly sets the input domain for a scale:
 
 ```sql
 -- Set domain for discrete scale
-SCALE color SETTING domain TO ['red', 'green', 'blue']
+SCALE color SETTING domain => ['red', 'green', 'blue']
 
 -- Set domain for continuous scale
-SCALE x SETTING domain TO [0, 100]
+SCALE x SETTING domain => [0, 100]
 ```
 
 **Note**: Cannot specify domain in both SCALE and COORD for the same aesthetic (will error).
@@ -1007,9 +1007,9 @@ SCALE x SETTING domain TO [0, 100]
 **Example**:
 
 ```sql
-SCALE x SETTING type TO 'date', breaks = '2 months'
-SCALE y SETTING type TO 'log10', limits TO [1, 1000]
-SCALE color SETTING palette TO 'viridis', domain TO ['A', 'B', 'C']
+SCALE x SETTING type => 'date', breaks = '2 months'
+SCALE y SETTING type => 'log10', limits => [1, 1000]
+SCALE color SETTING palette => 'viridis', domain => ['A', 'B', 'C']
 ```
 
 ### FACET Clause
@@ -1018,10 +1018,10 @@ SCALE color SETTING palette TO 'viridis', domain TO ['A', 'B', 'C']
 
 ```sql
 -- Grid layout
-FACET <row_vars> BY <col_vars> [SETTING scales TO <sharing>]
+FACET <row_vars> BY <col_vars> [SETTING scales => <sharing>]
 
 -- Wrapped layout
-FACET WRAP <vars> [SETTING scales TO <sharing>]
+FACET WRAP <vars> [SETTING scales => <sharing>]
 ```
 
 **Scale Sharing**:
@@ -1034,8 +1034,8 @@ FACET WRAP <vars> [SETTING scales TO <sharing>]
 **Example**:
 
 ```sql
-FACET WRAP region SETTING scales TO 'free_y'
-FACET region BY category SETTING scales TO 'fixed'
+FACET WRAP region SETTING scales => 'free_y'
+FACET region BY category SETTING scales => 'fixed'
 ```
 
 ### COORD Clause
@@ -1095,33 +1095,33 @@ COORD SETTING <properties>
 
 ```sql
 -- Cartesian with axis limits
-COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 50]
+COORD cartesian SETTING xlim => [0, 100], ylim => [0, 50]
 
 -- Cartesian with aesthetic domain
-COORD cartesian SETTING color TO ['red', 'green', 'blue']
+COORD cartesian SETTING color => O ['red', 'green', 'blue']
 
 -- Cartesian shorthand (type optional when using SETTING)
-COORD SETTING xlim TO [0, 100]
+COORD SETTING xlim => [0, 100]
 
 -- Flip coordinates for horizontal bar chart
 COORD flip
 
 -- Flip with aesthetic domain
-COORD flip SETTING color TO ['A', 'B', 'C']
+COORD flip SETTING color => ['A', 'B', 'C']
 
 -- Polar for pie chart (theta defaults to y)
 COORD polar
 
 -- Polar for rose plot (x maps to radius)
-COORD polar SETTING theta TO y
+COORD polar SETTING theta => y
 
 -- Combined with other clauses
 DRAW bar MAPPING category AS x, value AS y
-COORD cartesian SETTING xlim TO [0, 100], ylim TO [0, 200]
+COORD cartesian SETTING xlim => [0, 100], ylim => [0, 200]
 LABEL x = 'Category', y = 'Count'
 ```
 
-**Breaking Change**: The COORD syntax changed from `COORD SETTING type TO 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
+**Breaking Change**: The COORD syntax changed from `COORD SETTING type => 'cartesian'` to `COORD cartesian`. Queries using the old syntax will need to be updated.
 
 ### LABEL Clause
 
@@ -1162,7 +1162,7 @@ THEME <name> [SETTING <overrides>]
 
 ```sql
 THEME minimal
-THEME dark SETTING background TO '#1a1a1a'
+THEME dark SETTING background => '#1a1a1a'
 ```
 
 ---
@@ -1182,7 +1182,7 @@ DRAW line
     MAPPING sale_date AS x, total AS y, region AS color
 DRAW point
     MAPPING sale_date AS x, total AS y, region AS color
-SCALE x SETTING type TO 'date'
+SCALE x SETTING type => 'date'
 FACET WRAP region
 LABEL title = 'Sales Trends by Region', x = 'Date', y = 'Total Quantity'
 THEME minimal
