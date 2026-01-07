@@ -31,7 +31,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ggsql::{GgsqlError, VERSION};
+use ggsql::{parser, GgsqlError, VERSION};
 
 #[cfg(feature = "duckdb")]
 use ggsql::execute::prepare_data_with_executor;
