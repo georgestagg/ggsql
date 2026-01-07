@@ -401,7 +401,7 @@ module.exports = grammar({
       $.literal_value
     ),
 
-    // SETTING clause for parameters: SETTING alpha => 0.5, size => 3
+    // SETTING clause for parameters: SETTING opacity => 0.5, size => 3
     setting_clause: $ => seq(
       caseInsensitive('SETTING'),
       $.parameter_assignment,
@@ -476,7 +476,7 @@ module.exports = grammar({
       // Position aesthetics
       'x', 'y', 'xmin', 'xmax', 'ymin', 'ymax', 'xend', 'yend',
       // Color aesthetics
-      'color', 'colour', 'fill', 'alpha',
+      'color', 'colour', 'fill', 'opacity',
       // Size and shape
       'size', 'shape', 'linetype', 'linewidth', 'width', 'height',
       // Text aesthetics

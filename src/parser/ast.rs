@@ -207,95 +207,182 @@ impl Geom {
         match self {
             // Position geoms
             Geom::Point => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "size", "shape", "alpha", "group"],
+                supported: &[
+                    "x", "y", "color", "colour", "fill", "size", "shape", "opacity", "group",
+                ],
                 required: &["x", "y"],
             },
             Geom::Line => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "linetype", "linewidth", "alpha", "group"],
+                supported: &[
+                    "x",
+                    "y",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                    "group",
+                ],
                 required: &["x", "y"],
             },
             Geom::Path => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "linetype", "linewidth", "alpha", "group"],
+                supported: &[
+                    "x",
+                    "y",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                    "group",
+                ],
                 required: &["x", "y"],
             },
             Geom::Bar => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "width", "alpha", "group"],
+                supported: &[
+                    "x", "y", "color", "colour", "fill", "width", "opacity", "group",
+                ],
                 required: &["x", "y"],
             },
             Geom::Col => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "width", "alpha", "group"],
+                supported: &[
+                    "x", "y", "color", "colour", "fill", "width", "opacity", "group",
+                ],
                 required: &["x", "y"],
             },
             Geom::Area => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "alpha", "group"],
+                supported: &["x", "y", "color", "colour", "fill", "opacity", "group"],
                 required: &["x", "y"],
             },
             Geom::Tile => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "width", "height", "alpha"],
+                supported: &[
+                    "x", "y", "color", "colour", "fill", "width", "height", "opacity",
+                ],
                 required: &["x", "y"],
             },
             Geom::Polygon => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "alpha", "group"],
+                supported: &["x", "y", "color", "colour", "fill", "opacity", "group"],
                 required: &["x", "y"],
             },
             Geom::Ribbon => GeomAesthetics {
-                supported: &["x", "ymin", "ymax", "color", "colour", "fill", "alpha", "group"],
+                supported: &[
+                    "x", "ymin", "ymax", "color", "colour", "fill", "opacity", "group",
+                ],
                 required: &["x", "ymin", "ymax"],
             },
 
             // Statistical geoms
             Geom::Histogram => GeomAesthetics {
-                supported: &["x", "color", "colour", "fill", "alpha"],
+                supported: &["x", "color", "colour", "fill", "opacity"],
                 required: &["x"],
             },
             Geom::Density => GeomAesthetics {
-                supported: &["x", "color", "colour", "fill", "alpha"],
+                supported: &["x", "color", "colour", "fill", "opacity"],
                 required: &["x"],
             },
             Geom::Smooth => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "linetype", "alpha", "group"],
+                supported: &["x", "y", "color", "colour", "linetype", "opacity", "group"],
                 required: &["x", "y"],
             },
             Geom::Boxplot => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "alpha"],
+                supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
             },
             Geom::Violin => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "alpha"],
+                supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
             },
 
             // Annotation geoms
             Geom::Text => GeomAesthetics {
-                supported: &["x", "y", "label", "color", "colour", "size", "alpha", "family", "fontface", "hjust", "vjust"],
+                supported: &[
+                    "x", "y", "label", "color", "colour", "size", "opacity", "family", "fontface",
+                    "hjust", "vjust",
+                ],
                 required: &["x", "y"],
             },
             Geom::Label => GeomAesthetics {
-                supported: &["x", "y", "label", "color", "colour", "fill", "size", "alpha", "family", "fontface", "hjust", "vjust"],
+                supported: &[
+                    "x", "y", "label", "color", "colour", "fill", "size", "opacity", "family",
+                    "fontface", "hjust", "vjust",
+                ],
                 required: &["x", "y"],
             },
             Geom::Segment => GeomAesthetics {
-                supported: &["x", "y", "xend", "yend", "color", "colour", "linetype", "linewidth", "alpha"],
+                supported: &[
+                    "x",
+                    "y",
+                    "xend",
+                    "yend",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &["x", "y", "xend", "yend"],
             },
             Geom::Arrow => GeomAesthetics {
-                supported: &["x", "y", "xend", "yend", "color", "colour", "linetype", "linewidth", "alpha"],
+                supported: &[
+                    "x",
+                    "y",
+                    "xend",
+                    "yend",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &["x", "y", "xend", "yend"],
             },
             Geom::HLine => GeomAesthetics {
-                supported: &["yintercept", "color", "colour", "linetype", "linewidth", "alpha"],
+                supported: &[
+                    "yintercept",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &["yintercept"],
             },
             Geom::VLine => GeomAesthetics {
-                supported: &["xintercept", "color", "colour", "linetype", "linewidth", "alpha"],
+                supported: &[
+                    "xintercept",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &["xintercept"],
             },
             Geom::AbLine => GeomAesthetics {
-                supported: &["slope", "intercept", "color", "colour", "linetype", "linewidth", "alpha"],
+                supported: &[
+                    "slope",
+                    "intercept",
+                    "color",
+                    "colour",
+                    "linetype",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &["slope", "intercept"],
             },
             Geom::ErrorBar => GeomAesthetics {
-                supported: &["x", "y", "ymin", "ymax", "xmin", "xmax", "color", "colour", "linewidth", "alpha"],
+                supported: &[
+                    "x",
+                    "y",
+                    "ymin",
+                    "ymax",
+                    "xmin",
+                    "xmax",
+                    "color",
+                    "colour",
+                    "linewidth",
+                    "opacity",
+                ],
                 required: &[],
             },
         }
@@ -862,7 +949,7 @@ mod tests {
         spec.global_mapping = GlobalMapping::Wildcard;
         spec.layers.push(Layer::new(Geom::Point));
 
-        // Point geom supports: x, y, color, size, shape, alpha, etc.
+        // Point geom supports: x, y, color, size, shape, opacity, etc.
         // Columns "x", "y", "color" match supported aesthetics
         // Columns "date", "revenue" do NOT match any supported aesthetic
         spec.resolve_global_mappings(&["x", "y", "color", "date", "revenue"]).unwrap();

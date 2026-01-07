@@ -77,7 +77,7 @@ SELECT
   n * n as y
 FROM generate_series(1, 10) as t(n)
 VISUALISE x, y
-DRAW point SETTING size => 10, alpha => 0.5
+DRAW point SETTING size => 10, opacity => 0.5
 LABEL title = 'Points with Parameters';
 
 -- Error case: invalid table

@@ -882,7 +882,7 @@ All clauses (MAPPING, SETTING, PARTITION BY, FILTER) are optional.
 Maps data values (columns or literals) to visual aesthetics. Syntax: `value AS aesthetic`
 
 - **Position**: `x`, `y`, `xmin`, `xmax`, `ymin`, `ymax`
-- **Color**: `color`, `fill`, `alpha`
+- **Color**: `color`, `fill`, `opacity`
 - **Size/Shape**: `size`, `shape`, `linetype`, `linewidth`
 - **Text**: `label`, `family`, `fontface`
 
@@ -895,7 +895,7 @@ Maps data values (columns or literals) to visual aesthetics. Syntax: `value AS a
 
 Sets layer/geom parameters (not mapped to data). Syntax: `param => value`
 
-- Parameters like `alpha`, `size` (fixed), `stroke_width`, etc.
+- Parameters like `opacity`, `size` (fixed), `stroke_width`, etc.
 
 **PARTITION BY Clause** (Grouping):
 
@@ -926,7 +926,7 @@ DRAW point
 -- Setting parameters
 DRAW point
     MAPPING x AS x, y AS y
-    SETTING size => 5, alpha => 0.7
+    SETTING size => 5, opacity => 0.7
 
 -- With filter
 DRAW point

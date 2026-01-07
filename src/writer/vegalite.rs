@@ -316,7 +316,7 @@ impl VegaLiteWriter {
                         // If domain is specified without explicit type:
                         // - For size/opacity: keep quantitative (domain sets range, not categories)
                         // - For color/x/y: treat as ordinal (discrete categories)
-                        if aesthetic == "size" || aesthetic == "opacity" || aesthetic == "alpha" {
+                        if aesthetic == "size" || aesthetic == "opacity" {
                             "quantitative".to_string()
                         } else {
                             "ordinal".to_string()
@@ -943,10 +943,28 @@ impl VegaLiteWriter {
     fn is_aesthetic_name(&self, name: &str) -> bool {
         matches!(
             name,
-            "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend" |
-            "color" | "colour" | "fill" | "alpha" |
-            "size" | "shape" | "linetype" | "linewidth" | "width" | "height" |
-            "label" | "family" | "fontface" | "hjust" | "vjust"
+            "x" | "y"
+                | "xmin"
+                | "xmax"
+                | "ymin"
+                | "ymax"
+                | "xend"
+                | "yend"
+                | "color"
+                | "colour"
+                | "fill"
+                | "opacity"
+                | "size"
+                | "shape"
+                | "linetype"
+                | "linewidth"
+                | "width"
+                | "height"
+                | "label"
+                | "family"
+                | "fontface"
+                | "hjust"
+                | "vjust"
         )
     }
 

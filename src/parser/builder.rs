@@ -1138,7 +1138,7 @@ fn is_aesthetic_name(name: &str) -> bool {
             | "color"
             | "colour"
             | "fill"
-            | "alpha"
+            | "opacity"
             | "size"
             | "shape"
             | "linetype"
@@ -2791,7 +2791,7 @@ mod tests {
     fn test_partition_by_with_other_clauses() {
         let query = r#"
             VISUALISE
-            DRAW line MAPPING date AS x, value AS y SETTING alpha => 0.5 PARTITION BY category FILTER year > 2020
+            DRAW line MAPPING date AS x, value AS y SETTING opacity => 0.5 PARTITION BY category FILTER year > 2020
         "#;
 
         let result = parse_test_query(query);
@@ -2802,7 +2802,7 @@ mod tests {
         assert_eq!(layer.partition_by.len(), 1);
         assert_eq!(layer.partition_by[0], "category");
         assert!(layer.filter.is_some());
-        assert!(layer.parameters.contains_key("alpha"));
+        assert!(layer.parameters.contains_key("opacity"));
     }
 
     #[test]
