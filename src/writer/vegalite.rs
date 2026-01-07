@@ -408,7 +408,6 @@ impl VegaLiteWriter {
     fn map_aesthetic_name(&self, aesthetic: &str) -> String {
         match aesthetic {
             "fill" => "color",
-            "alpha" => "opacity",
             _ => aesthetic,
         }
         .to_string()
@@ -1241,7 +1240,6 @@ mod tests {
         let writer = VegaLiteWriter::new();
         assert_eq!(writer.map_aesthetic_name("x"), "x");
         assert_eq!(writer.map_aesthetic_name("fill"), "color");
-        assert_eq!(writer.map_aesthetic_name("alpha"), "opacity");
     }
 
     #[test]
