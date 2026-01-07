@@ -162,7 +162,7 @@ DRAW with SETTING clause
 ================================================================================
 
 VISUALISE x, y
-DRAW point SETTING alpha TO 0.5, size TO 3
+DRAW point SETTING alpha => 0.5, size => 3
 
 --------------------------------------------------------------------------------
 
@@ -294,7 +294,7 @@ DRAW with all clauses
 ================================================================================
 
 VISUALISE
-DRAW point MAPPING x AS x, y AS y SETTING alpha TO 0.5 FILTER year > 2020
+DRAW point MAPPING x AS x, y AS y SETTING alpha => 0.5 FILTER year > 2020
 
 --------------------------------------------------------------------------------
 
@@ -384,8 +384,8 @@ Plot with scales and theme
 
 VISUALISE x, y, group AS color
 DRAW point
-SCALE x SETTING type TO 'linear', limits TO [0, 100]
-SCALE color SETTING palette TO 'viridis'
+SCALE x SETTING type => 'linear', limits => [0, 100]
+SCALE color SETTING palette => 'viridis'
 THEME minimal
 
 --------------------------------------------------------------------------------
@@ -474,7 +474,7 @@ COORD cartesian with xlim
 
 VISUALISE x, y
 DRAW point
-COORD cartesian SETTING xlim TO [0, 100]
+COORD cartesian SETTING xlim => [0, 100]
 
 --------------------------------------------------------------------------------
 
@@ -772,7 +772,7 @@ PARTITION BY with SETTING and FILTER
 ================================================================================
 
 VISUALISE x AS x, y AS y
-DRAW line SETTING alpha TO 0.5 PARTITION BY category FILTER year > 2020
+DRAW line SETTING alpha => 0.5 PARTITION BY category FILTER year > 2020
 
 --------------------------------------------------------------------------------
 
