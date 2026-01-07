@@ -107,10 +107,12 @@ pub struct Layer {
     pub aesthetics: HashMap<String, AestheticValue>,
     /// Geom parameters (not aesthetic mappings)
     pub parameters: HashMap<String, ParameterValue>,
-    /// Optional filter expression for this layer
-    pub filter: Option<FilterExpression>,
     /// Optional data source for this layer (from MAPPING ... FROM)
     pub source: Option<LayerSource>,
+    /// Optional filter expression for this layer
+    pub filter: Option<FilterExpression>,
+    /// Columns for grouping/partitioning (from PARTITION BY clause)
+    pub partition_by: Vec<String>,
 }
 
 /// Raw SQL filter expression for layer-specific filtering (from FILTER clause)
@@ -614,8 +616,9 @@ impl Layer {
             geom,
             aesthetics: HashMap::new(),
             parameters: HashMap::new(),
-            filter: None,
             source: None,
+            filter: None,
+            partition_by: Vec::new(),
         }
     }
 
@@ -640,6 +643,12 @@ impl Layer {
     /// Add a parameter
     pub fn with_parameter(mut self, parameter: String, value: ParameterValue) -> Self {
         self.parameters.insert(parameter, value);
+        self
+    }
+
+    /// Set the partition columns for grouping
+    pub fn with_partition_by(mut self, columns: Vec<String>) -> Self {
+        self.partition_by = columns;
         self
     }
 

@@ -44,8 +44,8 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
             if spec.source.is_some() && last_is_select {
                 return Err(GgsqlError::ParseError(
                     "Cannot use VISUALISE FROM when the last SQL statement is SELECT. \
-                     Use either 'SELECT ... VISUALISE AS' or remove the SELECT and use \
-                     'VISUALISE FROM ... AS'.".to_string()
+                     Use either 'SELECT ... VISUALISE' or remove the SELECT and use \
+                     'VISUALISE FROM ...'.".to_string()
                 ));
             }
 
@@ -290,11 +290,12 @@ fn process_viz_clause(node: &Node, source: &str, spec: &mut VizSpec) -> Result<(
 }
 
 /// Build a Layer from a draw_clause node
-/// Syntax: DRAW geom [MAPPING col AS x, ... [FROM source]] [SETTING param TO val, ...] [FILTER condition]
+/// Syntax: DRAW geom [MAPPING col AS x, ... [FROM source]] [SETTING param TO val, ...] [PARTITION BY col, ...] [FILTER condition]
 fn build_layer(node: &Node, source: &str) -> Result<Layer> {
     let mut geom = Geom::Point; // default
     let mut aesthetics = HashMap::new();
     let mut parameters = HashMap::new();
+    let mut partition_by = Vec::new();
     let mut filter = None;
     let mut layer_source = None;
 
@@ -313,6 +314,9 @@ fn build_layer(node: &Node, source: &str) -> Result<Layer> {
             "setting_clause" => {
                 parameters = parse_setting_clause(&child, source)?;
             }
+            "partition_clause" => {
+                partition_by = parse_partition_clause(&child, source)?;
+            }
             "filter_clause" => {
                 filter = Some(parse_filter_clause(&child, source)?);
             }
@@ -326,6 +330,7 @@ fn build_layer(node: &Node, source: &str) -> Result<Layer> {
     let mut layer = Layer::new(geom);
     layer.aesthetics = aesthetics;
     layer.parameters = parameters;
+    layer.partition_by = partition_by;
     layer.filter = filter;
     layer.source = layer_source;
 
@@ -429,6 +434,25 @@ fn parse_setting_clause(node: &Node, source: &str) -> Result<HashMap<String, Par
     }
 
     Ok(parameters)
+}
+
+/// Parse a partition_clause: PARTITION BY col1, col2, ...
+fn parse_partition_clause(node: &Node, source: &str) -> Result<Vec<String>> {
+    let mut columns = Vec::new();
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "partition_columns" {
+            let mut inner_cursor = child.walk();
+            for inner_child in child.children(&mut inner_cursor) {
+                if inner_child.kind() == "identifier" {
+                    columns.push(get_node_text(&inner_child, source));
+                }
+            }
+        }
+    }
+
+    Ok(columns)
 }
 
 /// Parse a parameter_assignment: param TO value
@@ -943,8 +967,7 @@ fn is_aesthetic_name(name: &str) -> bool {
         "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend" |
         "color" | "colour" | "fill" | "alpha" |
         "size" | "shape" | "linetype" | "linewidth" | "width" | "height" |
-        "label" | "family" | "fontface" | "hjust" | "vjust" |
-        "group"
+        "label" | "family" | "fontface" | "hjust" | "vjust"
     )
 }
 
@@ -1292,6 +1315,12 @@ mod tests {
         parser.set_language(&tree_sitter_ggsql::language()).unwrap();
 
         let tree = parser.parse(query, None).unwrap();
+
+        // Check for parse errors like the main parse_full_query does
+        if tree.root_node().has_error() {
+            return Err(GgsqlError::ParseError("Parse tree contains errors".to_string()));
+        }
+
         build_ast(&tree, query)
     }
 
@@ -2441,6 +2470,88 @@ mod tests {
 
         let filter = specs[0].layers[0].filter.as_ref().unwrap();
         assert!(filter.as_str().contains("LIKE"));
+    }
+
+    // ========================================
+    // PARTITION BY Tests
+    // ========================================
+
+    #[test]
+    fn test_partition_by_single_column() {
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line PARTITION BY category
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        assert_eq!(specs[0].layers[0].partition_by.len(), 1);
+        assert_eq!(specs[0].layers[0].partition_by[0], "category");
+    }
+
+    #[test]
+    fn test_partition_by_multiple_columns() {
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line PARTITION BY category, region
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        assert_eq!(specs[0].layers[0].partition_by.len(), 2);
+        assert_eq!(specs[0].layers[0].partition_by[0], "category");
+        assert_eq!(specs[0].layers[0].partition_by[1], "region");
+    }
+
+    #[test]
+    fn test_partition_by_with_other_clauses() {
+        let query = r#"
+            VISUALISE
+            DRAW line MAPPING date AS x, value AS y SETTING opacity TO 0.5 PARTITION BY category FILTER year > 2020
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        let layer = &specs[0].layers[0];
+        assert_eq!(layer.partition_by.len(), 1);
+        assert_eq!(layer.partition_by[0], "category");
+        assert!(layer.filter.is_some());
+        assert!(layer.parameters.contains_key("opacity"));
+    }
+
+    #[test]
+    fn test_no_partition_by() {
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        assert!(specs[0].layers[0].partition_by.is_empty());
+    }
+
+    #[test]
+    fn test_partition_by_case_insensitive() {
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line partition by category
+        "#;
+
+        let result = parse_test_query(query);
+        assert!(result.is_ok());
+        let specs = result.unwrap();
+
+        assert_eq!(specs[0].layers[0].partition_by.len(), 1);
+        assert_eq!(specs[0].layers[0].partition_by[0], "category");
     }
 
     // ========================================

@@ -181,6 +181,15 @@ DRAW bar
 LABEL title = 'Total Revenue by Category', x = 'Category', y = 'Total Revenue ($)'
 ```
 
+### Line chart with multiple lines with same aesthetics
+
+```{ggsql}
+SELECT * FROM 'sales.csv'
+VISUALISE sale_date AS x, revenue AS y
+DRAW line
+    PARTITION BY category
+```
+
 ## Multiple Layers
 
 ### Line with Points

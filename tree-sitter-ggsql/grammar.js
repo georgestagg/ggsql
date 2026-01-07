@@ -58,17 +58,18 @@ module.exports = grammar({
     )),
 
     select_body: $ => prec.left(repeat1(choice(
+      $.window_function,  // Window functions like ROW_NUMBER() OVER (...)
+      $.function_call,    // Regular function calls like COUNT(), SUM()
       $.sql_keyword,
       $.string,
       $.number,
-      ',', '*', '.', '=', '<', '>', '!',
+      ',', '*', '.', '=', '<', '>', '!', '+', '-', '/', '%', '|', '&', '^', '~',
       $.subquery,
-      token(/[^\s;(),'"VvWwSsCcIiUuDd]+/),  // Other SQL tokens, excluding keyword start letters
       $.identifier
     ))),
 
     // WITH statement (CTEs) - WITH must be followed by SELECT
-    with_statement: $ => prec(2, seq(
+    with_statement: $ => prec.right(2, seq(
       caseInsensitive('WITH'),
       optional(caseInsensitive('RECURSIVE')),
       $.cte_definition,
@@ -80,7 +81,10 @@ module.exports = grammar({
       $.identifier,
       caseInsensitive('AS'),
       '(',
-      $.select_statement,
+      choice(
+        $.with_statement,    // Allow nested CTEs
+        $.select_statement
+      ),
       ')'
     ),
 
@@ -159,6 +163,9 @@ module.exports = grammar({
     subquery: $ => prec(1, seq(
       '(',
       repeat1(choice(
+        $.window_function,   // Window functions inside subqueries
+        $.function_call,     // Function calls inside subqueries
+        $.with_statement,    // Allow nested CTEs
         $.select_statement,
         $.sql_keyword,
         $.string,
@@ -171,6 +178,15 @@ module.exports = grammar({
       ')'
     )),
 
+    // Function call with parentheses (can be empty like ROW_NUMBER())
+    // Used in window functions and general SQL
+    function_call: $ => prec(2, seq(
+      $.identifier,
+      '(',
+      optional($.function_args),
+      ')'
+    )),
+
     // Common SQL keywords (to help parser recognize structure)
     sql_keyword: $ => choice(
       caseInsensitive('FROM'),
@@ -180,6 +196,10 @@ module.exports = grammar({
       caseInsensitive('RIGHT'),
       caseInsensitive('INNER'),
       caseInsensitive('OUTER'),
+      caseInsensitive('LATERAL'),
+      caseInsensitive('CROSS'),
+      caseInsensitive('NATURAL'),
+      caseInsensitive('FULL'),
       caseInsensitive('ON'),
       caseInsensitive('AND'),
       caseInsensitive('OR'),
@@ -207,7 +227,95 @@ module.exports = grammar({
       caseInsensitive('VIEW'),
       caseInsensitive('INDEX'),
       caseInsensitive('DATABASE'),
-      caseInsensitive('SCHEMA')
+      caseInsensitive('SCHEMA'),
+      caseInsensitive('OVER'),
+      caseInsensitive('ROWS'),
+      caseInsensitive('RANGE'),
+      caseInsensitive('UNBOUNDED'),
+      caseInsensitive('PRECEDING'),
+      caseInsensitive('FOLLOWING'),
+      caseInsensitive('CURRENT'),
+      caseInsensitive('ROW'),
+      caseInsensitive('NULLS'),
+      caseInsensitive('FIRST'),
+      caseInsensitive('LAST')
+    ),
+
+    // Window function: func() OVER (PARTITION BY ... ORDER BY ... frame)
+    // Higher precedence to match before generic function_call
+    window_function: $ => prec(4, seq(
+      field('function', $.identifier),
+      '(',
+      optional($.function_args),
+      ')',
+      caseInsensitive('OVER'),
+      $.window_specification
+    )),
+
+    function_args: $ => seq(
+      $.function_arg,
+      repeat(seq(',', $.function_arg))
+    ),
+
+    // Function argument: positional or named
+    function_arg: $ => choice(
+      $.named_arg,
+      $.positional_arg
+    ),
+
+    named_arg: $ => seq(
+      field('name', $.identifier),
+      choice(':=', '=>'),
+      field('value', $.positional_arg)
+    ),
+
+    positional_arg: $ => choice(
+      $.identifier,
+      $.number,
+      $.string,
+      '*'
+    ),
+
+    window_specification: $ => seq(
+      '(',
+      optional($.window_partition_clause),
+      optional($.window_order_clause),
+      optional($.frame_clause),
+      ')'
+    ),
+
+    window_partition_clause: $ => seq(
+      caseInsensitive('PARTITION'),
+      caseInsensitive('BY'),
+      $.identifier,
+      repeat(seq(',', $.identifier))
+    ),
+
+    window_order_clause: $ => seq(
+      caseInsensitive('ORDER'),
+      caseInsensitive('BY'),
+      $.order_item,
+      repeat(seq(',', $.order_item))
+    ),
+
+    order_item: $ => seq(
+      $.identifier,
+      optional(choice(caseInsensitive('ASC'), caseInsensitive('DESC'))),
+      optional(seq(caseInsensitive('NULLS'), choice(caseInsensitive('FIRST'), caseInsensitive('LAST'))))
+    ),
+
+    frame_clause: $ => seq(
+      choice(caseInsensitive('ROWS'), caseInsensitive('RANGE')),
+      choice(
+        seq(caseInsensitive('BETWEEN'), $.frame_bound, caseInsensitive('AND'), $.frame_bound),
+        $.frame_bound
+      )
+    ),
+
+    frame_bound: $ => choice(
+      seq(caseInsensitive('UNBOUNDED'), choice(caseInsensitive('PRECEDING'), caseInsensitive('FOLLOWING'))),
+      seq(caseInsensitive('CURRENT'), caseInsensitive('ROW')),
+      seq($.number, choice(caseInsensitive('PRECEDING'), caseInsensitive('FOLLOWING')))
     ),
 
     // VISUALISE/VISUALIZE [global_mapping] [FROM source] with clauses
@@ -259,12 +367,13 @@ module.exports = grammar({
       $.theme_clause,
     ),
 
-    // DRAW clause - syntax: DRAW geom [MAPPING ...] [SETTING ...] [FILTER ...]
+    // DRAW clause - syntax: DRAW geom [MAPPING ...] [SETTING ...] [PARTITION BY ...] [FILTER ...]
     draw_clause: $ => seq(
       caseInsensitive('DRAW'),
       $.geom_type,
       optional($.mapping_clause),
       optional($.setting_clause),
+      optional($.partition_clause),
       optional($.filter_clause)
     ),
 
@@ -328,6 +437,18 @@ module.exports = grammar({
       $.string,
       $.number,
       $.boolean
+    ),
+
+    // PARTITION BY clause for grouping: PARTITION BY category, region
+    partition_clause: $ => seq(
+      caseInsensitive('PARTITION'),
+      caseInsensitive('BY'),
+      $.partition_columns
+    ),
+
+    partition_columns: $ => seq(
+      $.identifier,
+      repeat(seq(',', $.identifier))
     ),
 
     // FILTER clause for layer filtering: FILTER <raw SQL WHERE expression>
@@ -407,9 +528,7 @@ module.exports = grammar({
       // Size and shape
       'size', 'shape', 'linetype', 'linewidth', 'width', 'height',
       // Text aesthetics
-      'label', 'family', 'fontface', 'hjust', 'vjust',
-      // Grouping
-      'group'
+      'label', 'family', 'fontface', 'hjust', 'vjust'
     ),
 
     column_reference: $ => $.identifier,
