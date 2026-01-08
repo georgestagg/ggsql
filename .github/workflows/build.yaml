@@ -77,6 +77,9 @@ jobs:
       - name: Setup quarto
         uses: quarto-dev/quarto-actions/setup@v2
 
+      - name: Setup Jupyter
+        run: python3 -m pip install jupyter jupyterlab
+
       - name: Build Jupyter kernel
         run: cargo build --release --package ggsql-jupyter
 
