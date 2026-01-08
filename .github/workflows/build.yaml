@@ -50,6 +50,12 @@ jobs:
       - name: Build with cargo
         run: cargo build --release
 
+      - name: Build Jupyter kernel
+        run: cargo build --release --package ggsql-jupyter
+
+      - name: Setup CLI tools
+        run: cargo install --path src
+
       - name: Run Rust tests
         if: success()
         run: cargo test --release
@@ -80,9 +86,6 @@ jobs:
 
       - name: Setup quarto
         uses: quarto-dev/quarto-actions/setup@v2
-
-      - name: Build Jupyter kernel
-        run: cargo build --release --package ggsql-jupyter
 
       - name: Install Jupyter kernel
         run: ./target/release/ggsql-jupyter --install
@@ -130,9 +133,6 @@ jobs:
           working-directory: ggsql-R
           extra-packages: any::rcmdcheck
           needs: check
-
-      - name: Setup CLI tools
-        run: cargo install --path src
 
       - name: Checking R package
         uses: r-lib/actions/check-r-package@v2
