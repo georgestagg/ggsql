@@ -47,6 +47,4 @@ jobs:
 
       - name: Run Rust formatting check
         if: success()
-        run: |
-          rustup component add rustfmt-preview
-          cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
