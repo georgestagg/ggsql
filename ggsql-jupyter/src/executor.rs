@@ -4,8 +4,13 @@
 //! ggsql library components (parser, DuckDB reader, Vega-Lite writer).
 
 use anyhow::Result;
+use ggsql::{
+    execute::prepare_data,
+    parser,
+    reader::{DuckDBReader, Reader},
+    writer::{VegaLiteWriter, Writer},
+};
 use polars::frame::DataFrame;
-use ggsql::{parser, execute::prepare_data, reader::{DuckDBReader, Reader}, writer::{VegaLiteWriter, Writer}};
 
 /// Result of executing a ggSQL query
 #[derive(Debug)]
@@ -14,7 +19,7 @@ pub enum ExecutionResult {
     DataFrame(DataFrame),
     /// Query with visualization specification
     Visualization {
-        spec: String      // Vega-Lite JSON
+        spec: String, // Vega-Lite JSON
     },
 }
 
@@ -56,7 +61,11 @@ impl QueryExecutor {
         if viz_part.is_empty() {
             // Pure SQL query - execute directly and return DataFrame
             let df = self.reader.execute(code)?;
-            tracing::info!("Pure SQL executed: {} rows, {} cols", df.height(), df.width());
+            tracing::info!(
+                "Pure SQL executed: {} rows, {} cols",
+                df.height(),
+                df.width()
+            );
             return Ok(ExecutionResult::DataFrame(df));
         }
 
@@ -71,9 +80,7 @@ impl QueryExecutor {
         tracing::debug!("Generated Vega-Lite spec: {} chars", vega_json.len());
 
         // 6. Return result
-        Ok(ExecutionResult::Visualization {
-            spec: vega_json
-        })
+        Ok(ExecutionResult::Visualization { spec: vega_json })
     }
 }
 

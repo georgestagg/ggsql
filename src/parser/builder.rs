@@ -1352,7 +1352,9 @@ mod tests {
 
         // Check for parse errors like the main parse_full_query does
         if tree.root_node().has_error() {
-            return Err(GgsqlError::ParseError("Parse tree contains errors".to_string()));
+            return Err(GgsqlError::ParseError(
+                "Parse tree contains errors".to_string(),
+            ));
         }
 
         build_ast(&tree, query)
@@ -2479,7 +2481,10 @@ mod tests {
 
         // Second layer has filter
         assert!(specs[0].layers[1].filter.is_some());
-        assert_eq!(specs[0].layers[1].filter.as_ref().unwrap().as_str(), "highlight = true");
+        assert_eq!(
+            specs[0].layers[1].filter.as_ref().unwrap().as_str(),
+            "highlight = true"
+        );
     }
 
     #[test]

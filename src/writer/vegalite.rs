@@ -20,12 +20,12 @@
 //! // Can be rendered in browser with vega-embed
 //! ```
 
-use std::collections::HashMap;
+use crate::parser::ast::{ArrayElement, Coord, CoordPropertyValue, CoordType, LiteralValue};
 use crate::writer::Writer;
-use crate::{DataFrame, Result, GgsqlError, VizSpec, Geom, AestheticValue};
-use crate::parser::ast::{LiteralValue, Coord, CoordType, CoordPropertyValue, ArrayElement};
-use serde_json::{json, Value, Map};
+use crate::{AestheticValue, DataFrame, Geom, GgsqlError, Result, VizSpec};
 use polars::prelude::*;
+use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 
 /// Vega-Lite JSON writer
 ///
@@ -74,9 +74,9 @@ impl VegaLiteWriter {
 
         match series.dtype() {
             Int8 => {
-                let ca = series.i8().map_err(|e| {
-                    GgsqlError::WriterError(format!("Failed to cast to i8: {}", e))
-                })?;
+                let ca = series
+                    .i8()
+                    .map_err(|e| GgsqlError::WriterError(format!("Failed to cast to i8: {}", e)))?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Int16 => {
@@ -158,7 +158,9 @@ impl VegaLiteWriter {
                     let secs = micros / 1_000_000;
                     let nsecs = ((micros % 1_000_000) * 1000) as u32;
                     let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nsecs)
-                        .unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap());
+                        .unwrap_or_else(|| {
+                            chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap()
+                        });
                     Ok(json!(dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()))
                 } else {
                     Ok(Value::Null)
@@ -174,14 +176,20 @@ impl VegaLiteWriter {
                     let minutes = (nanos % 3_600_000_000_000) / 60_000_000_000;
                     let seconds = (nanos % 60_000_000_000) / 1_000_000_000;
                     let millis = (nanos % 1_000_000_000) / 1_000_000;
-                    Ok(json!(format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)))
+                    Ok(json!(format!(
+                        "{:02}:{:02}:{:02}.{:03}",
+                        hours, minutes, seconds, millis
+                    )))
                 } else {
                     Ok(Value::Null)
                 }
             }
             _ => {
                 // Fallback: convert to string
-                Ok(json!(series.get(idx).map(|v| v.to_string()).unwrap_or_default()))
+                Ok(json!(series
+                    .get(idx)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()))
             }
         }
     }
@@ -206,7 +214,6 @@ impl VegaLiteWriter {
         }
         .to_string()
     }
-
 
     /// Check if a string column contains numeric values
     fn is_numeric_string_column(&self, series: &Series) -> bool {
@@ -264,14 +271,23 @@ impl VegaLiteWriter {
                     if let Some(scale_type) = &scale.scale_type {
                         use crate::parser::ast::ScaleType;
                         match scale_type {
-                            ScaleType::Linear | ScaleType::Log10 | ScaleType::Log |
-                            ScaleType::Log2 | ScaleType::Sqrt | ScaleType::Reverse => "quantitative",
+                            ScaleType::Linear
+                            | ScaleType::Log10
+                            | ScaleType::Log
+                            | ScaleType::Log2
+                            | ScaleType::Sqrt
+                            | ScaleType::Reverse => "quantitative",
                             ScaleType::Ordinal | ScaleType::Categorical => "nominal",
                             ScaleType::Date | ScaleType::DateTime | ScaleType::Time => "temporal",
-                            ScaleType::Viridis | ScaleType::Plasma | ScaleType::Magma |
-                            ScaleType::Inferno | ScaleType::Cividis | ScaleType::Diverging |
-                            ScaleType::Sequential => "quantitative", // Color scales
-                        }.to_string()
+                            ScaleType::Viridis
+                            | ScaleType::Plasma
+                            | ScaleType::Magma
+                            | ScaleType::Inferno
+                            | ScaleType::Cividis
+                            | ScaleType::Diverging
+                            | ScaleType::Sequential => "quantitative", // Color scales
+                        }
+                        .to_string()
                     } else if scale.properties.contains_key("domain") {
                         // If domain is specified without explicit type:
                         // - For size/opacity: keep quantitative (domain sets range, not categories)
@@ -302,19 +318,20 @@ impl VegaLiteWriter {
 
                 // Apply scale properties from SCALE if specified
                 if let Some(scale) = spec.find_scale(aesthetic) {
-                    use crate::parser::ast::{ScalePropertyValue, ArrayElement};
+                    use crate::parser::ast::{ArrayElement, ScalePropertyValue};
                     let mut scale_obj = serde_json::Map::new();
 
                     // Apply domain
                     if let Some(domain_prop) = scale.properties.get("domain") {
                         if let ScalePropertyValue::Array(domain_values) = domain_prop {
-                            let domain_json: Vec<Value> = domain_values.iter().map(|elem| {
-                                match elem {
+                            let domain_json: Vec<Value> = domain_values
+                                .iter()
+                                .map(|elem| match elem {
                                     ArrayElement::String(s) => json!(s),
                                     ArrayElement::Number(n) => json!(n),
                                     ArrayElement::Boolean(b) => json!(b),
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             scale_obj.insert("domain".to_string(), json!(domain_json));
                         }
                     }
@@ -322,25 +339,27 @@ impl VegaLiteWriter {
                     // Apply range (explicit range property takes precedence over palette)
                     if let Some(range_prop) = scale.properties.get("range") {
                         if let ScalePropertyValue::Array(range_values) = range_prop {
-                            let range_json: Vec<Value> = range_values.iter().map(|elem| {
-                                match elem {
+                            let range_json: Vec<Value> = range_values
+                                .iter()
+                                .map(|elem| match elem {
                                     ArrayElement::String(s) => json!(s),
                                     ArrayElement::Number(n) => json!(n),
                                     ArrayElement::Boolean(b) => json!(b),
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             scale_obj.insert("range".to_string(), json!(range_json));
                         }
                     } else if let Some(palette_prop) = scale.properties.get("palette") {
                         // Apply palette as range (fallback for color scales)
                         if let ScalePropertyValue::Array(palette_values) = palette_prop {
-                            let range_json: Vec<Value> = palette_values.iter().map(|elem| {
-                                match elem {
+                            let range_json: Vec<Value> = palette_values
+                                .iter()
+                                .map(|elem| match elem {
                                     ArrayElement::String(s) => json!(s),
                                     ArrayElement::Number(n) => json!(n),
                                     ArrayElement::Boolean(b) => json!(b),
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             scale_obj.insert("range".to_string(), json!(range_json));
                         }
                     }
@@ -376,7 +395,7 @@ impl VegaLiteWriter {
 
     /// Apply guide configurations to encoding channels
     fn apply_guides_to_encoding(&self, encoding: &mut Map<String, Value>, spec: &VizSpec) {
-        use crate::parser::ast::{GuideType, GuidePropertyValue};
+        use crate::parser::ast::{GuidePropertyValue, GuideType};
 
         for guide in &spec.guides {
             let channel_name = self.map_aesthetic_name(&guide.aesthetic);
@@ -663,7 +682,9 @@ impl VegaLiteWriter {
         vl_spec: &mut Value,
     ) -> Result<DataFrame> {
         // Get theta field (defaults to 'y')
-        let theta_field = coord.properties.get("theta")
+        let theta_field = coord
+            .properties
+            .get("theta")
             .and_then(|v| match v {
                 CoordPropertyValue::String(s) => Some(s.clone()),
                 _ => None,
@@ -753,14 +774,10 @@ impl VegaLiteWriter {
     }
 
     /// Update encoding channels for polar coordinates
-    fn update_encoding_for_polar(
-        &self,
-        encoding: &mut Value,
-        theta_aesthetic: &str,
-    ) -> Result<()> {
-        let enc_obj = encoding.as_object_mut().ok_or_else(|| {
-            GgsqlError::WriterError("Encoding is not an object".to_string())
-        })?;
+    fn update_encoding_for_polar(&self, encoding: &mut Value, theta_aesthetic: &str) -> Result<()> {
+        let enc_obj = encoding
+            .as_object_mut()
+            .ok_or_else(|| GgsqlError::WriterError("Encoding is not an object".to_string()))?;
 
         // Map the theta aesthetic to theta channel
         if theta_aesthetic == "y" {
@@ -803,11 +820,19 @@ impl VegaLiteWriter {
                 }
                 let min = match &arr[0] {
                     ArrayElement::Number(n) => *n,
-                    _ => return Err(GgsqlError::WriterError("xlim/ylim values must be numbers".to_string())),
+                    _ => {
+                        return Err(GgsqlError::WriterError(
+                            "xlim/ylim values must be numbers".to_string(),
+                        ))
+                    }
                 };
                 let max = match &arr[1] {
                     ArrayElement::Number(n) => *n,
-                    _ => return Err(GgsqlError::WriterError("xlim/ylim values must be numbers".to_string())),
+                    _ => {
+                        return Err(GgsqlError::WriterError(
+                            "xlim/ylim values must be numbers".to_string(),
+                        ))
+                    }
                 };
 
                 // Auto-swap if reversed
@@ -815,18 +840,23 @@ impl VegaLiteWriter {
 
                 Ok(Some((min, max)))
             }
-            _ => Err(GgsqlError::WriterError("xlim/ylim must be an array".to_string())),
+            _ => Err(GgsqlError::WriterError(
+                "xlim/ylim must be an array".to_string(),
+            )),
         }
     }
 
     fn extract_domain(&self, value: &CoordPropertyValue) -> Result<Option<Vec<Value>>> {
         match value {
             CoordPropertyValue::Array(arr) => {
-                let domain: Vec<Value> = arr.iter().map(|elem| match elem {
-                    ArrayElement::String(s) => json!(s),
-                    ArrayElement::Number(n) => json!(n),
-                    ArrayElement::Boolean(b) => json!(b),
-                }).collect();
+                let domain: Vec<Value> = arr
+                    .iter()
+                    .map(|elem| match elem {
+                        ArrayElement::String(s) => json!(s),
+                        ArrayElement::Number(n) => json!(n),
+                        ArrayElement::Boolean(b) => json!(b),
+                    })
+                    .collect();
                 Ok(Some(domain))
             }
             _ => Ok(None),
@@ -859,7 +889,12 @@ impl VegaLiteWriter {
         Ok(())
     }
 
-    fn apply_aesthetic_domain(&self, vl_spec: &mut Value, aesthetic: &str, domain: Vec<Value>) -> Result<()> {
+    fn apply_aesthetic_domain(
+        &self,
+        vl_spec: &mut Value,
+        aesthetic: &str,
+        domain: Vec<Value>,
+    ) -> Result<()> {
         let domain_json = json!(domain);
 
         // Apply to encoding if present
@@ -888,10 +923,28 @@ impl VegaLiteWriter {
     fn is_aesthetic_name(&self, name: &str) -> bool {
         matches!(
             name,
-            "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend" |
-            "color" | "colour" | "fill" | "alpha" |
-            "size" | "shape" | "linetype" | "linewidth" | "width" | "height" |
-            "label" | "family" | "fontface" | "hjust" | "vjust"
+            "x" | "y"
+                | "xmin"
+                | "xmax"
+                | "ymin"
+                | "ymax"
+                | "xend"
+                | "yend"
+                | "color"
+                | "colour"
+                | "fill"
+                | "alpha"
+                | "size"
+                | "shape"
+                | "linetype"
+                | "linewidth"
+                | "width"
+                | "height"
+                | "label"
+                | "family"
+                | "fontface"
+                | "hjust"
+                | "vjust"
         )
     }
 
@@ -910,11 +963,14 @@ impl VegaLiteWriter {
             }))
         } else {
             // Multiple columns: array of detail specifications
-            let details: Vec<Value> = partition_by.iter()
-                .map(|col| json!({
-                    "field": col,
-                    "type": "nominal"
-                }))
+            let details: Vec<Value> = partition_by
+                .iter()
+                .map(|col| {
+                    json!({
+                        "field": col,
+                        "type": "nominal"
+                    })
+                })
                 .collect();
             Some(json!(details))
         }
@@ -938,11 +994,13 @@ impl Writer for VegaLiteWriter {
             .collect();
 
         // Validate all required datasets exist and validate column references
-        for (layer_idx, (layer, key)) in spec.layers.iter().zip(layer_data_keys.iter()).enumerate() {
+        for (layer_idx, (layer, key)) in spec.layers.iter().zip(layer_data_keys.iter()).enumerate()
+        {
             let df = data.get(key).ok_or_else(|| {
                 GgsqlError::WriterError(format!(
                     "Missing data source '{}' for layer {}",
-                    key, layer_idx + 1
+                    key,
+                    layer_idx + 1
                 ))
             })?;
             self.validate_layer_columns(layer, df, layer_idx)?;
@@ -977,7 +1035,8 @@ impl Writer for VegaLiteWriter {
             if unique_keys.len() > 1 {
                 return Err(GgsqlError::ValidationError(
                     "Faceting requires all layers to use the same data source. \
-                     Layers with different FROM sources cannot be faceted.".to_string()
+                     Layers with different FROM sources cannot be faceted."
+                        .to_string(),
                 ));
             }
         }
@@ -999,7 +1058,6 @@ impl Writer for VegaLiteWriter {
                     "mark": self.geom_to_mark(&layer.geom)
                 })
             };
-
 
             // Build encoding for this layer
             let mut encoding = Map::new();
@@ -1148,7 +1206,7 @@ impl Writer for VegaLiteWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::{Layer, Labels};
+    use crate::parser::ast::{Labels, Layer};
     use std::collections::HashMap;
 
     /// Helper to wrap a DataFrame in a data map for testing
@@ -1210,7 +1268,10 @@ mod tests {
         assert!(vl_spec["layer"].is_array());
         assert_eq!(vl_spec["layer"][0]["mark"], "point");
         assert!(vl_spec["datasets"]["__global__"].is_array());
-        assert_eq!(vl_spec["datasets"]["__global__"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            vl_spec["datasets"]["__global__"].as_array().unwrap().len(),
+            3
+        );
         assert!(vl_spec["layer"][0]["encoding"]["x"].is_object());
         assert!(vl_spec["layer"][0]["encoding"]["y"].is_object());
     }
@@ -1228,7 +1289,9 @@ mod tests {
         let mut labels = Labels {
             labels: HashMap::new(),
         };
-        labels.labels.insert("title".to_string(), "My Chart".to_string());
+        labels
+            .labels
+            .insert("title".to_string(), "My Chart".to_string());
         spec.labels = Some(labels);
 
         let df = df! {
@@ -1311,7 +1374,10 @@ mod tests {
         // Second layer references non-existent column
         let layer2 = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("missing_col".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("missing_col".to_string()),
+            );
         spec.layers.push(layer2);
 
         let df = df! {
@@ -1435,7 +1501,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1448,7 +1517,10 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "category");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["field"],
+            "category"
+        );
         assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["type"], "nominal");
     }
 
@@ -1460,7 +1532,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()));
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Column("value".to_string()),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1474,7 +1549,10 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["field"], "value");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["type"], "quantitative");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["size"]["type"],
+            "quantitative"
+        );
     }
 
     #[test]
@@ -1483,9 +1561,15 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()))
-            .with_aesthetic("fill".to_string(), AestheticValue::Column("region".to_string()));
+            .with_aesthetic(
+                "fill".to_string(),
+                AestheticValue::Column("region".to_string()),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1510,7 +1594,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("alpha".to_string(), AestheticValue::Literal(LiteralValue::Number(0.5)));
+            .with_aesthetic(
+                "alpha".to_string(),
+                AestheticValue::Literal(LiteralValue::Number(0.5)),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1534,9 +1621,18 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()))
-            .with_aesthetic("shape".to_string(), AestheticValue::Column("type".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Column("value".to_string()),
+            )
+            .with_aesthetic(
+                "shape".to_string(),
+                AestheticValue::Column("type".to_string()),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1553,7 +1649,10 @@ mod tests {
 
         assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["field"], "x");
         assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["field"], "y");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "category");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["field"],
+            "category"
+        );
         assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["field"], "value");
         assert_eq!(vl_spec["layer"][0]["encoding"]["shape"]["field"], "type");
     }
@@ -1566,7 +1665,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Literal(LiteralValue::Number(100.0)));
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Literal(LiteralValue::Number(100.0)),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1589,7 +1691,10 @@ mod tests {
         let layer = Layer::new(Geom::Line)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("linetype".to_string(), AestheticValue::Literal(LiteralValue::Boolean(true)));
+            .with_aesthetic(
+                "linetype".to_string(),
+                AestheticValue::Literal(LiteralValue::Boolean(true)),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1620,7 +1725,10 @@ mod tests {
         let layer2 = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Literal(LiteralValue::String("red".to_string())));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Literal(LiteralValue::String("red".to_string())),
+            );
         spec.layers.push(layer2);
 
         let df = df! {
@@ -1703,7 +1811,9 @@ mod tests {
         let mut labels = Labels {
             labels: HashMap::new(),
         };
-        labels.labels.insert("title".to_string(), "Test Plot".to_string());
+        labels
+            .labels
+            .insert("title".to_string(), "Test Plot".to_string());
         spec.labels = Some(labels);
 
         let df = df! {
@@ -1725,14 +1835,19 @@ mod tests {
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Line)
             .with_aesthetic("x".to_string(), AestheticValue::Column("date".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("revenue".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("revenue".to_string()),
+            );
         spec.layers.push(layer);
 
         let mut labels = Labels {
             labels: HashMap::new(),
         };
         labels.labels.insert("x".to_string(), "Date".to_string());
-        labels.labels.insert("y".to_string(), "Revenue ($M)".to_string());
+        labels
+            .labels
+            .insert("y".to_string(), "Revenue ($M)".to_string());
         spec.labels = Some(labels);
 
         let df = df! {
@@ -1745,7 +1860,10 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["title"], "Date");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["title"], "Revenue ($M)");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["y"]["title"],
+            "Revenue ($M)"
+        );
     }
 
     #[test]
@@ -1754,16 +1872,25 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
         let mut labels = Labels {
             labels: HashMap::new(),
         };
-        labels.labels.insert("title".to_string(), "Sales by Category".to_string());
-        labels.labels.insert("x".to_string(), "Product Category".to_string());
-        labels.labels.insert("y".to_string(), "Sales Volume".to_string());
+        labels
+            .labels
+            .insert("title".to_string(), "Sales by Category".to_string());
+        labels
+            .labels
+            .insert("x".to_string(), "Product Category".to_string());
+        labels
+            .labels
+            .insert("y".to_string(), "Sales Volume".to_string());
         spec.labels = Some(labels);
 
         let df = df! {
@@ -1776,8 +1903,14 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(vl_spec["title"], "Sales by Category");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["title"], "Product Category");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["title"], "Sales Volume");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["title"],
+            "Product Category"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["y"]["title"],
+            "Sales Volume"
+        );
     }
 
     #[test]
@@ -1809,7 +1942,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -1861,8 +1997,14 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Point)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("int_col".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("float_col".to_string()));
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("int_col".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("float_col".to_string()),
+            );
         spec.layers.push(layer);
 
         let df = df! {
@@ -1954,7 +2096,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add guide to hide color legend
@@ -1974,12 +2119,15 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"], json!(null));
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"],
+            json!(null)
+        );
     }
 
     #[test]
     fn test_guide_legend_with_title() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
@@ -1987,12 +2135,18 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add guide with custom title
         let mut properties = HashMap::new();
-        properties.insert("title".to_string(), GuidePropertyValue::String("Product Type".to_string()));
+        properties.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Product Type".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "color".to_string(),
             guide_type: Some(GuideType::Legend),
@@ -2009,12 +2163,15 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"], "Product Type");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"],
+            "Product Type"
+        );
     }
 
     #[test]
     fn test_guide_legend_position() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
@@ -2022,12 +2179,18 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()));
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Column("value".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add guide with custom position
         let mut properties = HashMap::new();
-        properties.insert("position".to_string(), GuidePropertyValue::String("bottom".to_string()));
+        properties.insert(
+            "position".to_string(),
+            GuidePropertyValue::String("bottom".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "size".to_string(),
             guide_type: Some(GuideType::Legend),
@@ -2045,12 +2208,15 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         // position maps to orient in Vega-Lite
-        assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["legend"]["orient"], "bottom");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["size"]["legend"]["orient"],
+            "bottom"
+        );
     }
 
     #[test]
     fn test_guide_colorbar() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
@@ -2058,12 +2224,18 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("temperature".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("temperature".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add colorbar guide
         let mut properties = HashMap::new();
-        properties.insert("title".to_string(), GuidePropertyValue::String("Temperature (°C)".to_string()));
+        properties.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Temperature (°C)".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "color".to_string(),
             guide_type: Some(GuideType::ColorBar),
@@ -2080,25 +2252,37 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["type"], "gradient");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"], "Temperature (°C)");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["type"],
+            "gradient"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"],
+            "Temperature (°C)"
+        );
     }
 
     #[test]
     fn test_guide_axis() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
         // Add axis guide for x
         let mut properties = HashMap::new();
-        properties.insert("title".to_string(), GuidePropertyValue::String("Product Category".to_string()));
+        properties.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Product Category".to_string()),
+        );
         properties.insert("text_angle".to_string(), GuidePropertyValue::Number(45.0));
         spec.guides.push(Guide {
             aesthetic: "x".to_string(),
@@ -2115,13 +2299,19 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["axis"]["title"], "Product Category");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["axis"]["labelAngle"], 45.0);
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["axis"]["title"],
+            "Product Category"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["axis"]["labelAngle"],
+            45.0
+        );
     }
 
     #[test]
     fn test_multiple_guides() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
@@ -2129,14 +2319,26 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Column("value".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add guide for color
         let mut color_props = HashMap::new();
-        color_props.insert("title".to_string(), GuidePropertyValue::String("Category".to_string()));
-        color_props.insert("position".to_string(), GuidePropertyValue::String("right".to_string()));
+        color_props.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Category".to_string()),
+        );
+        color_props.insert(
+            "position".to_string(),
+            GuidePropertyValue::String("right".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "color".to_string(),
             guide_type: Some(GuideType::Legend),
@@ -2145,7 +2347,10 @@ mod tests {
 
         // Add guide for size
         let mut size_props = HashMap::new();
-        size_props.insert("title".to_string(), GuidePropertyValue::String("Value".to_string()));
+        size_props.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Value".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "size".to_string(),
             guide_type: Some(GuideType::Legend),
@@ -2163,27 +2368,45 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"], "Category");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["orient"], "right");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["legend"]["title"], "Value");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"],
+            "Category"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["orient"],
+            "right"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["size"]["legend"]["title"],
+            "Value"
+        );
     }
 
     #[test]
     fn test_guide_fill_maps_to_color() {
-        use crate::parser::ast::{Guide, GuideType, GuidePropertyValue};
+        use crate::parser::ast::{Guide, GuidePropertyValue, GuideType};
 
         let writer = VegaLiteWriter::new();
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()))
-            .with_aesthetic("fill".to_string(), AestheticValue::Column("region".to_string()));
+            .with_aesthetic(
+                "fill".to_string(),
+                AestheticValue::Column("region".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add guide for fill (should map to color)
         let mut properties = HashMap::new();
-        properties.insert("title".to_string(), GuidePropertyValue::String("Region".to_string()));
+        properties.insert(
+            "title".to_string(),
+            GuidePropertyValue::String("Region".to_string()),
+        );
         spec.guides.push(Guide {
             aesthetic: "fill".to_string(),
             guide_type: Some(GuideType::Legend),
@@ -2202,7 +2425,10 @@ mod tests {
 
         // fill should be mapped to color channel
         assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "region");
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"], "Region");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"],
+            "Region"
+        );
     }
 
     // ========================================
@@ -2225,10 +2451,7 @@ mod tests {
         let mut properties = HashMap::new();
         properties.insert(
             "xlim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(0.0),
-                ArrayElement::Number(100.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]),
         );
         spec.coord = Some(Coord {
             coord_type: CoordType::Cartesian,
@@ -2245,7 +2468,10 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         // Check that x scale has domain set
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"],
+            json!([0.0, 100.0])
+        );
     }
 
     #[test]
@@ -2284,7 +2510,10 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         // Check that y scale has domain set
-        assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["scale"]["domain"], json!([-10.0, 50.0]));
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["y"]["scale"]["domain"],
+            json!([-10.0, 50.0])
+        );
     }
 
     #[test]
@@ -2303,17 +2532,11 @@ mod tests {
         let mut properties = HashMap::new();
         properties.insert(
             "xlim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(0.0),
-                ArrayElement::Number(100.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]),
         );
         properties.insert(
             "ylim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(0.0),
-                ArrayElement::Number(200.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(0.0), ArrayElement::Number(200.0)]),
         );
         spec.coord = Some(Coord {
             coord_type: CoordType::Cartesian,
@@ -2330,8 +2553,14 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         // Check both domains
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
-        assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["scale"]["domain"], json!([0.0, 200.0]));
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"],
+            json!([0.0, 100.0])
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["y"]["scale"]["domain"],
+            json!([0.0, 200.0])
+        );
     }
 
     #[test]
@@ -2350,10 +2579,7 @@ mod tests {
         let mut properties = HashMap::new();
         properties.insert(
             "xlim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(100.0),
-                ArrayElement::Number(0.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(100.0), ArrayElement::Number(0.0)]),
         );
         spec.coord = Some(Coord {
             coord_type: CoordType::Cartesian,
@@ -2370,7 +2596,10 @@ mod tests {
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
         // Should be swapped to [0, 100]
-        assert_eq!(vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"], json!([0.0, 100.0]));
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["scale"]["domain"],
+            json!([0.0, 100.0])
+        );
     }
 
     #[test]
@@ -2383,7 +2612,10 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add COORD with color domain
@@ -2442,17 +2674,11 @@ mod tests {
         let mut properties = HashMap::new();
         properties.insert(
             "xlim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(0.0),
-                ArrayElement::Number(10.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(0.0), ArrayElement::Number(10.0)]),
         );
         properties.insert(
             "ylim".to_string(),
-            CoordPropertyValue::Array(vec![
-                ArrayElement::Number(-5.0),
-                ArrayElement::Number(5.0),
-            ]),
+            CoordPropertyValue::Array(vec![ArrayElement::Number(-5.0), ArrayElement::Number(5.0)]),
         );
         spec.coord = Some(Coord {
             coord_type: CoordType::Cartesian,
@@ -2473,8 +2699,14 @@ mod tests {
         assert_eq!(layers.len(), 2);
 
         for layer in layers {
-            assert_eq!(layer["encoding"]["x"]["scale"]["domain"], json!([0.0, 10.0]));
-            assert_eq!(layer["encoding"]["y"]["scale"]["domain"], json!([-5.0, 5.0]));
+            assert_eq!(
+                layer["encoding"]["x"]["scale"]["domain"],
+                json!([0.0, 10.0])
+            );
+            assert_eq!(
+                layer["encoding"]["y"]["scale"]["domain"],
+                json!([-5.0, 5.0])
+            );
         }
     }
 
@@ -2486,7 +2718,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -2494,7 +2729,9 @@ mod tests {
         let mut labels = Labels {
             labels: HashMap::new(),
         };
-        labels.labels.insert("x".to_string(), "Category".to_string());
+        labels
+            .labels
+            .insert("x".to_string(), "Category".to_string());
         labels.labels.insert("y".to_string(), "Value".to_string());
         spec.labels = Some(labels);
 
@@ -2532,13 +2769,19 @@ mod tests {
 
         // First layer: bar
         let layer1 = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer1);
 
         // Second layer: point
         let layer2 = Layer::new(Geom::Point)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer2);
 
@@ -2577,8 +2820,14 @@ mod tests {
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
             .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
-            .with_aesthetic("color".to_string(), AestheticValue::Column("category".to_string()))
-            .with_aesthetic("size".to_string(), AestheticValue::Column("value".to_string()));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
+            .with_aesthetic(
+                "size".to_string(),
+                AestheticValue::Column("value".to_string()),
+            );
         spec.layers.push(layer);
 
         // Add COORD flip
@@ -2603,7 +2852,10 @@ mod tests {
         assert_eq!(vl_spec["layer"][0]["encoding"]["y"]["field"], "x");
 
         // Check color and size are unchanged
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "category");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["field"],
+            "category"
+        );
         assert_eq!(vl_spec["layer"][0]["encoding"]["size"]["field"], "value");
     }
 
@@ -2615,7 +2867,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -2642,11 +2897,20 @@ mod tests {
         assert_eq!(vl_spec["layer"][0]["encoding"]["theta"]["field"], "value");
 
         // x should be removed from positional encoding
-        assert!(vl_spec["layer"][0]["encoding"]["x"].is_null() || !vl_spec["layer"][0]["encoding"].as_object().unwrap().contains_key("x"));
+        assert!(
+            vl_spec["layer"][0]["encoding"]["x"].is_null()
+                || !vl_spec["layer"][0]["encoding"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("x")
+        );
 
         // x should be mapped to color (for category differentiation)
         assert!(vl_spec["layer"][0]["encoding"]["color"].is_object());
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "category");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["color"]["field"],
+            "category"
+        );
     }
 
     #[test]
@@ -2657,7 +2921,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -2723,7 +2990,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Point)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("datetime".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("datetime".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -2782,7 +3052,10 @@ mod tests {
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Line)
             .with_aesthetic("x".to_string(), AestheticValue::Column("date".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("revenue".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("revenue".to_string()),
+            );
         spec.layers.push(layer);
 
         // Create DataFrame with Date type - NO explicit SCALE x SETTING type => 'date' needed!
@@ -2813,7 +3086,10 @@ mod tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Area)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("timestamp".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("timestamp".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -2866,7 +3142,10 @@ mod tests {
 
         // Should have detail encoding with the partition_by column (in layer[0])
         assert!(vl_spec["layer"][0]["encoding"]["detail"].is_object());
-        assert_eq!(vl_spec["layer"][0]["encoding"]["detail"]["field"], "category");
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["detail"]["field"],
+            "category"
+        );
         assert_eq!(vl_spec["layer"][0]["encoding"]["detail"]["type"], "nominal");
     }
 
@@ -2896,7 +3175,9 @@ mod tests {
 
         // Should have detail encoding as an array (in layer[0])
         assert!(vl_spec["layer"][0]["encoding"]["detail"].is_array());
-        let details = vl_spec["layer"][0]["encoding"]["detail"].as_array().unwrap();
+        let details = vl_spec["layer"][0]["encoding"]["detail"]
+            .as_array()
+            .unwrap();
         assert_eq!(details.len(), 2);
         assert_eq!(details[0]["field"], "category");
         assert_eq!(details[0]["type"], "nominal");
@@ -2984,10 +3265,19 @@ mod tests {
         // Verify top-level faceting structure
         assert!(vl_spec["facet"].is_object(), "Should have top-level facet");
         assert_eq!(vl_spec["facet"]["field"], "region");
-        assert!(vl_spec["data"].is_object(), "Should have top-level data reference");
+        assert!(
+            vl_spec["data"].is_object(),
+            "Should have top-level data reference"
+        );
         assert_eq!(vl_spec["data"]["name"], "__global__");
-        assert!(vl_spec["datasets"]["__global__"].is_array(), "Should have datasets");
-        assert!(vl_spec["spec"]["layer"].is_array(), "Layer should be moved into spec");
+        assert!(
+            vl_spec["datasets"]["__global__"].is_array(),
+            "Should have datasets"
+        );
+        assert!(
+            vl_spec["spec"]["layer"].is_array(),
+            "Layer should be moved into spec"
+        );
 
         // Layers inside spec should NOT have per-layer data entries
         assert!(
@@ -3028,10 +3318,19 @@ mod tests {
         assert!(vl_spec["facet"].is_object(), "Should have top-level facet");
         assert_eq!(vl_spec["facet"]["row"]["field"], "region");
         assert_eq!(vl_spec["facet"]["column"]["field"], "category");
-        assert!(vl_spec["data"].is_object(), "Should have top-level data reference");
+        assert!(
+            vl_spec["data"].is_object(),
+            "Should have top-level data reference"
+        );
         assert_eq!(vl_spec["data"]["name"], "__global__");
-        assert!(vl_spec["datasets"]["__global__"].is_array(), "Should have datasets");
-        assert!(vl_spec["spec"]["layer"].is_array(), "Layer should be moved into spec");
+        assert!(
+            vl_spec["datasets"]["__global__"].is_array(),
+            "Should have datasets"
+        );
+        assert!(
+            vl_spec["spec"]["layer"].is_array(),
+            "Layer should be moved into spec"
+        );
 
         // Layers inside spec should NOT have per-layer data entries
         assert!(

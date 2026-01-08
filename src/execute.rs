@@ -3,8 +3,8 @@
 //! Provides shared execution logic for building data maps from queries,
 //! handling both global SQL and layer-specific data sources.
 
-use std::collections::{HashMap, HashSet};
 use crate::{parser, DataFrame, GgsqlError, LayerSource, Result, VizSpec};
+use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 #[cfg(feature = "duckdb")]
@@ -174,10 +174,7 @@ where
         );
 
         execute_sql(&create_sql).map_err(|e| {
-            GgsqlError::ReaderError(format!(
-                "Failed to materialize CTE '{}': {}",
-                cte.name, e
-            ))
+            GgsqlError::ReaderError(format!("Failed to materialize CTE '{}': {}", cte.name, e))
         })?;
 
         materialized.insert(cte.name.clone());
@@ -242,7 +239,10 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
     // Try to extract trailing SELECT from WITH clause
     if let Some(trailing_select) = extract_trailing_select(sql) {
         // Transform CTE references in the SELECT
-        Some(transform_cte_references(&trailing_select, materialized_ctes))
+        Some(transform_cte_references(
+            &trailing_select,
+            materialized_ctes,
+        ))
     } else if has_executable_sql(sql) {
         // No WITH clause but has executable SQL - just transform references
         Some(transform_cte_references(sql, materialized_ctes))
@@ -343,9 +343,8 @@ fn has_executable_sql(sql: &str) -> bool {
                         let mut stmt_cursor = sql_child.walk();
                         for stmt_child in sql_child.children(&mut stmt_cursor) {
                             match stmt_child.kind() {
-                                "select_statement" | "create_statement" |
-                                "insert_statement" | "update_statement" |
-                                "delete_statement" => return true,
+                                "select_statement" | "create_statement" | "insert_statement"
+                                | "update_statement" | "delete_statement" => return true,
                                 "with_statement" => {
                                     // Check if WITH has trailing SELECT
                                     if with_has_trailing_select(&stmt_child) {
@@ -487,7 +486,10 @@ where
     }
 
     // For layers without specific sources, ensure global data exists
-    let has_layer_without_source = first_spec.layers.iter().any(|l| l.source.is_none() && l.filter.is_none());
+    let has_layer_without_source = first_spec
+        .layers
+        .iter()
+        .any(|l| l.source.is_none() && l.filter.is_none());
     if has_layer_without_source && !data_map.contains_key("__global__") {
         return Err(GgsqlError::ValidationError(
             "Some layers use global data but no SQL query was provided.".to_string(),
@@ -510,7 +512,10 @@ where
         spec.resolve_global_mappings(&column_names)?;
     }
 
-    Ok(PreparedData { data: data_map, specs })
+    Ok(PreparedData {
+        data: data_map,
+        specs,
+    })
 }
 
 /// Build data map from a query using DuckDB reader
@@ -553,10 +558,13 @@ mod tests {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
         // Create a table first
-        reader.connection().execute(
-            "CREATE TABLE test_data AS SELECT 1 as a, 2 as b",
-            duckdb::params![],
-        ).unwrap();
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE test_data AS SELECT 1 as a, 2 as b",
+                duckdb::params![],
+            )
+            .unwrap();
 
         let query = "VISUALISE DRAW point MAPPING a AS x, b AS y FROM test_data";
 
@@ -572,15 +580,18 @@ mod tests {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
         // Create test data with multiple rows
-        reader.connection().execute(
-            "CREATE TABLE filter_test AS SELECT * FROM (VALUES
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE filter_test AS SELECT * FROM (VALUES
                 (1, 10, 'A'),
                 (2, 20, 'B'),
                 (3, 30, 'A'),
                 (4, 40, 'B')
             ) AS t(id, value, category)",
-            duckdb::params![],
-        ).unwrap();
+                duckdb::params![],
+            )
+            .unwrap();
 
         // Query with filter on layer using global data
         let query = "SELECT * FROM filter_test VISUALISE DRAW point MAPPING id AS x, value AS y FILTER category = 'A'";
@@ -606,18 +617,22 @@ mod tests {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
         // Create test data
-        reader.connection().execute(
-            "CREATE TABLE layer_filter_test AS SELECT * FROM (VALUES
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE layer_filter_test AS SELECT * FROM (VALUES
                 (1, 100),
                 (2, 200),
                 (3, 300),
                 (4, 400)
             ) AS t(x, y)",
-            duckdb::params![],
-        ).unwrap();
+                duckdb::params![],
+            )
+            .unwrap();
 
         // Query with layer-specific source and filter
-        let query = "VISUALISE DRAW point MAPPING x AS x, y AS y FROM layer_filter_test FILTER y > 200";
+        let query =
+            "VISUALISE DRAW point MAPPING x AS x, y AS y FROM layer_filter_test FILTER y > 200";
 
         let result = prepare_data(query, &reader).unwrap();
 
@@ -678,7 +693,10 @@ mod tests {
 
         let result = transform_cte_references(sql, &cte_names);
 
-        assert_eq!(result, "SELECT * FROM __ggsql_cte_sales__ WHERE year = 2024");
+        assert_eq!(
+            result,
+            "SELECT * FROM __ggsql_cte_sales__ WHERE year = 2024"
+        );
     }
 
     #[test]
@@ -728,7 +746,10 @@ mod tests {
         let result = build_layer_query(Some(&source), &materialized, None, false, 0);
 
         // Should use temp table name
-        assert_eq!(result.unwrap(), Some("SELECT * FROM __ggsql_cte_sales__".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM __ggsql_cte_sales__".to_string())
+        );
     }
 
     #[test]
@@ -739,7 +760,10 @@ mod tests {
 
         let result = build_layer_query(Some(&source), &materialized, Some("year = 2024"), false, 0);
 
-        assert_eq!(result.unwrap(), Some("SELECT * FROM __ggsql_cte_sales__ WHERE year = 2024".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM __ggsql_cte_sales__ WHERE year = 2024".to_string())
+        );
     }
 
     #[test]
@@ -750,7 +774,10 @@ mod tests {
         let result = build_layer_query(Some(&source), &materialized, None, false, 0);
 
         // Should use table name directly
-        assert_eq!(result.unwrap(), Some("SELECT * FROM some_table".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM some_table".to_string())
+        );
     }
 
     #[test]
@@ -760,7 +787,10 @@ mod tests {
 
         let result = build_layer_query(Some(&source), &materialized, Some("value > 100"), false, 0);
 
-        assert_eq!(result.unwrap(), Some("SELECT * FROM some_table WHERE value > 100".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM some_table WHERE value > 100".to_string())
+        );
     }
 
     #[test]
@@ -771,7 +801,10 @@ mod tests {
         let result = build_layer_query(Some(&source), &materialized, None, false, 0);
 
         // File paths should be wrapped in single quotes
-        assert_eq!(result.unwrap(), Some("SELECT * FROM 'data/sales.csv'".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM 'data/sales.csv'".to_string())
+        );
     }
 
     #[test]
@@ -781,7 +814,10 @@ mod tests {
 
         let result = build_layer_query(Some(&source), &materialized, Some("x > 10"), false, 0);
 
-        assert_eq!(result.unwrap(), Some("SELECT * FROM 'data.parquet' WHERE x > 10".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM 'data.parquet' WHERE x > 10".to_string())
+        );
     }
 
     #[test]
@@ -791,7 +827,10 @@ mod tests {
         let result = build_layer_query(None, &materialized, Some("category = 'A'"), true, 0);
 
         // Should query __ggsql_global__ with filter
-        assert_eq!(result.unwrap(), Some("SELECT * FROM __ggsql_global__ WHERE category = 'A'".to_string()));
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM __ggsql_global__ WHERE category = 'A'".to_string())
+        );
     }
 
     #[test]
@@ -813,7 +852,7 @@ mod tests {
         // Should return validation error
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Layer 3"));  // layer_idx 2 -> Layer 3 in message
+        assert!(err.contains("Layer 3")); // layer_idx 2 -> Layer 3 in message
         assert!(err.contains("FILTER"));
     }
 
@@ -948,7 +987,7 @@ mod tests {
         // Should have layer 0 data from aggregated CTE
         assert!(result.data.contains_key("__layer_0__"));
         let layer_df = result.data.get("__layer_0__").unwrap();
-        assert_eq!(layer_df.height(), 1);  // Single aggregated row
+        assert_eq!(layer_df.height(), 1); // Single aggregated row
     }
 
     #[cfg(feature = "duckdb")]

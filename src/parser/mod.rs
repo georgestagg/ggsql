@@ -38,13 +38,13 @@ assert_eq!(specs[0].layers[0].geom, Geom::Line);
 ```
 */
 
-use tree_sitter::Tree;
 use crate::{GgsqlError, Result};
+use tree_sitter::Tree;
 
 pub mod ast;
-pub mod splitter;
 pub mod builder;
 pub mod error;
+pub mod splitter;
 
 // Re-export key types
 pub use ast::*;
@@ -81,7 +81,9 @@ fn parse_full_query(query: &str) -> Result<Tree> {
 
     // Check for parse errors
     if tree.root_node().has_error() {
-        return Err(GgsqlError::ParseError("Parse tree contains errors".to_string()));
+        return Err(GgsqlError::ParseError(
+            "Parse tree contains errors".to_string(),
+        ));
     }
 
     Ok(tree)
@@ -340,8 +342,12 @@ mod tests {
         match &specs[0].global_mapping {
             GlobalMapping::Mappings(items) => {
                 assert_eq!(items.len(), 2);
-                assert!(matches!(&items[0], GlobalMappingItem::Explicit { column, aesthetic } if column == "date" && aesthetic == "x"));
-                assert!(matches!(&items[1], GlobalMappingItem::Explicit { column, aesthetic } if column == "revenue" && aesthetic == "y"));
+                assert!(
+                    matches!(&items[0], GlobalMappingItem::Explicit { column, aesthetic } if column == "date" && aesthetic == "x")
+                );
+                assert!(
+                    matches!(&items[1], GlobalMappingItem::Explicit { column, aesthetic } if column == "revenue" && aesthetic == "y")
+                );
             }
             _ => panic!("Expected Mappings variant"),
         }
@@ -380,7 +386,9 @@ mod tests {
                 assert_eq!(items.len(), 3);
                 assert!(matches!(&items[0], GlobalMappingItem::Implicit { name } if name == "x"));
                 assert!(matches!(&items[1], GlobalMappingItem::Implicit { name } if name == "y"));
-                assert!(matches!(&items[2], GlobalMappingItem::Explicit { column, aesthetic } if column == "region" && aesthetic == "color"));
+                assert!(
+                    matches!(&items[2], GlobalMappingItem::Explicit { column, aesthetic } if column == "region" && aesthetic == "color")
+                );
             }
             _ => panic!("Expected Mappings variant"),
         }

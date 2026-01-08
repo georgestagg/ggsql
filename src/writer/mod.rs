@@ -20,8 +20,8 @@
 //! println!("{}", json);
 //! ```
 
+use crate::{DataFrame, Result, VizSpec};
 use std::collections::HashMap;
-use crate::{Result, DataFrame, VizSpec};
 
 #[cfg(feature = "vegalite")]
 pub mod vegalite;

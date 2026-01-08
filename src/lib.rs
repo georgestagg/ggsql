@@ -45,7 +45,9 @@ pub mod writer;
 pub mod execute;
 
 // Re-export key types for convenience
-pub use parser::{VizSpec, GlobalMapping, GlobalMappingItem, Layer, Scale, Geom, AestheticValue, LayerSource};
+pub use parser::{
+    AestheticValue, Geom, GlobalMapping, GlobalMappingItem, Layer, LayerSource, Scale, VizSpec,
+};
 
 // Future modules - not yet implemented
 // #[cfg(feature = "engine")]
@@ -82,7 +84,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(all(feature = "duckdb", feature = "vegalite"))]
 mod integration_tests {
     use super::*;
-    use crate::parser::ast::{Layer, AestheticValue, Geom};
+    use crate::parser::ast::{AestheticValue, Geom, Layer};
     use crate::reader::{DuckDBReader, Reader};
     use crate::writer::{VegaLiteWriter, Writer};
     use std::collections::HashMap;
@@ -124,7 +126,10 @@ mod integration_tests {
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Line)
             .with_aesthetic("x".to_string(), AestheticValue::Column("date".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("revenue".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("revenue".to_string()),
+            );
         spec.layers.push(layer);
 
         // Generate Vega-Lite JSON
@@ -140,7 +145,11 @@ mod integration_tests {
         // (DuckDB returns Datetime for DATE + INTERVAL, so we get ISO datetime format)
         let data_values = vl_spec["datasets"]["__global__"].as_array().unwrap();
         let date_str = data_values[0]["date"].as_str().unwrap();
-        assert!(date_str.starts_with("2024-01-01"), "Expected date starting with 2024-01-01, got {}", date_str);
+        assert!(
+            date_str.starts_with("2024-01-01"),
+            "Expected date starting with 2024-01-01, got {}",
+            date_str
+        );
     }
 
     #[test]
@@ -169,7 +178,10 @@ mod integration_tests {
         // Create visualization spec
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Area)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("timestamp".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("timestamp".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -183,7 +195,10 @@ mod integration_tests {
 
         // Data values should be ISO datetime strings
         let data_values = vl_spec["datasets"]["__global__"].as_array().unwrap();
-        assert!(data_values[0]["timestamp"].as_str().unwrap().starts_with("2024-01-01T"));
+        assert!(data_values[0]["timestamp"]
+            .as_str()
+            .unwrap()
+            .starts_with("2024-01-01T"));
     }
 
     #[test]
@@ -198,15 +213,30 @@ mod integration_tests {
 
         // Verify types are preserved
         // DuckDB treats numeric literals as DECIMAL, which we convert to Float64
-        assert!(matches!(df.column("int_col").unwrap().dtype(), polars::prelude::DataType::Int32));
-        assert!(matches!(df.column("float_col").unwrap().dtype(), polars::prelude::DataType::Float64));
-        assert!(matches!(df.column("bool_col").unwrap().dtype(), polars::prelude::DataType::Boolean));
+        assert!(matches!(
+            df.column("int_col").unwrap().dtype(),
+            polars::prelude::DataType::Int32
+        ));
+        assert!(matches!(
+            df.column("float_col").unwrap().dtype(),
+            polars::prelude::DataType::Float64
+        ));
+        assert!(matches!(
+            df.column("bool_col").unwrap().dtype(),
+            polars::prelude::DataType::Boolean
+        ));
 
         // Create visualization spec
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Point)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("int_col".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("float_col".to_string()));
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("int_col".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("float_col".to_string()),
+            );
         spec.layers.push(layer);
 
         // Generate Vega-Lite JSON
@@ -235,15 +265,30 @@ mod integration_tests {
         let df = reader.execute(sql).unwrap();
 
         // Verify types
-        assert!(matches!(df.column("int_col").unwrap().dtype(), polars::prelude::DataType::Int32));
-        assert!(matches!(df.column("float_col").unwrap().dtype(), polars::prelude::DataType::Float64));
-        assert!(matches!(df.column("str_col").unwrap().dtype(), polars::prelude::DataType::String));
+        assert!(matches!(
+            df.column("int_col").unwrap().dtype(),
+            polars::prelude::DataType::Int32
+        ));
+        assert!(matches!(
+            df.column("float_col").unwrap().dtype(),
+            polars::prelude::DataType::Float64
+        ));
+        assert!(matches!(
+            df.column("str_col").unwrap().dtype(),
+            polars::prelude::DataType::String
+        ));
 
         // Create viz spec
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Point)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("int_col".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("float_col".to_string()));
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("int_col".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("float_col".to_string()),
+            );
         spec.layers.push(layer);
 
         let writer = VegaLiteWriter::new();
@@ -269,7 +314,10 @@ mod integration_tests {
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)
-            .with_aesthetic("x".to_string(), AestheticValue::Column("category".to_string()))
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::Column("category".to_string()),
+            )
             .with_aesthetic("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
@@ -318,7 +366,10 @@ mod integration_tests {
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Line)
             .with_aesthetic("x".to_string(), AestheticValue::Column("day".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("total_sales".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("total_sales".to_string()),
+            );
         spec.layers.push(layer);
 
         let writer = VegaLiteWriter::new();
@@ -340,14 +391,26 @@ mod integration_tests {
         let df = reader.execute(sql).unwrap();
 
         // All should be Float64
-        assert!(matches!(df.column("small").unwrap().dtype(), polars::prelude::DataType::Float64));
-        assert!(matches!(df.column("medium").unwrap().dtype(), polars::prelude::DataType::Float64));
-        assert!(matches!(df.column("large").unwrap().dtype(), polars::prelude::DataType::Float64));
+        assert!(matches!(
+            df.column("small").unwrap().dtype(),
+            polars::prelude::DataType::Float64
+        ));
+        assert!(matches!(
+            df.column("medium").unwrap().dtype(),
+            polars::prelude::DataType::Float64
+        ));
+        assert!(matches!(
+            df.column("large").unwrap().dtype(),
+            polars::prelude::DataType::Float64
+        ));
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Point)
             .with_aesthetic("x".to_string(), AestheticValue::Column("small".to_string()))
-            .with_aesthetic("y".to_string(), AestheticValue::Column("medium".to_string()));
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::Column("medium".to_string()),
+            );
         spec.layers.push(layer);
 
         let writer = VegaLiteWriter::new();
@@ -375,10 +438,22 @@ mod integration_tests {
         let df = reader.execute(sql).unwrap();
 
         // Verify types
-        assert!(matches!(df.column("tiny").unwrap().dtype(), polars::prelude::DataType::Int8));
-        assert!(matches!(df.column("small").unwrap().dtype(), polars::prelude::DataType::Int16));
-        assert!(matches!(df.column("int").unwrap().dtype(), polars::prelude::DataType::Int32));
-        assert!(matches!(df.column("big").unwrap().dtype(), polars::prelude::DataType::Int64));
+        assert!(matches!(
+            df.column("tiny").unwrap().dtype(),
+            polars::prelude::DataType::Int8
+        ));
+        assert!(matches!(
+            df.column("small").unwrap().dtype(),
+            polars::prelude::DataType::Int16
+        ));
+        assert!(matches!(
+            df.column("int").unwrap().dtype(),
+            polars::prelude::DataType::Int32
+        ));
+        assert!(matches!(
+            df.column("big").unwrap().dtype(),
+            polars::prelude::DataType::Int64
+        ));
 
         let mut spec = VizSpec::new();
         let layer = Layer::new(Geom::Bar)

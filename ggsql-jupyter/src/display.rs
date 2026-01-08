@@ -19,9 +19,7 @@ use serde_json::{json, Value};
 /// ```
 pub fn format_display_data(result: ExecutionResult) -> Value {
     match result {
-        ExecutionResult::Visualization {
-            spec
-        } => format_vegalite(spec),
+        ExecutionResult::Visualization { spec } => format_vegalite(spec),
         ExecutionResult::DataFrame(df) => format_dataframe(df),
     }
 }
@@ -189,9 +187,7 @@ mod tests {
     #[test]
     fn test_vegalite_format() {
         let spec = r#"{"mark": "point"}"#.to_string();
-        let result = ExecutionResult::Visualization {
-            spec
-        };
+        let result = ExecutionResult::Visualization { spec };
         let display = format_display_data(result);
 
         assert!(display["data"]["application/vnd.vegalite.v5+json"].is_object());
