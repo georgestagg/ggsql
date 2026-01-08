@@ -86,6 +86,7 @@ jobs:
         uses: quarto-dev/quarto-actions/publish@v2
         with:
           target: gh-pages
+          path: doc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -94,6 +95,7 @@ jobs:
         uses: quarto-dev/quarto-actions/render@v2
         with:
           to: html
+          path: doc
 
   R-CMD-Check:
     runs-on: ubuntu-latest
