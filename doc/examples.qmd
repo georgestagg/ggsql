@@ -1,5 +1,5 @@
 ---
-title: ggSQL Examples
+title: Examples
 keep-ipynb: true # TODO: Why does render on save fail without this?
 ---
 
