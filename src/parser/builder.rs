@@ -2411,7 +2411,7 @@ mod tests {
         assert_eq!(layer.parameters.len(), 1);
         assert!(layer.parameters.contains_key("size"));
 
-        // Check filter - now raw SQL text
+        // Check filter
         assert!(layer.filter.is_some());
         let filter = layer.filter.as_ref().unwrap();
         assert_eq!(filter.as_str(), "value > 50");
