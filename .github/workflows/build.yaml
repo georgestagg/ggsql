@@ -82,11 +82,18 @@ jobs:
         uses: quarto-dev/quarto-actions/setup@v2
 
       - name: Render and Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: quarto-dev/quarto-actions/publish@v2
         with:
           target: gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Render
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+        uses: quarto-dev/quarto-actions/render@v2
+        with:
+          to: html
 
   R-CMD-Check:
     runs-on: ubuntu-latest
