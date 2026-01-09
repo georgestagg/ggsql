@@ -909,12 +909,12 @@ mod tests {
     fn test_aesthetic_value_display() {
         let column = AestheticValue::Column("sales".to_string());
         let string_lit = AestheticValue::Literal(LiteralValue::String("blue".to_string()));
-        let number_lit = AestheticValue::Literal(LiteralValue::Number(3.14));
+        let number_lit = AestheticValue::Literal(LiteralValue::Number(3.53));
         let bool_lit = AestheticValue::Literal(LiteralValue::Boolean(true));
 
         assert_eq!(format!("{}", column), "sales");
         assert_eq!(format!("{}", string_lit), "'blue'");
-        assert_eq!(format!("{}", number_lit), "3.14");
+        assert_eq!(format!("{}", number_lit), "3.53");
         assert_eq!(format!("{}", bool_lit), "true");
     }
 
