@@ -254,15 +254,11 @@ impl Geom {
                 required: &["x", "y"],
             },
             Geom::Bar => GeomAesthetics {
-                supported: &[
-                    "x", "y", "color", "colour", "fill", "width", "alpha",
-                ],
+                supported: &["x", "y", "color", "colour", "fill", "width", "alpha"],
                 required: &["x", "y"],
             },
             Geom::Col => GeomAesthetics {
-                supported: &[
-                    "x", "y", "color", "colour", "fill", "width", "alpha",
-                ],
+                supported: &["x", "y", "color", "colour", "fill", "width", "alpha"],
                 required: &["x", "y"],
             },
             Geom::Area => GeomAesthetics {
@@ -280,9 +276,7 @@ impl Geom {
                 required: &["x", "y"],
             },
             Geom::Ribbon => GeomAesthetics {
-                supported: &[
-                    "x", "ymin", "ymax", "color", "colour", "fill", "alpha",
-                ],
+                supported: &["x", "ymin", "ymax", "color", "colour", "fill", "alpha"],
                 required: &["x", "ymin", "ymax"],
             },
 
