@@ -9,23 +9,24 @@ fn main() {
             println!("tree-sitter-cli not found. Attempting to install...");
             let installation = Command::new("npm")
                 .args(["install", "-g", "tree-sitter-cli"])
-                .status()
-                .expect("Failed to install tree-sitter-cli");
+                .status();
 
-            if !installation.success() {
-                eprintln!("Failed to install tree-sitter-cli");
-                std::process::exit(1)
+            match installation {
+                Ok(installation) if installation.success() => {}
+                _ => {
+                    eprintln!("Failed to install tree-sitter-cli.")
+                }
             }
         }
     }
 
-    let regenerate = Command::new("tree-sitter")
-        .arg("generate")
-        .status()
-        .expect("Failed to regenerate tree sitter grammar.");
+    let regenerate = Command::new("tree-sitter").arg("generate").status();
 
-    if !regenerate.success() {
-        eprintln!("Failed to regenerate tree sitter grammar.");
+    match regenerate {
+        Ok(regenerate) if regenerate.success() => {}
+        _ => {
+            eprintln!("Failed to regenerate tree sitter grammar.");
+        }
     }
 
     let dir: PathBuf = ["src"].iter().collect();
