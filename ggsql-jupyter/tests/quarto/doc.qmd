@@ -197,8 +197,8 @@ DRAW line
 ```{ggsql}
 SELECT date, value FROM 'timeseries.csv'
 VISUALISE date AS x, value AS y
-DRAW line MAPPING 'blue' AS color
-DRAW point MAPPING 'red' AS color SETTING size => 30
+DRAW line SETTING  color => 'blue'
+DRAW point SETTING size => 30, color => 'red'
 SCALE x SETTING type => 'date'
 LABEL title => 'Time Series with Points', x => 'Date', y => 'Value'
 ```
@@ -283,6 +283,69 @@ VISUALISE total AS y, category AS fill
 DRAW bar
 COORD polar
 LABEL title => 'Revenue Distribution by Category'
+```
+
+## Constant Mappings
+
+Constants can be used in both the VISUALISE clause (global) and MAPPING clauses (per-layer) to set fixed aesthetic values.
+
+### Global Constant in VISUALISE
+
+Set a constant color for all layers using the VISUALISE clause:
+
+```{ggsql}
+SELECT date, value FROM 'timeseries.csv'
+VISUALISE date AS x, value AS y, 'steelblue' AS color
+DRAW line
+DRAW point SETTING size => 50
+SCALE x SETTING type => 'date'
+LABEL title => 'Time Series with Global Constant Color'
+```
+
+### Different Constants Per Layer
+
+Each layer can have its own constant value, creating a legend showing all values:
+
+```{ggsql}
+WITH monthly AS (
+    SELECT
+        DATE_TRUNC('month', sale_date) as month,
+        category,
+        SUM(revenue) as revenue
+    FROM 'sales.csv'
+    GROUP BY DATE_TRUNC('month', sale_date), category
+)
+VISUALISE month AS x, revenue AS y
+DRAW line MAPPING 'Electronics' AS color FROM monthly FILTER category = 'Electronics'
+DRAW line MAPPING 'Clothing' AS color FROM monthly FILTER category = 'Clothing'
+DRAW line MAPPING 'Furniture' AS color FROM monthly FILTER category = 'Furniture'
+SCALE x SETTING type => 'date'
+LABEL title => 'Revenue by Category (Constant Colors)', x => 'Month', y => 'Revenue ($)'
+```
+
+### Mixed Constants and Columns
+
+When mixing constant and column mappings for the same aesthetic, the axis/legend label uses the first non-constant column name:
+
+```{ggsql}
+SELECT date, value, category FROM 'metrics.csv'
+VISUALISE date AS x
+DRAW line MAPPING value AS y, category AS color
+DRAW point MAPPING 120 AS y, 'Threshold' AS color SETTING size => 20
+SCALE x SETTING type => 'date'
+LABEL title => 'Metrics with Threshold Line', x => 'Date'
+```
+
+### Numeric Constants
+
+Numbers work as constants too:
+
+```{ggsql}
+SELECT x, y FROM 'data.csv'
+VISUALISE x, y
+DRAW point MAPPING 'blue' AS color, 100 AS size
+DRAW point MAPPING 'red' AS color, 50 AS size FILTER y > 50
+LABEL title => 'Scatter Plot with Constant Sizes'
 ```
 
 ## Layer filtering

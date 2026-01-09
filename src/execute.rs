@@ -3,7 +3,7 @@
 //! Provides shared execution logic for building data maps from queries,
 //! handling both global SQL and layer-specific data sources.
 
-use crate::parser::ast::{AestheticValue, Layer, LiteralValue};
+use crate::parser::ast::{AestheticValue, GlobalMapping, GlobalMappingItem, Layer, LiteralValue};
 use crate::{parser, DataFrame, GgsqlError, LayerSource, Result, VizSpec};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
@@ -156,6 +156,12 @@ fn const_column_name(aesthetic: &str) -> String {
     format!("__ggsql_const_{}__", aesthetic)
 }
 
+/// Generate synthetic column name for a constant aesthetic with layer index
+/// Used when injecting constants into global data so different layers can have different values
+fn const_column_name_indexed(aesthetic: &str, layer_idx: usize) -> String {
+    format!("__ggsql_const_{}_{}__", aesthetic, layer_idx)
+}
+
 /// Format a literal value as SQL
 fn literal_to_sql(lit: &LiteralValue) -> String {
     match lit {
@@ -191,11 +197,22 @@ fn extract_constants(layer: &Layer) -> Vec<(String, LiteralValue)> {
 /// After data has been fetched with constants injected as columns, this function
 /// updates the spec so that aesthetics point to the synthetic column names instead
 /// of literal values.
+///
+/// For layers using global data (no source, no filter), uses layer-indexed column names
+/// (e.g., `__ggsql_const_color_0__`) since constants are injected into global data.
+/// For other layers, uses non-indexed column names (e.g., `__ggsql_const_color__`).
 fn replace_literals_with_columns(spec: &mut VizSpec) {
-    for layer in &mut spec.layers {
+    for (layer_idx, layer) in spec.layers.iter_mut().enumerate() {
         for (aesthetic, value) in layer.aesthetics.iter_mut() {
             if matches!(value, AestheticValue::Literal(_)) {
-                *value = AestheticValue::Column(const_column_name(aesthetic));
+                // Use layer-indexed column name for layers using global data (no source, no filter)
+                // Use non-indexed name for layers with their own data (filter or explicit source)
+                let col_name = if layer.source.is_none() && layer.filter.is_none() {
+                    const_column_name_indexed(aesthetic, layer_idx)
+                } else {
+                    const_column_name(aesthetic)
+                };
+                *value = AestheticValue::Column(col_name);
             }
         }
     }
@@ -493,15 +510,93 @@ where
     // Build data map for multi-source support
     let mut data_map: HashMap<String, DataFrame> = HashMap::new();
 
+    // Collect constants from layers that use global data (no source, no filter)
+    // These get injected into the global data table so all layers share the same data source
+    // (required for faceting to work). Use layer-indexed column names to allow different
+    // constant values per layer (e.g., layer 0: 'blue' AS color, layer 1: 'red' AS color)
+    let first_spec = &specs[0];
+
+    // First, extract global constants from VISUALISE clause (e.g., VISUALISE 'blue' AS color)
+    // These apply to all layers that use global data
+    let global_mapping_constants: Vec<(String, LiteralValue)> =
+        if let GlobalMapping::Mappings(items) = &first_spec.global_mapping {
+            items
+                .iter()
+                .filter_map(|item| {
+                    if let GlobalMappingItem::Literal { value, aesthetic } = item {
+                        Some((aesthetic.clone(), value.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+    // Find layers that use global data (no source, no filter)
+    let global_data_layer_indices: Vec<usize> = first_spec
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.source.is_none() && layer.filter.is_none())
+        .map(|(idx, _)| idx)
+        .collect();
+
+    // Collect all constants: layer-specific constants + global constants for each global-data layer
+    let mut global_constants: Vec<(usize, String, LiteralValue)> = Vec::new();
+
+    // Add layer-specific constants (from MAPPING clauses)
+    for (layer_idx, layer) in first_spec.layers.iter().enumerate() {
+        if layer.source.is_none() && layer.filter.is_none() {
+            for (aes, lit) in extract_constants(layer) {
+                global_constants.push((layer_idx, aes, lit));
+            }
+        }
+    }
+
+    // Add global mapping constants for each layer that uses global data
+    // (these will be propagated to layers during resolve_global_mappings)
+    for layer_idx in &global_data_layer_indices {
+        for (aes, lit) in &global_mapping_constants {
+            // Only add if this layer doesn't already have this aesthetic from its own MAPPING
+            let layer = &first_spec.layers[*layer_idx];
+            if !layer.aesthetics.contains_key(aes) {
+                global_constants.push((*layer_idx, aes.clone(), lit.clone()));
+            }
+        }
+    }
+
     // Execute global SQL if present
     // If there's a WITH clause, extract just the trailing SELECT and transform CTE references.
     // The global result is stored as a temp table so filtered layers can query it efficiently.
     if !sql_part.trim().is_empty() {
         if let Some(transformed_sql) = transform_global_sql(&sql_part, &materialized_ctes) {
+            // Inject global constants into the query (with layer-indexed names)
+            let global_query = if global_constants.is_empty() {
+                transformed_sql
+            } else {
+                let const_cols: Vec<String> = global_constants
+                    .iter()
+                    .map(|(layer_idx, aes, lit)| {
+                        format!(
+                            "{} AS {}",
+                            literal_to_sql(lit),
+                            const_column_name_indexed(aes, *layer_idx)
+                        )
+                    })
+                    .collect();
+                format!(
+                    "SELECT *, {} FROM ({})",
+                    const_cols.join(", "),
+                    transformed_sql
+                )
+            };
+
             // Create temp table for global result
             let create_global = format!(
                 "CREATE OR REPLACE TEMP TABLE __ggsql_global__ AS {}",
-                transformed_sql
+                global_query
             );
             execute_query(&create_global)?;
 
@@ -514,14 +609,20 @@ where
     // Execute layer-specific queries
     // build_layer_query() handles all cases:
     // - Layer with source (CTE, table, or file) → query that source
-    // - Layer with filter or constants but no source → query __ggsql_global__ with filter/constants
-    // - Layer with no source, filter, or constants → returns None (use global directly)
-    let first_spec = &specs[0];
+    // - Layer with filter but no source → query __ggsql_global__ with filter and constants
+    // - Layer with no source, no filter → returns None (use global directly, constants already injected)
     let has_global = data_map.contains_key("__global__");
 
     for (idx, layer) in first_spec.layers.iter().enumerate() {
         let filter_sql = layer.filter.as_ref().map(|f| f.as_str());
-        let constants = extract_constants(layer);
+
+        // For layers using global data without filter, constants are already in global data
+        // (injected with layer-indexed names). For other layers, extract constants for injection.
+        let constants = if layer.source.is_none() && layer.filter.is_none() {
+            vec![] // Constants already in global data
+        } else {
+            extract_constants(layer)
+        };
 
         if let Some(layer_query) = build_layer_query(
             layer.source.as_ref(),
