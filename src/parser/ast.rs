@@ -658,12 +658,14 @@ impl VizSpec {
             GlobalMapping::Mappings(items) => items
                 .iter()
                 .map(|item| match item {
-                    GlobalMappingItem::Explicit { column, aesthetic } => {
-                        (aesthetic.clone(), AestheticValue::Column(column.clone()))
-                    }
-                    GlobalMappingItem::Implicit { name } => {
-                        (name.clone(), AestheticValue::Column(name.clone()))
-                    }
+                    GlobalMappingItem::Explicit { column, aesthetic } => (
+                        normalise_aes_name(aesthetic),
+                        AestheticValue::Column(column.clone()),
+                    ),
+                    GlobalMappingItem::Implicit { name } => (
+                        normalise_aes_name(name),
+                        AestheticValue::Column(name.clone()),
+                    ),
                 })
                 .collect(),
         };
@@ -677,7 +679,12 @@ impl VizSpec {
                     available_columns
                         .iter()
                         .filter(|col| supported.contains(col))
-                        .map(|col| (col.to_string(), AestheticValue::Column(col.to_string())))
+                        .map(|col| {
+                            (
+                                normalise_aes_name(&col.to_string()),
+                                AestheticValue::Column(col.to_string()),
+                            )
+                        })
                         .collect()
                 } else {
                     explicit_mappings.clone()
@@ -685,7 +692,10 @@ impl VizSpec {
 
             // Merge: layer aesthetics override global
             for (aesthetic, value) in base_aesthetics {
-                layer.aesthetics.entry(aesthetic).or_insert(value);
+                layer
+                    .aesthetics
+                    .entry(normalise_aes_name(&aesthetic))
+                    .or_insert(value);
             }
         }
 
@@ -789,6 +799,13 @@ impl std::fmt::Display for LiteralValue {
             LiteralValue::Number(n) => write!(f, "{}", n),
             LiteralValue::Boolean(b) => write!(f, "{}", b),
         }
+    }
+}
+
+pub fn normalise_aes_name(name: &String) -> String {
+    match name.as_str() {
+        "col" | "colour" => "color".to_string(),
+        _ => name.clone(),
     }
 }
 

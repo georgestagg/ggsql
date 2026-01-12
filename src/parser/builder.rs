@@ -210,7 +210,7 @@ fn parse_explicit_mapping(node: &Node, source: &str) -> Result<GlobalMappingItem
     match (column, aesthetic) {
         (Some(col), Some(aes)) => Ok(GlobalMappingItem::Explicit {
             column: col,
-            aesthetic: aes,
+            aesthetic: normalise_aes_name(&aes),
         }),
         _ => Err(GgsqlError::ParseError(
             "Invalid explicit mapping: missing column or aesthetic".to_string(),
@@ -387,7 +387,7 @@ fn parse_mapping_item(node: &Node, source: &str) -> Result<(String, AestheticVal
     for child in node.children(&mut cursor) {
         match child.kind() {
             "aesthetic_name" => {
-                aesthetic_name = get_node_text(&child, source);
+                aesthetic_name = normalise_aes_name(&get_node_text(&child, source));
             }
             "mapping_value" => {
                 aesthetic_value = Some(parse_mapping_value(&child, source)?);
