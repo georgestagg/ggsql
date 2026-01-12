@@ -763,8 +763,14 @@ mod tests {
         materialized.insert("sales".to_string());
         let source = LayerSource::Identifier("sales".to_string());
 
-        let result =
-            build_layer_query(Some(&source), &materialized, Some("year = 2024"), None, false, 0);
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            Some("year = 2024"),
+            None,
+            false,
+            0,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -791,8 +797,14 @@ mod tests {
         let materialized = HashSet::new();
         let source = LayerSource::Identifier("some_table".to_string());
 
-        let result =
-            build_layer_query(Some(&source), &materialized, Some("value > 100"), None, false, 0);
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            Some("value > 100"),
+            None,
+            false,
+            0,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -869,8 +881,14 @@ mod tests {
         let materialized = HashSet::new();
         let source = LayerSource::Identifier("some_table".to_string());
 
-        let result =
-            build_layer_query(Some(&source), &materialized, None, Some("date ASC"), false, 0);
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            None,
+            Some("date ASC"),
+            false,
+            0,
+        );
 
         assert_eq!(
             result.unwrap(),
