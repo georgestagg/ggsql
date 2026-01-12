@@ -1233,7 +1233,7 @@ impl Writer for VegaLiteWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::{Labels, Layer, ParameterValue, LiteralValue};
+    use crate::parser::ast::{Labels, Layer, LiteralValue, ParameterValue};
     use std::collections::HashMap;
 
     /// Helper to wrap a DataFrame in a data map for testing
