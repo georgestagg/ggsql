@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::Result;
+use crate::{DataFrame, GgsqlError, Result};
 
 /// Complete ggSQL visualization specification
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -396,6 +396,211 @@ impl Geom {
             },
         }
     }
+
+    /// Check if this geom requires a statistical transformation
+    ///
+    /// Returns true if the geom needs data to be transformed before rendering.
+    /// This is used to determine if a layer needs to query data even when
+    /// it has no explicit source or filter.
+    pub fn needs_stat_transform(&self, aesthetics: &HashMap<String, AestheticValue>) -> bool {
+        match self {
+            Geom::Histogram => true,
+            Geom::Bar => !aesthetics.contains_key("y"), // Only if y not mapped
+            Geom::Density => true,
+            Geom::Smooth => true,
+            Geom::Boxplot => true,
+            Geom::Violin => true,
+            _ => false,
+        }
+    }
+
+    /// Apply statistical transformation to the layer query.
+    ///
+    /// Some geoms require data transformations before rendering:
+    /// - Histogram: bin continuous values and count
+    /// - Bar (with only x mapped): count occurrences per category
+    /// - Density: kernel density estimation (future)
+    /// - Smooth: regression/smoothing (future)
+    ///
+    /// The default implementation returns the query unchanged.
+    ///
+    /// # Arguments
+    /// * `query` - The base SQL query (with filter applied)
+    /// * `aesthetics` - Layer aesthetic mappings (to find x, y columns)
+    /// * `group_by` - Combined partition_by + facet variables for grouping
+    /// * `execute_query` - Closure to execute SQL for data inspection
+    pub fn apply_stat_transform<F>(
+        &self,
+        query: &str,
+        aesthetics: &HashMap<String, AestheticValue>,
+        group_by: &[String],
+        execute_query: &F,
+    ) -> Result<String>
+    where
+        F: Fn(&str) -> Result<DataFrame>,
+    {
+        match self {
+            Geom::Histogram => self.stat_histogram(query, aesthetics, group_by, execute_query),
+            Geom::Bar => self.stat_bar_count(query, aesthetics, group_by),
+            // Future: Geom::Density, Geom::Smooth, etc.
+            _ => Ok(query.to_string()),
+        }
+    }
+
+    /// Statistical transformation for histogram: bin continuous values and count
+    fn stat_histogram<F>(
+        &self,
+        query: &str,
+        aesthetics: &HashMap<String, AestheticValue>,
+        group_by: &[String],
+        execute_query: &F,
+    ) -> Result<String>
+    where
+        F: Fn(&str) -> Result<DataFrame>,
+    {
+        // Get x column name from aesthetics
+        let x_col = get_column_name(aesthetics, "x").ok_or_else(|| {
+            GgsqlError::ValidationError("Histogram requires 'x' aesthetic mapping".to_string())
+        })?;
+
+        // Query data to compute bin width using Sturges' rule
+        let stats_query = format!(
+            "SELECT MIN({x}) as min_val, MAX({x}) as max_val, COUNT(*) as n FROM ({query})",
+            x = x_col,
+            query = query
+        );
+        let stats_df = execute_query(&stats_query)?;
+
+        let (min_val, max_val, n) = extract_histogram_stats(&stats_df)?;
+        let bin_width = compute_bin_width(min_val, max_val, n);
+
+        // Build the bin expression
+        let bin_expr = format!("FLOOR({x} / {w}) * {w}", x = x_col, w = bin_width);
+
+        // Build grouped columns (group_by includes partition_by + facet variables)
+        let group_cols = if group_by.is_empty() {
+            bin_expr.clone()
+        } else {
+            let mut cols: Vec<String> = group_by.iter().cloned().collect();
+            cols.push(bin_expr.clone());
+            cols.join(", ")
+        };
+
+        let select_cols = if group_by.is_empty() {
+            format!("{} AS x, COUNT(*) AS y", bin_expr)
+        } else {
+            let grp_cols = group_by.join(", ");
+            format!("{}, {} AS x, COUNT(*) AS y", grp_cols, bin_expr)
+        };
+
+        Ok(format!(
+            "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
+            query = query,
+            select = select_cols,
+            group = group_cols
+        ))
+    }
+
+    /// Statistical transformation for bar: count occurrences when y is not mapped
+    fn stat_bar_count(
+        &self,
+        query: &str,
+        aesthetics: &HashMap<String, AestheticValue>,
+        group_by: &[String],
+    ) -> Result<String> {
+        // Only apply count stat if y is not mapped
+        if aesthetics.contains_key("y") {
+            return Ok(query.to_string());
+        }
+
+        let x_col = get_column_name(aesthetics, "x").ok_or_else(|| {
+            GgsqlError::ValidationError("Bar requires 'x' aesthetic mapping".to_string())
+        })?;
+
+        // Build grouped columns (group_by includes partition_by + facet variables + x)
+        let group_cols = if group_by.is_empty() {
+            x_col.clone()
+        } else {
+            let mut cols = group_by.to_vec();
+            cols.push(x_col.clone());
+            cols.join(", ")
+        };
+
+        let select_cols = if group_by.is_empty() {
+            format!("{x} AS x, COUNT(*) AS y", x = x_col)
+        } else {
+            let grp_cols = group_by.join(", ");
+            format!("{g}, {x} AS x, COUNT(*) AS y", g = grp_cols, x = x_col)
+        };
+
+        Ok(format!(
+            "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
+            query = query,
+            select = select_cols,
+            group = group_cols
+        ))
+    }
+}
+
+/// Helper to extract column name from aesthetic value
+fn get_column_name(aesthetics: &HashMap<String, AestheticValue>, aesthetic: &str) -> Option<String> {
+    aesthetics.get(aesthetic).and_then(|v| match v {
+        AestheticValue::Column(col) => Some(col.clone()),
+        _ => None,
+    })
+}
+
+/// Extract min, max, and count from histogram stats DataFrame
+fn extract_histogram_stats(df: &DataFrame) -> Result<(f64, f64, usize)> {
+    if df.height() == 0 {
+        return Err(GgsqlError::ValidationError(
+            "No data for histogram statistics".to_string(),
+        ));
+    }
+
+    let min_val = df
+        .column("min_val")
+        .ok()
+        .and_then(|s| s.f64().ok())
+        .and_then(|ca| ca.get(0))
+        .ok_or_else(|| {
+            GgsqlError::ValidationError("Could not extract min value for histogram".to_string())
+        })?;
+
+    let max_val = df
+        .column("max_val")
+        .ok()
+        .and_then(|s| s.f64().ok())
+        .and_then(|ca| ca.get(0))
+        .ok_or_else(|| {
+            GgsqlError::ValidationError("Could not extract max value for histogram".to_string())
+        })?;
+
+    let n = df
+        .column("n")
+        .ok()
+        .and_then(|s| s.i64().ok())
+        .and_then(|ca| ca.get(0))
+        .map(|v| v as usize)
+        .ok_or_else(|| {
+            GgsqlError::ValidationError("Could not extract count for histogram".to_string())
+        })?;
+
+    Ok((min_val, max_val, n))
+}
+
+/// Compute bin width using Sturges' rule: bins = ceil(log2(n) + 1)
+fn compute_bin_width(min_val: f64, max_val: f64, n: usize) -> f64 {
+    if n == 0 || min_val >= max_val {
+        return 1.0; // Fallback
+    }
+
+    // Sturges' rule
+    let num_bins = ((n as f64).log2() + 1.0).ceil() as usize;
+    let num_bins = num_bins.max(1);
+
+    let range = max_val - min_val;
+    range / num_bins as f64
 }
 
 /// Value for aesthetic mappings
@@ -504,6 +709,24 @@ pub enum FacetScales {
     Free,
     FreeX,
     FreeY,
+}
+
+impl Facet {
+    /// Get all variables used for faceting
+    ///
+    /// Returns all column names that will be used to split the data into facets.
+    /// For Wrap facets, returns the variables list.
+    /// For Grid facets, returns combined rows and cols variables.
+    pub fn get_variables(&self) -> Vec<String> {
+        match self {
+            Facet::Wrap { variables, .. } => variables.clone(),
+            Facet::Grid { rows, cols, .. } => {
+                let mut vars = rows.clone();
+                vars.extend(cols.iter().cloned());
+                vars
+            }
+        }
+    }
 }
 
 /// Coordinate system (from COORD clause)

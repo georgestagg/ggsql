@@ -46,7 +46,8 @@ pub mod execute;
 
 // Re-export key types for convenience
 pub use parser::{
-    AestheticValue, Geom, GlobalMapping, GlobalMappingItem, Layer, LayerSource, Scale, VizSpec,
+    AestheticValue, Facet, FilterExpression, Geom, GlobalMapping, GlobalMappingItem, Layer,
+    LayerSource, Scale, VizSpec,
 };
 
 // Future modules - not yet implemented

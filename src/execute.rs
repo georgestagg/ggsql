@@ -3,7 +3,7 @@
 //! Provides shared execution logic for building data maps from queries,
 //! handling both global SQL and layer-specific data sources.
 
-use crate::{parser, DataFrame, GgsqlError, LayerSource, Result, VizSpec};
+use crate::{parser, DataFrame, Facet, GgsqlError, Layer, LayerSource, Result, VizSpec};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
@@ -256,22 +256,32 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
 ///
 /// Handles:
 /// - `None` source with filter → queries `__ggsql_global__`
+/// - `None` source with stat transform needed → queries `__ggsql_global__`
 /// - `None` source without filter → returns `None` (use global directly)
 /// - `Identifier` source → checks if CTE, uses temp table or table name
 /// - `FilePath` source → wraps path in single quotes
 ///
+/// Also applies statistical transformations for geoms that need them
+/// (e.g., histogram binning, bar counting).
+///
 /// Returns:
 /// - `Ok(Some(query))` - execute this query and store result
-/// - `Ok(None)` - layer uses `__global__` directly (no source, no filter)
+/// - `Ok(None)` - layer uses `__global__` directly (no source, no filter, no stat transform)
 /// - `Err(...)` - validation error (e.g., filter without global data)
-fn build_layer_query(
-    source: Option<&LayerSource>,
+fn build_layer_query<F>(
+    layer: &Layer,
     materialized_ctes: &HashSet<String>,
-    filter: Option<&str>,
     has_global: bool,
     layer_idx: usize,
-) -> Result<Option<String>> {
-    let table_name = match source {
+    facet: Option<&Facet>,
+    execute_query: &F,
+) -> Result<Option<String>>
+where
+    F: Fn(&str) -> Result<DataFrame>,
+{
+    let filter = layer.filter.as_ref().map(|f| f.as_str());
+
+    let table_name = match &layer.source {
         Some(LayerSource::Identifier(name)) => {
             // Check if it's a materialized CTE
             if materialized_ctes.contains(name) {
@@ -295,18 +305,45 @@ fn build_layer_query(
                 }
                 "__ggsql_global__".to_string()
             } else {
-                // No source, no filter - use __global__ data directly
-                return Ok(None);
+                // Check if stat transform is needed
+                if layer.geom.needs_stat_transform(&layer.aesthetics) {
+                    if !has_global {
+                        return Err(GgsqlError::ValidationError(format!(
+                            "Layer {} requires data for statistical transformation but no data source.",
+                            layer_idx + 1
+                        )));
+                    }
+                    "__ggsql_global__".to_string()
+                } else {
+                    // No source, no filter, no stat transform - use __global__ data directly
+                    return Ok(None);
+                }
             }
         }
     };
 
-    let query = format!("SELECT * FROM {}", table_name);
-    Ok(Some(if let Some(f) = filter {
-        format!("{} WHERE {}", query, f)
-    } else {
-        query
-    }))
+    // Build base query with filter
+    let mut query = format!("SELECT * FROM {}", table_name);
+    if let Some(f) = filter {
+        query = format!("{} WHERE {}", query, f);
+    }
+
+    // Combine partition_by and facet variables for grouping
+    let mut group_by = layer.partition_by.clone();
+    if let Some(f) = facet {
+        for var in f.get_variables() {
+            if !group_by.contains(&var) {
+                group_by.push(var);
+            }
+        }
+    }
+
+    // Apply statistical transformation (after filter, uses combined group_by)
+    query = layer
+        .geom
+        .apply_stat_transform(&query, &layer.aesthetics, &group_by, execute_query)?;
+
+    Ok(Some(query))
 }
 
 /// Check if SQL contains executable statements (SELECT, INSERT, UPDATE, DELETE, CREATE)
@@ -453,14 +490,13 @@ where
     let has_global = data_map.contains_key("__global__");
 
     for (idx, layer) in first_spec.layers.iter().enumerate() {
-        let filter_sql = layer.filter.as_ref().map(|f| f.as_str());
-
         if let Some(layer_query) = build_layer_query(
-            layer.source.as_ref(),
+            layer,
             &materialized_ctes,
-            filter_sql,
             has_global,
             idx,
+            first_spec.facet.as_ref(),
+            &execute_query,
         )? {
             let df = execute_query(&layer_query).map_err(|e| {
                 GgsqlError::ReaderError(format!(
@@ -526,6 +562,7 @@ pub fn prepare_data(query: &str, reader: &DuckDBReader) -> Result<PreparedData> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FilterExpression, Geom};
 
     #[cfg(feature = "duckdb")]
     #[test]
@@ -734,13 +771,21 @@ mod tests {
     // Build Layer Query Tests
     // ========================================
 
+    /// Mock execute function for tests that don't need actual data
+    fn mock_execute(_sql: &str) -> Result<DataFrame> {
+        // Return empty DataFrame - tests that need real data use DuckDB
+        Ok(DataFrame::default())
+    }
+
     #[test]
     fn test_build_layer_query_with_cte() {
         let mut materialized = HashSet::new();
         materialized.insert("sales".to_string());
-        let source = LayerSource::Identifier("sales".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::Identifier("sales".to_string()));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         // Should use temp table name
         assert_eq!(
@@ -753,9 +798,12 @@ mod tests {
     fn test_build_layer_query_with_cte_and_filter() {
         let mut materialized = HashSet::new();
         materialized.insert("sales".to_string());
-        let source = LayerSource::Identifier("sales".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, Some("year = 2024"), false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::Identifier("sales".to_string()));
+        layer.filter = Some(FilterExpression::new("year = 2024"));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         assert_eq!(
             result.unwrap(),
@@ -766,9 +814,11 @@ mod tests {
     #[test]
     fn test_build_layer_query_without_cte() {
         let materialized = HashSet::new();
-        let source = LayerSource::Identifier("some_table".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::Identifier("some_table".to_string()));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         // Should use table name directly
         assert_eq!(
@@ -780,9 +830,12 @@ mod tests {
     #[test]
     fn test_build_layer_query_table_with_filter() {
         let materialized = HashSet::new();
-        let source = LayerSource::Identifier("some_table".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, Some("value > 100"), false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::Identifier("some_table".to_string()));
+        layer.filter = Some(FilterExpression::new("value > 100"));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         assert_eq!(
             result.unwrap(),
@@ -793,9 +846,11 @@ mod tests {
     #[test]
     fn test_build_layer_query_file_path() {
         let materialized = HashSet::new();
-        let source = LayerSource::FilePath("data/sales.csv".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::FilePath("data/sales.csv".to_string()));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         // File paths should be wrapped in single quotes
         assert_eq!(
@@ -807,9 +862,12 @@ mod tests {
     #[test]
     fn test_build_layer_query_file_path_with_filter() {
         let materialized = HashSet::new();
-        let source = LayerSource::FilePath("data.parquet".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, Some("x > 10"), false, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.source = Some(LayerSource::FilePath("data.parquet".to_string()));
+        layer.filter = Some(FilterExpression::new("x > 10"));
+
+        let result = build_layer_query(&layer, &materialized, false, 0, None, &mock_execute);
 
         assert_eq!(
             result.unwrap(),
@@ -821,7 +879,10 @@ mod tests {
     fn test_build_layer_query_none_source_with_filter() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, Some("category = 'A'"), true, 0);
+        let mut layer = Layer::new(Geom::Point);
+        layer.filter = Some(FilterExpression::new("category = 'A'"));
+
+        let result = build_layer_query(&layer, &materialized, true, 0, None, &mock_execute);
 
         // Should query __ggsql_global__ with filter
         assert_eq!(
@@ -834,7 +895,9 @@ mod tests {
     fn test_build_layer_query_none_source_no_filter() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, None, true, 0);
+        let layer = Layer::new(Geom::Point);
+
+        let result = build_layer_query(&layer, &materialized, true, 0, None, &mock_execute);
 
         // Should return None - layer uses __global__ directly
         assert_eq!(result.unwrap(), None);
@@ -844,7 +907,10 @@ mod tests {
     fn test_build_layer_query_filter_without_global_errors() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, Some("x > 10"), false, 2);
+        let mut layer = Layer::new(Geom::Point);
+        layer.filter = Some(FilterExpression::new("x > 10"));
+
+        let result = build_layer_query(&layer, &materialized, false, 2, None, &mock_execute);
 
         // Should return validation error
         assert!(result.is_err());
@@ -1100,5 +1166,221 @@ mod tests {
 
         // Layer 1 should have 2 rows (cat='A' AND active=true)
         assert_eq!(result.data.get("__layer_1__").unwrap().height(), 2);
+    }
+
+    // ========================================
+    // Statistical Transformation Tests
+    // ========================================
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_histogram_stat_transform() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data with continuous values
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE hist_test AS SELECT RANDOM() * 100 as value FROM range(100)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        let query = r#"
+            SELECT * FROM hist_test
+            VISUALISE
+            DRAW histogram MAPPING value AS x
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should have layer 0 data with binned results
+        assert!(result.data.contains_key("__layer_0__"));
+        let layer_df = result.data.get("__layer_0__").unwrap();
+
+        // Should have x (bin) and y (count) columns
+        let col_names: Vec<&str> = layer_df.get_column_names().iter().map(|s| s.as_str()).collect();
+        assert!(col_names.contains(&"x"));
+        assert!(col_names.contains(&"y"));
+
+        // Should have fewer rows than original (binned)
+        assert!(layer_df.height() < 100);
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_bar_count_stat_transform() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data with categories
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE bar_test AS SELECT * FROM (VALUES ('A'), ('B'), ('A'), ('C'), ('A'), ('B')) AS t(category)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        // Bar with only x mapped - should apply count stat
+        let query = r#"
+            SELECT * FROM bar_test
+            VISUALISE
+            DRAW bar MAPPING category AS x
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should have layer 0 data with counted results
+        assert!(result.data.contains_key("__layer_0__"));
+        let layer_df = result.data.get("__layer_0__").unwrap();
+
+        // Should have 3 rows (3 unique categories: A, B, C)
+        assert_eq!(layer_df.height(), 3);
+
+        // Should have x and y columns
+        let col_names: Vec<&str> = layer_df.get_column_names().iter().map(|s| s.as_str()).collect();
+        assert!(col_names.contains(&"x"));
+        assert!(col_names.contains(&"y"));
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_bar_no_transform_when_y_mapped() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data with categories and values
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE bar_y_test AS SELECT * FROM (VALUES ('A', 10), ('B', 20), ('C', 30)) AS t(category, value)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        // Bar with x and y mapped - should NOT apply count stat
+        let query = r#"
+            SELECT * FROM bar_y_test
+            VISUALISE
+            DRAW bar MAPPING category AS x, value AS y
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should NOT have layer 0 data (no transformation needed, uses global)
+        assert!(!result.data.contains_key("__layer_0__"));
+        assert!(result.data.contains_key("__global__"));
+
+        // Global should have original 3 rows
+        let global_df = result.data.get("__global__").unwrap();
+        assert_eq!(global_df.height(), 3);
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_histogram_with_facet() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data with region facet
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE facet_hist_test AS SELECT * FROM (VALUES
+                    (10.0, 'North'), (20.0, 'North'), (30.0, 'North'), (40.0, 'North'), (50.0, 'North'),
+                    (15.0, 'South'), (25.0, 'South'), (35.0, 'South'), (45.0, 'South'), (55.0, 'South')
+                ) AS t(value, region)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        let query = r#"
+            SELECT * FROM facet_hist_test
+            VISUALISE
+            DRAW histogram MAPPING value AS x
+            FACET WRAP region
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should have layer 0 data with binned results
+        assert!(result.data.contains_key("__layer_0__"));
+        let layer_df = result.data.get("__layer_0__").unwrap();
+
+        // Should have region column preserved for faceting
+        let col_names: Vec<&str> = layer_df.get_column_names().iter().map(|s| s.as_str()).collect();
+        assert!(col_names.contains(&"region"));
+        assert!(col_names.contains(&"x"));
+        assert!(col_names.contains(&"y"));
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_bar_count_with_partition_by() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data with categories and groups
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE bar_partition_test AS SELECT * FROM (VALUES
+                    ('A', 'G1'), ('B', 'G1'), ('A', 'G1'),
+                    ('A', 'G2'), ('B', 'G2'), ('C', 'G2')
+                ) AS t(category, grp)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        // Bar with only x mapped and partition by
+        let query = r#"
+            SELECT * FROM bar_partition_test
+            VISUALISE
+            DRAW bar MAPPING category AS x PARTITION BY grp
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should have layer 0 data with counted results
+        assert!(result.data.contains_key("__layer_0__"));
+        let layer_df = result.data.get("__layer_0__").unwrap();
+
+        // Should have grp column preserved for grouping
+        let col_names: Vec<&str> = layer_df.get_column_names().iter().map(|s| s.as_str()).collect();
+        assert!(col_names.contains(&"grp"));
+        assert!(col_names.contains(&"x"));
+        assert!(col_names.contains(&"y"));
+
+        // G1 has A(2), B(1) = 2 rows; G2 has A(1), B(1), C(1) = 3 rows; total = 5 rows
+        assert_eq!(layer_df.height(), 5);
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_point_no_stat_transform() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        // Create test data
+        reader
+            .connection()
+            .execute(
+                "CREATE TABLE point_test AS SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) AS t(x, y)",
+                duckdb::params![],
+            )
+            .unwrap();
+
+        // Point geom should NOT apply any stat transform
+        let query = r#"
+            SELECT * FROM point_test
+            VISUALISE
+            DRAW point MAPPING x AS x, y AS y
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        // Should NOT have layer 0 data (no transformation, uses global)
+        assert!(!result.data.contains_key("__layer_0__"));
+        assert!(result.data.contains_key("__global__"));
+
+        // Global should have original 3 rows
+        let global_df = result.data.get("__global__").unwrap();
+        assert_eq!(global_df.height(), 3);
     }
 }
