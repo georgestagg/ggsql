@@ -935,6 +935,7 @@ impl VegaLiteWriter {
                 | "color"
                 | "colour"
                 | "fill"
+                | "stroke"
                 | "opacity"
                 | "size"
                 | "shape"

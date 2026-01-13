@@ -552,7 +552,7 @@ module.exports = grammar({
       // Position aesthetics
       'x', 'y', 'xmin', 'xmax', 'ymin', 'ymax', 'xend', 'yend',
       // Color aesthetics
-      'color', 'colour', 'fill', 'opacity',
+      'color', 'colour', 'fill', 'stroke', 'opacity',
       // Size and shape
       'size', 'shape', 'linetype', 'linewidth', 'width', 'height',
       // Text aesthetics

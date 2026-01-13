@@ -261,7 +261,7 @@ impl Geom {
             // Position geoms
             Geom::Point => GeomAesthetics {
                 supported: &[
-                    "x", "y", "color", "colour", "fill", "size", "shape", "opacity",
+                    "x", "y", "color", "colour", "fill", "stroke", "size", "shape", "opacity",
                 ],
                 required: &["x", "y"],
             },
@@ -271,6 +271,7 @@ impl Geom {
                     "y",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -283,6 +284,7 @@ impl Geom {
                     "y",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -290,66 +292,72 @@ impl Geom {
                 required: &["x", "y"],
             },
             Geom::Bar => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "width", "opacity"],
+                supported: &[
+                    "x", "y", "color", "colour", "fill", "stroke", "width", "opacity",
+                ],
                 required: &["x", "y"],
             },
             Geom::Col => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "width", "opacity"],
+                supported: &[
+                    "x", "y", "color", "colour", "stroke", "fill", "width", "opacity",
+                ],
                 required: &["x", "y"],
             },
             Geom::Area => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "opacity"],
+                supported: &["x", "y", "color", "colour", "stroke", "fill", "opacity"],
                 required: &["x", "y"],
             },
             Geom::Tile => GeomAesthetics {
                 supported: &[
-                    "x", "y", "color", "colour", "fill", "width", "height", "opacity",
+                    "x", "y", "color", "colour", "fill", "stroke", "width", "height", "opacity",
                 ],
                 required: &["x", "y"],
             },
             Geom::Polygon => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "opacity"],
+                supported: &["x", "y", "color", "colour", "fill", "stroke", "opacity"],
                 required: &["x", "y"],
             },
             Geom::Ribbon => GeomAesthetics {
-                supported: &["x", "ymin", "ymax", "color", "colour", "fill", "opacity"],
+                supported: &[
+                    "x", "ymin", "ymax", "color", "colour", "fill", "stroke", "opacity",
+                ],
                 required: &["x", "ymin", "ymax"],
             },
 
             // Statistical geoms
             Geom::Histogram => GeomAesthetics {
-                supported: &["x", "color", "colour", "fill", "opacity"],
+                supported: &["x", "color", "colour", "fill", "stroke", "opacity"],
                 required: &["x"],
             },
             Geom::Density => GeomAesthetics {
-                supported: &["x", "color", "colour", "fill", "opacity"],
+                supported: &["x", "color", "colour", "fill", "stroke", "opacity"],
                 required: &["x"],
             },
             Geom::Smooth => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "linetype", "opacity"],
+                supported: &["x", "y", "color", "colour", "stroke", "linetype", "opacity"],
                 required: &["x", "y"],
             },
             Geom::Boxplot => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "opacity"],
+                supported: &["x", "y", "color", "colour", "fill", "stroke", "opacity"],
                 required: &["x", "y"],
             },
             Geom::Violin => GeomAesthetics {
-                supported: &["x", "y", "color", "colour", "fill", "opacity"],
+                supported: &["x", "y", "color", "colour", "fill", "stroke", "opacity"],
                 required: &["x", "y"],
             },
 
             // Annotation geoms
             Geom::Text => GeomAesthetics {
                 supported: &[
-                    "x", "y", "label", "color", "colour", "size", "opacity", "family", "fontface",
-                    "hjust", "vjust",
+                    "x", "y", "label", "color", "colour", "stroke", "size", "opacity", "family",
+                    "fontface", "hjust", "vjust",
                 ],
                 required: &["x", "y"],
             },
             Geom::Label => GeomAesthetics {
                 supported: &[
-                    "x", "y", "label", "color", "colour", "fill", "size", "opacity", "family",
-                    "fontface", "hjust", "vjust",
+                    "x", "y", "label", "color", "colour", "fill", "stroke", "size", "opacity",
+                    "family", "fontface", "hjust", "vjust",
                 ],
                 required: &["x", "y"],
             },
@@ -361,6 +369,7 @@ impl Geom {
                     "yend",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -375,6 +384,7 @@ impl Geom {
                     "yend",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -386,6 +396,7 @@ impl Geom {
                     "yintercept",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -397,6 +408,7 @@ impl Geom {
                     "xintercept",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -409,6 +421,7 @@ impl Geom {
                     "intercept",
                     "color",
                     "colour",
+                    "stroke",
                     "linetype",
                     "linewidth",
                     "opacity",
@@ -425,6 +438,7 @@ impl Geom {
                     "xmax",
                     "color",
                     "colour",
+                    "stroke",
                     "linewidth",
                     "opacity",
                 ],
@@ -694,15 +708,18 @@ impl VizSpec {
             GlobalMapping::Mappings(items) => items
                 .iter()
                 .map(|item| match item {
-                    GlobalMappingItem::Explicit { column, aesthetic } => {
-                        (aesthetic.clone(), AestheticValue::Column(column.clone()))
-                    }
-                    GlobalMappingItem::Implicit { name } => {
-                        (name.clone(), AestheticValue::Column(name.clone()))
-                    }
-                    GlobalMappingItem::Literal { value, aesthetic } => {
-                        (aesthetic.clone(), AestheticValue::Literal(value.clone()))
-                    }
+                    GlobalMappingItem::Explicit { column, aesthetic } => (
+                        normalise_aes_name(aesthetic),
+                        AestheticValue::Column(column.clone()),
+                    ),
+                    GlobalMappingItem::Implicit { name } => (
+                        normalise_aes_name(name),
+                        AestheticValue::Column(name.clone()),
+                    ),
+                    GlobalMappingItem::Literal { value, aesthetic } => (
+                        normalise_aes_name(aesthetic),
+                        AestheticValue::Literal(value.clone()),
+                    ),
                 })
                 .collect(),
         };
@@ -716,7 +733,12 @@ impl VizSpec {
                     available_columns
                         .iter()
                         .filter(|col| supported.contains(col))
-                        .map(|col| (col.to_string(), AestheticValue::Column(col.to_string())))
+                        .map(|col| {
+                            (
+                                normalise_aes_name(col),
+                                AestheticValue::Column(col.to_string()),
+                            )
+                        })
                         .collect()
                 } else {
                     explicit_mappings.clone()
@@ -724,7 +746,21 @@ impl VizSpec {
 
             // Merge: layer aesthetics override global
             for (aesthetic, value) in base_aesthetics {
-                layer.aesthetics.entry(aesthetic).or_insert(value);
+                layer
+                    .aesthetics
+                    .entry(normalise_aes_name(&aesthetic))
+                    .or_insert(value);
+            }
+
+            if layer.aesthetics.contains_key("color") {
+                let supported = layer.geom.aesthetics().supported;
+                for &aes in &["stroke", "fill"] {
+                    if supported.contains(&aes) {
+                        let color = layer.aesthetics.get("color").unwrap().clone();
+                        layer.aesthetics.entry(aes.to_string()).or_insert(color);
+                    }
+                }
+                layer.aesthetics.remove("color");
             }
         }
 
@@ -815,7 +851,8 @@ impl Layer {
 
     /// Add an aesthetic mapping
     pub fn with_aesthetic(mut self, aesthetic: String, value: AestheticValue) -> Self {
-        self.aesthetics.insert(aesthetic, value);
+        self.aesthetics
+            .insert(normalise_aes_name(&aesthetic), value);
         self
     }
 
@@ -884,6 +921,13 @@ impl std::fmt::Display for LiteralValue {
             LiteralValue::Number(n) => write!(f, "{}", n),
             LiteralValue::Boolean(b) => write!(f, "{}", b),
         }
+    }
+}
+
+pub fn normalise_aes_name(name: &str) -> String {
+    match name {
+        "col" | "colour" => "color".to_owned(),
+        _ => name.to_owned(),
     }
 }
 

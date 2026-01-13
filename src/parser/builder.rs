@@ -212,7 +212,7 @@ fn parse_explicit_mapping(node: &Node, source: &str) -> Result<GlobalMappingItem
     match (value, aesthetic) {
         (Some(AestheticValue::Column(col)), Some(aes)) => Ok(GlobalMappingItem::Explicit {
             column: col,
-            aesthetic: aes,
+            aesthetic: normalise_aes_name(&aes),
         }),
         (Some(AestheticValue::Literal(lit)), Some(aes)) => Ok(GlobalMappingItem::Literal {
             value: lit,
@@ -398,7 +398,7 @@ fn parse_mapping_item(node: &Node, source: &str) -> Result<(String, AestheticVal
     for child in node.children(&mut cursor) {
         match child.kind() {
             "aesthetic_name" => {
-                aesthetic_name = get_node_text(&child, source);
+                aesthetic_name = normalise_aes_name(&get_node_text(&child, source));
             }
             "mapping_value" => {
                 aesthetic_value = Some(parse_mapping_value(&child, source)?);
@@ -1017,6 +1017,7 @@ fn is_aesthetic_name(name: &str) -> bool {
             | "color"
             | "colour"
             | "fill"
+            | "stroke"
             | "opacity"
             | "size"
             | "shape"
