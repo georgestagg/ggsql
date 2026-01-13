@@ -367,14 +367,15 @@ module.exports = grammar({
       $.theme_clause,
     ),
 
-    // DRAW clause - syntax: DRAW geom [MAPPING ...] [SETTING ...] [PARTITION BY ...] [FILTER ...]
+    // DRAW clause - syntax: DRAW geom [MAPPING ...] [SETTING ...] [FILTER ...] [PARTITION BY ...] [ORDER BY ...]
     draw_clause: $ => seq(
       caseInsensitive('DRAW'),
       $.geom_type,
       optional($.mapping_clause),
       optional($.setting_clause),
+      optional($.filter_clause),
       optional($.partition_clause),
-      optional($.filter_clause)
+      optional($.order_clause)
     ),
 
     geom_type: $ => choice(
@@ -464,6 +465,8 @@ module.exports = grammar({
     filter_expression: $ => prec.right(repeat1($.filter_token)),
 
     // Individual tokens that can appear in a filter expression
+    // NOTE: This must NOT match PARTITION or ORDER as identifiers, since those
+    // keywords start subsequent clauses in draw_clause
     filter_token: $ => choice(
       // SQL keywords commonly used in WHERE clauses
       caseInsensitive('AND'),
@@ -487,10 +490,10 @@ module.exports = grammar({
       caseInsensitive('AS'),
       caseInsensitive('TRUE'),
       caseInsensitive('FALSE'),
-      // Values and identifiers
+      // Values and identifiers (lower precedence to allow keywords to take priority)
       $.string,
       $.number,
-      $.identifier,
+      $.filter_identifier,
       // Comparison operators (as explicit tokens)
       token('='),
       token('!='),
@@ -518,6 +521,31 @@ module.exports = grammar({
       token(')'),
       token(','),
       token('.')
+    ),
+
+    // ORDER BY clause for layer sorting: ORDER BY date ASC, value DESC
+    order_clause: $ => seq(
+      caseInsensitive('ORDER'),
+      caseInsensitive('BY'),
+      $.order_expression
+    ),
+
+    // Raw SQL ORDER BY expression - captures column names and sort directions
+    order_expression: $ => prec.right(repeat1($.order_token)),
+
+    // Individual tokens that can appear in an order expression
+    order_token: $ => choice(
+      $.identifier,
+      $.number,
+      caseInsensitive('ASC'),
+      caseInsensitive('DESC'),
+      caseInsensitive('NULLS'),
+      caseInsensitive('FIRST'),
+      caseInsensitive('LAST'),
+      ',',
+      '.',
+      '(',
+      ')'
     ),
 
     aesthetic_name: $ => choice(
@@ -716,6 +744,10 @@ module.exports = grammar({
 
     // Basic tokens
     identifier: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
+
+    // Identifier for use in filter expressions - uses lower precedence so that
+    // keywords like PARTITION and ORDER can take priority and end the filter
+    filter_identifier: $ => token(prec(-1, /[a-zA-Z_][a-zA-Z0-9_]*/)),
 
     number: $ => token(seq(
       optional('-'),
