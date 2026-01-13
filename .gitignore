@@ -105,6 +105,7 @@ secrets.toml
 
 # Generated documentation
 target/doc/
+doc/_site/
 
 # Profiling data
 perf.data*
