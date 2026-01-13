@@ -20,7 +20,6 @@
 //! ```
 
 use serde::{Deserialize, Serialize};
-use serde_json::to_string;
 use std::collections::HashMap;
 
 use crate::Result;
@@ -696,7 +695,7 @@ impl VizSpec {
                         .filter(|col| supported.contains(col))
                         .map(|col| {
                             (
-                                normalise_aes_name(&col.to_string()),
+                                normalise_aes_name(col),
                                 AestheticValue::Column(col.to_string()),
                             )
                         })
@@ -829,10 +828,10 @@ impl std::fmt::Display for LiteralValue {
     }
 }
 
-pub fn normalise_aes_name(name: &String) -> String {
-    match name.as_str() {
-        "col" | "colour" => "color".to_string(),
-        _ => name.clone(),
+pub fn normalise_aes_name(name: &str) -> String {
+    match name {
+        "col" | "colour" => "color".to_owned(),
+        _ => name.to_owned(),
     }
 }
 
