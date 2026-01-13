@@ -3554,10 +3554,9 @@ mod tests {
         layer
             .aesthetics
             .insert("x".to_string(), AestheticValue::Column("date".to_string()));
-        layer.aesthetics.insert(
-            "y".to_string(),
-            AestheticValue::Column("value".to_string()),
-        );
+        layer
+            .aesthetics
+            .insert("y".to_string(), AestheticValue::Column("value".to_string()));
         spec.layers.push(layer);
 
         let df = df! {
