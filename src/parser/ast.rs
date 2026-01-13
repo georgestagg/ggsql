@@ -69,7 +69,7 @@ pub enum GlobalMappingItem {
     Explicit { column: String, aesthetic: String },
     /// Implicit mapping: `x` → column "x" maps to aesthetic "x"
     Implicit { name: String },
-    /// Literal mapping: `'blue' AS color` → literal value maps to aesthetic
+    /// Literal mapping: `'value' AS color` → literal value maps to aesthetic
     Literal {
         value: LiteralValue,
         aesthetic: String,
@@ -116,6 +116,8 @@ pub struct Layer {
     pub source: Option<LayerSource>,
     /// Optional filter expression for this layer
     pub filter: Option<FilterExpression>,
+    /// Optional ORDER BY expression for this layer
+    pub order_by: Option<OrderExpression>,
     /// Columns for grouping/partitioning (from PARTITION BY clause)
     pub partition_by: Vec<String>,
 }
@@ -135,6 +137,35 @@ pub struct FilterExpression(pub String);
 
 impl FilterExpression {
     /// Create a new filter expression from raw SQL text
+    pub fn new(sql: impl Into<String>) -> Self {
+        Self(sql.into())
+    }
+
+    /// Get the raw SQL text
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume and return the raw SQL text
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// Raw SQL ORDER BY expression for layer-specific sorting (from ORDER BY clause)
+///
+/// This stores the raw SQL ORDER BY clause text verbatim, which is passed directly
+/// to the database backend. This allows any valid SQL ORDER BY expression to be used.
+///
+/// Example order values:
+/// - `"date ASC"`
+/// - `"category, value DESC"`
+/// - `"date ASC NULLS FIRST, value DESC"`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrderExpression(pub String);
+
+impl OrderExpression {
+    /// Create a new order expression from raw SQL text
     pub fn new(sql: impl Into<String>) -> Self {
         Self(sql.into())
     }
@@ -759,6 +790,7 @@ impl Layer {
             parameters: HashMap::new(),
             source: None,
             filter: None,
+            order_by: None,
             partition_by: Vec::new(),
         }
     }
@@ -766,6 +798,12 @@ impl Layer {
     /// Set the filter expression
     pub fn with_filter(mut self, filter: FilterExpression) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    /// Set the ORDER BY expression
+    pub fn with_order_by(mut self, order: OrderExpression) -> Self {
+        self.order_by = Some(order);
         self
     }
 

@@ -328,7 +328,7 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
 /// - `Identifier` source → checks if CTE, uses temp table or table name
 /// - `FilePath` source → wraps path in single quotes
 ///
-/// Constants are injected as synthetic columns (e.g., `'blue' AS __ggsql_const_color__`).
+/// Constants are injected as synthetic columns (e.g., `'value' AS __ggsql_const_color__`).
 ///
 /// Returns:
 /// - `Ok(Some(query))` - execute this query and store result
@@ -338,6 +338,7 @@ fn build_layer_query(
     source: Option<&LayerSource>,
     materialized_ctes: &HashSet<String>,
     filter: Option<&str>,
+    order_by: Option<&str>,
     has_global: bool,
     layer_idx: usize,
     constants: &[(String, LiteralValue)],
@@ -356,24 +357,24 @@ fn build_layer_query(
             format!("'{}'", path)
         }
         None => {
-            // No source - validate and use global if filter or constants present
-            if filter.is_some() || !constants.is_empty() {
+            // No source - validate and use global if filter, order_by or constants present
+            if filter.is_some() || order_by.is_some() || !constants.is_empty() {
                 if !has_global {
                     return Err(GgsqlError::ValidationError(format!(
-                        "Layer {} has a FILTER or constants but no data source. Either provide a SQL query or use MAPPING FROM.",
+                        "Layer {} has a FILTER, ORDER BY, or constants but no data source. Either provide a SQL query or use MAPPING FROM.",
                         layer_idx + 1
                     )));
                 }
                 "__ggsql_global__".to_string()
             } else {
-                // No source, no filter, no constants - use __global__ data directly
+                // No source, no filter, no order_by, no constants - use __global__ data directly
                 return Ok(None);
             }
         }
     };
 
     // Build query with optional constant columns
-    let query = if constants.is_empty() {
+    let mut query = if constants.is_empty() {
         format!("SELECT * FROM {}", table_name)
     } else {
         let const_cols: Vec<String> = constants
@@ -383,11 +384,15 @@ fn build_layer_query(
         format!("SELECT *, {} FROM {}", const_cols.join(", "), table_name)
     };
 
-    Ok(Some(if let Some(f) = filter {
-        format!("{} WHERE {}", query, f)
-    } else {
-        query
-    }))
+    if let Some(f) = filter {
+        query = format!("{} WHERE {}", query, f);
+    }
+
+    if let Some(o) = order_by {
+        query = format!("{} ORDER BY {}", query, o);
+    }
+
+    Ok(Some(query))
 }
 
 /// Check if SQL contains executable statements (SELECT, INSERT, UPDATE, DELETE, CREATE)
@@ -510,10 +515,10 @@ where
     // Collect constants from layers that use global data (no source, no filter)
     // These get injected into the global data table so all layers share the same data source
     // (required for faceting to work). Use layer-indexed column names to allow different
-    // constant values per layer (e.g., layer 0: 'blue' AS color, layer 1: 'red' AS color)
+    // constant values per layer (e.g., layer 0: 'value' AS color, layer 1: 'value2' AS color)
     let first_spec = &specs[0];
 
-    // First, extract global constants from VISUALISE clause (e.g., VISUALISE 'blue' AS color)
+    // First, extract global constants from VISUALISE clause (e.g., VISUALISE 'value' AS color)
     // These apply to all layers that use global data
     let global_mapping_constants: Vec<(String, LiteralValue)> =
         if let GlobalMapping::Mappings(items) = &first_spec.global_mapping {
@@ -606,12 +611,14 @@ where
     // Execute layer-specific queries
     // build_layer_query() handles all cases:
     // - Layer with source (CTE, table, or file) → query that source
-    // - Layer with filter but no source → query __ggsql_global__ with filter and constants
-    // - Layer with no source, no filter → returns None (use global directly, constants already injected)
+    // - Layer with filter/order_by but no source → query __ggsql_global__ with filter/order_by and constants
+    // - Layer with no source, no filter, no order_by → returns None (use global directly, constants already injected)
+    let first_spec = &specs[0];
     let has_global = data_map.contains_key("__global__");
 
     for (idx, layer) in first_spec.layers.iter().enumerate() {
         let filter_sql = layer.filter.as_ref().map(|f| f.as_str());
+        let order_sql = layer.order_by.as_ref().map(|o| o.as_str());
 
         // For layers using global data without filter, constants are already in global data
         // (injected with layer-indexed names). For other layers, extract constants for injection.
@@ -625,6 +632,7 @@ where
             layer.source.as_ref(),
             &materialized_ctes,
             filter_sql,
+            order_sql,
             has_global,
             idx,
             &constants,
@@ -911,7 +919,7 @@ mod tests {
         materialized.insert("sales".to_string());
         let source = LayerSource::Identifier("sales".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0, &[]);
+        let result = build_layer_query(Some(&source), &materialized, None, None, false, 0, &[]);
 
         // Should use temp table name
         assert_eq!(
@@ -930,6 +938,7 @@ mod tests {
             Some(&source),
             &materialized,
             Some("year = 2024"),
+            None,
             false,
             0,
             &[],
@@ -946,7 +955,7 @@ mod tests {
         let materialized = HashSet::new();
         let source = LayerSource::Identifier("some_table".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0, &[]);
+        let result = build_layer_query(Some(&source), &materialized, None, None, false, 0, &[]);
 
         // Should use table name directly
         assert_eq!(
@@ -964,6 +973,7 @@ mod tests {
             Some(&source),
             &materialized,
             Some("value > 100"),
+            None,
             false,
             0,
             &[],
@@ -980,7 +990,7 @@ mod tests {
         let materialized = HashSet::new();
         let source = LayerSource::FilePath("data/sales.csv".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0, &[]);
+        let result = build_layer_query(Some(&source), &materialized, None, None, false, 0, &[]);
 
         // File paths should be wrapped in single quotes
         assert_eq!(
@@ -994,7 +1004,15 @@ mod tests {
         let materialized = HashSet::new();
         let source = LayerSource::FilePath("data.parquet".to_string());
 
-        let result = build_layer_query(Some(&source), &materialized, Some("x > 10"), false, 0, &[]);
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            Some("x > 10"),
+            None,
+            false,
+            0,
+            &[],
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1006,7 +1024,15 @@ mod tests {
     fn test_build_layer_query_none_source_with_filter() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, Some("category = 'A'"), true, 0, &[]);
+        let result = build_layer_query(
+            None,
+            &materialized,
+            Some("category = 'A'"),
+            None,
+            true,
+            0,
+            &[],
+        );
 
         // Should query __ggsql_global__ with filter
         assert_eq!(
@@ -1019,7 +1045,7 @@ mod tests {
     fn test_build_layer_query_none_source_no_filter() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, None, true, 0, &[]);
+        let result = build_layer_query(None, &materialized, None, None, true, 0, &[]);
 
         // Should return None - layer uses __global__ directly
         assert_eq!(result.unwrap(), None);
@@ -1029,7 +1055,7 @@ mod tests {
     fn test_build_layer_query_filter_without_global_errors() {
         let materialized = HashSet::new();
 
-        let result = build_layer_query(None, &materialized, Some("x > 10"), false, 2, &[]);
+        let result = build_layer_query(None, &materialized, Some("x > 10"), None, false, 2, &[]);
 
         // Should return validation error
         assert!(result.is_err());
@@ -1039,38 +1065,110 @@ mod tests {
     }
 
     #[test]
+    fn test_build_layer_query_with_order_by() {
+        let materialized = HashSet::new();
+        let source = LayerSource::Identifier("some_table".to_string());
+
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            None,
+            Some("date ASC"),
+            false,
+            0,
+            &[],
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM some_table ORDER BY date ASC".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_layer_query_with_filter_and_order_by() {
+        let materialized = HashSet::new();
+        let source = LayerSource::Identifier("some_table".to_string());
+
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            Some("year = 2024"),
+            Some("date DESC, value ASC"),
+            false,
+            0,
+            &[],
+        );
+
+        assert_eq!(
+            result.unwrap(),
+            Some(
+                "SELECT * FROM some_table WHERE year = 2024 ORDER BY date DESC, value ASC"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_layer_query_none_source_with_order_by() {
+        let materialized = HashSet::new();
+
+        let result = build_layer_query(None, &materialized, None, Some("x ASC"), true, 0, &[]);
+
+        // Should query __ggsql_global__ with order_by
+        assert_eq!(
+            result.unwrap(),
+            Some("SELECT * FROM __ggsql_global__ ORDER BY x ASC".to_string())
+        );
+    }
+
+    #[test]
     fn test_build_layer_query_with_constants() {
         let materialized = HashSet::new();
         let source = LayerSource::Identifier("some_table".to_string());
         let constants = vec![
             (
                 "color".to_string(),
-                LiteralValue::String("blue".to_string()),
+                LiteralValue::String("value".to_string()),
             ),
-            ("size".to_string(), LiteralValue::Number(5.0)),
+            (
+                "size".to_string(),
+                LiteralValue::String("value2".to_string()),
+            ),
         ];
 
-        let result = build_layer_query(Some(&source), &materialized, None, false, 0, &constants);
+        let result = build_layer_query(
+            Some(&source),
+            &materialized,
+            None,
+            None,
+            false,
+            0,
+            &constants,
+        );
 
         // Should inject constants as columns
         let query = result.unwrap().unwrap();
         assert!(query.contains("SELECT *"));
-        assert!(query.contains("'blue' AS __ggsql_const_color__"));
-        assert!(query.contains("5 AS __ggsql_const_size__"));
+        assert!(query.contains("'value' AS __ggsql_const_color__"));
+        assert!(query.contains("'value2' AS __ggsql_const_size__"));
         assert!(query.contains("FROM some_table"));
     }
 
     #[test]
     fn test_build_layer_query_constants_on_global() {
         let materialized = HashSet::new();
-        let constants = vec![("fill".to_string(), LiteralValue::String("red".to_string()))];
+        let constants = vec![(
+            "fill".to_string(),
+            LiteralValue::String("value".to_string()),
+        )];
 
         // No source but has constants - should use __ggsql_global__
-        let result = build_layer_query(None, &materialized, None, true, 0, &constants);
+        let result = build_layer_query(None, &materialized, None, None, true, 0, &constants);
 
         let query = result.unwrap().unwrap();
         assert!(query.contains("FROM __ggsql_global__"));
-        assert!(query.contains("'red' AS __ggsql_const_fill__"));
+        assert!(query.contains("'value' AS __ggsql_const_fill__"));
     }
 
     // ========================================
