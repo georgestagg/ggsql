@@ -1066,6 +1066,21 @@ impl Writer for VegaLiteWriter {
                 })
             };
 
+            // Add window transform for Path geoms to preserve data order
+            // (Line geom uses Vega-Lite's default x-axis sorting)
+            if matches!(layer.geom, Geom::Path) {
+                let mut window_transform = json!({
+                    "window": [{"op": "row_number", "as": "__ggsql_order__"}]
+                });
+
+                // Add groupby if partition_by is present (restarts numbering per group)
+                if !layer.partition_by.is_empty() {
+                    window_transform["groupby"] = json!(layer.partition_by);
+                }
+
+                layer_spec["transform"] = json!([window_transform]);
+            }
+
             // Build encoding for this layer
             let mut encoding = Map::new();
             for (aesthetic, value) in &layer.aesthetics {
@@ -1097,6 +1112,17 @@ impl Writer for VegaLiteWriter {
             // Add detail encoding for partition_by columns (grouping)
             if let Some(detail) = self.build_detail_encoding(&layer.partition_by) {
                 encoding.insert("detail".to_string(), detail);
+            }
+
+            // Add order encoding for Path geoms (preserves data order instead of x-axis sorting)
+            if matches!(layer.geom, Geom::Path) {
+                encoding.insert(
+                    "order".to_string(),
+                    json!({
+                        "field": "__ggsql_order__",
+                        "type": "quantitative"
+                    }),
+                );
             }
 
             // Override axis titles from labels if present
@@ -3439,6 +3465,122 @@ mod tests {
         assert!(
             vl_spec["layer"][0]["encoding"]["color"]["value"].is_null(),
             "Should not have value encoding when MAPPING is present"
+        );
+    }
+
+    // ========================================
+    // Path Geom Order Preservation Tests
+    // ========================================
+
+    #[test]
+    fn test_path_geom_has_order_encoding_and_transform() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new();
+        let mut layer = Layer::new(Geom::Path);
+        layer
+            .aesthetics
+            .insert("x".to_string(), AestheticValue::Column("lon".to_string()));
+        layer
+            .aesthetics
+            .insert("y".to_string(), AestheticValue::Column("lat".to_string()));
+        spec.layers.push(layer);
+
+        let df = df! {
+            "lon" => &[1.0, 2.0, 3.0],
+            "lat" => &[4.0, 5.0, 6.0],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Path layer should have transform with row_number
+        let layer_spec = &vl_spec["layer"][0];
+        let transform = &layer_spec["transform"][0];
+        assert_eq!(transform["window"][0]["op"], "row_number");
+        assert_eq!(transform["window"][0]["as"], "__ggsql_order__");
+
+        // Path should have order encoding
+        let encoding = &layer_spec["encoding"];
+        assert!(
+            encoding.get("order").is_some(),
+            "Path geom should have order encoding"
+        );
+        assert_eq!(encoding["order"]["field"], "__ggsql_order__");
+        assert_eq!(encoding["order"]["type"], "quantitative");
+    }
+
+    #[test]
+    fn test_path_geom_with_partition_by() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new();
+        let mut layer = Layer::new(Geom::Path);
+        layer
+            .aesthetics
+            .insert("x".to_string(), AestheticValue::Column("lon".to_string()));
+        layer
+            .aesthetics
+            .insert("y".to_string(), AestheticValue::Column("lat".to_string()));
+        layer.partition_by = vec!["trip_id".to_string()];
+        spec.layers.push(layer);
+
+        let df = df! {
+            "lon" => &[1.0, 2.0, 3.0],
+            "lat" => &[4.0, 5.0, 6.0],
+            "trip_id" => &["A", "A", "B"],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Transform should have groupby for partition
+        let transform = &vl_spec["layer"][0]["transform"][0];
+        assert_eq!(
+            transform["groupby"],
+            json!(["trip_id"]),
+            "Transform should have groupby for partition_by columns"
+        );
+    }
+
+    #[test]
+    fn test_line_geom_no_order_encoding() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = VizSpec::new();
+        let mut layer = Layer::new(Geom::Line);
+        layer
+            .aesthetics
+            .insert("x".to_string(), AestheticValue::Column("date".to_string()));
+        layer.aesthetics.insert(
+            "y".to_string(),
+            AestheticValue::Column("value".to_string()),
+        );
+        spec.layers.push(layer);
+
+        let df = df! {
+            "date" => &["2024-01", "2024-02", "2024-03"],
+            "value" => &[10.0, 20.0, 30.0],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Line should NOT have transform
+        let layer_spec = &vl_spec["layer"][0];
+        assert!(
+            layer_spec.get("transform").is_none() || layer_spec["transform"].is_null(),
+            "Line geom should not have transform"
+        );
+
+        // Line should NOT have order encoding
+        let encoding = &layer_spec["encoding"];
+        assert!(
+            encoding.get("order").is_none(),
+            "Line geom should not have order encoding"
         );
     }
 }
