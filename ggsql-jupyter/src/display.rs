@@ -98,26 +98,16 @@ fn format_vegalite(spec: String) -> Value {
 
     json!({
         "data": {
-            // Primary MIME type - JupyterLab will render this natively (if vega5 extension installed)
-            "application/vnd.vegalite.v5+json": spec_value,
-
-            // HTML fallback - works everywhere with web connection
+            // HTML with embedded vega-embed for rendering
             "text/html": html,
-
-            // JSON fallback
-            "application/json": spec_value,
 
             // Text fallback
             "text/plain": "Vega-Lite visualization".to_string()
         },
-        "metadata": {
-            "application/vnd.vegalite.v5+json": {
-                "embedOptions": {
-                    "actions": true  // Show export/edit actions
-                }
-            }
-        },
-        "transient": {}
+        "metadata": {},
+        "transient": {},
+        // Route to Positron Plots pane
+        "output_location": "plot"
     })
 }
 
@@ -190,7 +180,7 @@ mod tests {
         let result = ExecutionResult::Visualization { spec };
         let display = format_display_data(result);
 
-        assert!(display["data"]["application/vnd.vegalite.v5+json"].is_object());
+        assert!(display["data"]["text/html"].is_string());
         assert!(display["data"]["text/plain"].is_string());
     }
 
