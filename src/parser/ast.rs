@@ -484,6 +484,7 @@ pub enum ScaleType {
     // Discrete scales
     Ordinal,
     Categorical,
+    Manual,
 
     // Temporal scales
     Date,
@@ -498,6 +499,9 @@ pub enum ScaleType {
     Cividis,
     Diverging,
     Sequential,
+
+    // Special
+    Identity,
 }
 
 /// Values for scale properties
