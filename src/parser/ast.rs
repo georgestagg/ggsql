@@ -102,6 +102,25 @@ impl Mappings {
     }
 }
 
+/// Result of a statistical transformation
+///
+/// Stat transforms like histogram and bar count produce new columns with computed values.
+/// This enum captures both the transformed query and the mappings from aesthetics to the
+/// new column names.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatResult {
+    /// No transformation needed - use original data as-is
+    Identity,
+    /// Transformation applied, with new aesthetic mappings
+    Transformed {
+        /// The transformed SQL query that produces the stat-computed columns
+        query: String,
+        /// New aesthetic mappings to apply: (aesthetic_name, new_column_name)
+        /// These should be applied to the layer's aesthetics after transformation
+        new_mappings: Vec<(String, String)>,
+    },
+}
+
 /// Data source for visualization or layer (from VISUALISE FROM or MAPPING ... FROM clause)
 ///
 /// Allows specification of a data source - either a CTE/table name or a file path.
@@ -461,15 +480,15 @@ impl Geom {
     /// * `group_by` - Combined partition_by + facet variables for grouping
     /// * `execute_query` - Closure to execute SQL for data inspection
     ///
-    /// Returns `Ok(None)` for identity (no transformation, use original data),
-    /// or `Ok(Some(query))` with the transformed query.
+    /// Returns `StatResult::Identity` for no transformation (use original data),
+    /// or `StatResult::Transformed` with the query and new aesthetic mappings.
     pub fn apply_stat_transform<F>(
         &self,
         query: &str,
         aesthetics: &Mappings,
         group_by: &[String],
         execute_query: &F,
-    ) -> Result<Option<String>>
+    ) -> Result<StatResult>
     where
         F: Fn(&str) -> Result<DataFrame>,
     {
@@ -477,7 +496,7 @@ impl Geom {
             Geom::Histogram => self.stat_histogram(query, aesthetics, group_by, execute_query),
             Geom::Bar => self.stat_bar_count(query, aesthetics, group_by, execute_query),
             // Future: Geom::Density, Geom::Smooth, etc.
-            _ => Ok(None), // Identity - no transformation
+            _ => Ok(StatResult::Identity),
         }
     }
 
@@ -488,7 +507,7 @@ impl Geom {
         aesthetics: &Mappings,
         group_by: &[String],
         execute_query: &F,
-    ) -> Result<Option<String>>
+    ) -> Result<StatResult>
     where
         F: Fn(&str) -> Result<DataFrame>,
     {
@@ -520,27 +539,42 @@ impl Geom {
             cols.join(", ")
         };
 
+        // Use semantically meaningful column names with prefix to avoid conflicts
         let select_cols = if group_by.is_empty() {
-            format!("{} AS x, COUNT(*) AS y", bin_expr)
+            format!(
+                "{} AS __ggsql_stat__bin, COUNT(*) AS __ggsql_stat__count",
+                bin_expr
+            )
         } else {
             let grp_cols = group_by.join(", ");
-            format!("{}, {} AS x, COUNT(*) AS y", grp_cols, bin_expr)
+            format!(
+                "{}, {} AS __ggsql_stat__bin, COUNT(*) AS __ggsql_stat__count",
+                grp_cols, bin_expr
+            )
         };
 
-        // Histogram always transforms
-        Ok(Some(format!(
+        let transformed_query = format!(
             "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
             query = query,
             select = select_cols,
             group = group_cols
-        )))
+        );
+
+        // Histogram always transforms - map x to bin column, y to count column
+        Ok(StatResult::Transformed {
+            query: transformed_query,
+            new_mappings: vec![
+                ("x".to_string(), "__ggsql_stat__bin".to_string()),
+                ("y".to_string(), "__ggsql_stat__count".to_string()),
+            ],
+        })
     }
 
     /// Statistical transformation for bar: COUNT/SUM vs identity based on y and weight mappings
     ///
     /// Decision logic for y:
-    /// - y mapped to literal → identity (None, use original data)
-    /// - y mapped to column that exists → identity (None, use original data)
+    /// - y mapped to literal → identity (use original data)
+    /// - y mapped to column that exists → identity (use original data)
     /// - y mapped to column that doesn't exist + from wildcard → aggregation
     /// - y mapped to column that doesn't exist + explicit → error
     /// - y not mapped → aggregation
@@ -552,14 +586,15 @@ impl Geom {
     /// - weight mapped to column that doesn't exist + from wildcard → COUNT(*)
     /// - weight mapped to column that doesn't exist + explicit → error
     ///
-    /// Returns `None` for identity (no transformation), `Some(query)` for aggregation.
+    /// Returns `StatResult::Identity` for identity (no transformation),
+    /// `StatResult::Transformed` for aggregation with new y mapping.
     fn stat_bar_count<F>(
         &self,
         query: &str,
         aesthetics: &Mappings,
         group_by: &[String],
         execute_query: &F,
-    ) -> Result<Option<String>>
+    ) -> Result<StatResult>
     where
         F: Fn(&str) -> Result<DataFrame>,
     {
@@ -591,7 +626,7 @@ impl Geom {
         if let Some(y_value) = aesthetics.get("y") {
             // Case 1: y is a literal value - use identity (no transformation)
             if y_value.is_literal() {
-                return Ok(None);
+                return Ok(StatResult::Identity);
             }
 
             // Case 2: y is a column reference - check if it exists in the data
@@ -601,9 +636,9 @@ impl Geom {
                 }
                 let columns = cached_columns.as_ref().unwrap();
 
-                if columns.iter().any(|c| c == &y_col) {
+                if columns.iter().any(|c| c == y_col) {
                     // y column exists - use identity (no transformation)
-                    return Ok(None);
+                    return Ok(StatResult::Identity);
                 } else if !y_value.is_from_wildcard() {
                     // y explicitly mapped but column doesn't exist - error
                     return Err(GgsqlError::ValidationError(format!(
@@ -616,8 +651,8 @@ impl Geom {
         }
 
         // y not mapped or wildcard y doesn't exist - apply aggregation (COUNT or SUM)
-        // Determine aggregation expression based on weight aesthetic
-        let agg_expr = if let Some(weight_value) = aesthetics.get("weight") {
+        // Determine aggregation expression and column name based on weight aesthetic
+        let (agg_expr, agg_col_name) = if let Some(weight_value) = aesthetics.get("weight") {
             // weight is mapped - check if it's valid
             if weight_value.is_literal() {
                 return Err(GgsqlError::ValidationError(
@@ -631,9 +666,12 @@ impl Geom {
                 }
                 let columns = cached_columns.as_ref().unwrap();
 
-                if columns.iter().any(|c| c == &weight_col) {
+                if columns.iter().any(|c| c == weight_col) {
                     // weight column exists - use SUM
-                    format!("SUM({}) AS y", weight_col)
+                    (
+                        format!("SUM({}) AS __ggsql_stat__sum", weight_col),
+                        "__ggsql_stat__sum".to_string(),
+                    )
                 } else if !weight_value.is_from_wildcard() {
                     // weight explicitly mapped but column doesn't exist - error
                     return Err(GgsqlError::ValidationError(format!(
@@ -642,15 +680,24 @@ impl Geom {
                     )));
                 } else {
                     // weight from wildcard but column doesn't exist - fall back to COUNT
-                    "COUNT(*) AS y".to_string()
+                    (
+                        "COUNT(*) AS __ggsql_stat__count".to_string(),
+                        "__ggsql_stat__count".to_string(),
+                    )
                 }
             } else {
                 // Shouldn't happen (not literal, not column), fall back to COUNT
-                "COUNT(*) AS y".to_string()
+                (
+                    "COUNT(*) AS __ggsql_stat__count".to_string(),
+                    "__ggsql_stat__count".to_string(),
+                )
             }
         } else {
             // weight not mapped - use COUNT
-            "COUNT(*) AS y".to_string()
+            (
+                "COUNT(*) AS __ggsql_stat__count".to_string(),
+                "__ggsql_stat__count".to_string(),
+            )
         };
 
         // Build grouped columns (group_by includes partition_by + facet variables + x)
@@ -662,24 +709,26 @@ impl Geom {
             cols.join(", ")
         };
 
+        // Keep original x column name, only add the aggregated stat column
         let select_cols = if group_by.is_empty() {
-            format!("{x} AS x, {agg}", x = x_col, agg = agg_expr)
+            format!("{x}, {agg}", x = x_col, agg = agg_expr)
         } else {
             let grp_cols = group_by.join(", ");
-            format!(
-                "{g}, {x} AS x, {agg}",
-                g = grp_cols,
-                x = x_col,
-                agg = agg_expr
-            )
+            format!("{g}, {x}, {agg}", g = grp_cols, x = x_col, agg = agg_expr)
         };
 
-        Ok(Some(format!(
+        let transformed_query = format!(
             "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
             query = query,
             select = select_cols,
             group = group_cols
-        )))
+        );
+
+        // Return with mapping for y aesthetic to the computed stat column
+        Ok(StatResult::Transformed {
+            query: transformed_query,
+            new_mappings: vec![("y".to_string(), agg_col_name)],
+        })
     }
 }
 

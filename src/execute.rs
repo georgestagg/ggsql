@@ -3,7 +3,7 @@
 //! Provides shared execution logic for building data maps from queries,
 //! handling both global SQL and layer-specific data sources.
 
-use crate::parser::ast::{AestheticValue, Layer, LiteralValue};
+use crate::parser::ast::{AestheticValue, Layer, LiteralValue, StatResult};
 use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Result, VizSpec};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
@@ -337,8 +337,11 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
 /// - `Ok(Some(query))` - execute this query and store result
 /// - `Ok(None)` - layer uses `__global__` directly (no source, no filter, no constants, no stat transform)
 /// - `Err(...)` - validation error (e.g., filter without global data)
+///
+/// Note: This function takes `&mut Layer` because stat transforms may add new aesthetic mappings
+/// (e.g., mapping y to `__ggsql_stat__count` for histogram or bar count).
 fn build_layer_query<F>(
-    layer: &Layer,
+    layer: &mut Layer,
     materialized_ctes: &HashSet<String>,
     has_global: bool,
     layer_idx: usize,
@@ -417,22 +420,39 @@ where
     }
 
     // Apply statistical transformation (after filter, uses combined group_by)
-    // Returns None for identity (no transformation needed), Some(query) for transformed query
+    // Returns StatResult::Identity for no transformation, StatResult::Transformed for transformed query
     let stat_result =
         layer
             .geom
             .apply_stat_transform(&query, &layer.aesthetics, &group_by, execute_query)?;
 
     match stat_result {
-        Some(transformed_query) => {
-            // Stat transformation applied - use the transformed query
+        StatResult::Transformed {
+            query: transformed_query,
+            new_mappings,
+        } => {
+            // Stat transformation applied - apply new aesthetic mappings to layer
+            for (aesthetic, column) in new_mappings {
+                layer.aesthetics.insert(
+                    aesthetic,
+                    AestheticValue::Column {
+                        name: column,
+                        from_wildcard: false,
+                    },
+                );
+            }
+
+            // Remove the weight aesthetic if present - it has been consumed by the stat transform
+            layer.aesthetics.aesthetics.remove("weight");
+
+            // Use the transformed query
             let mut final_query = transformed_query;
             if let Some(o) = order_by {
                 final_query = format!("{} ORDER BY {}", final_query, o);
             }
             Ok(Some(final_query))
         }
-        None => {
+        StatResult::Identity => {
             // Identity - no stat transformation
             // If the layer has no explicit source, no filter, no order_by, and no constants,
             // we can use __global__ directly (return None)
@@ -717,24 +737,28 @@ where
     // - Layer with source (CTE, table, or file) → query that source
     // - Layer with filter/order_by but no source → query __ggsql_global__ with filter/order_by and constants
     // - Layer with no source, no filter, no order_by → returns None (use global directly, constants already injected)
-    let first_spec = &specs[0];
     let has_global = data_map.contains_key("__global__");
+    let num_layers = specs[0].layers.len();
+    let facet = specs[0].facet.clone();
 
-    for (idx, layer) in first_spec.layers.iter().enumerate() {
+    for idx in 0..num_layers {
         // For layers using global data without filter, constants are already in global data
         // (injected with layer-indexed names). For other layers, extract constants for injection.
+        let layer = &specs[0].layers[idx];
         let constants = if layer.source.is_none() && layer.filter.is_none() {
             vec![] // Constants already in global data
         } else {
             extract_constants(layer)
         };
 
+        // Get mutable reference to layer for stat transform to update aesthetics
+        let layer = &mut specs[0].layers[idx];
         if let Some(layer_query) = build_layer_query(
             layer,
             &materialized_ctes,
             has_global,
             idx,
-            first_spec.facet.as_ref(),
+            facet.as_ref(),
             &constants,
             &execute_query,
         )? {
@@ -759,7 +783,7 @@ where
     }
 
     // For layers without specific sources, ensure global data exists
-    let has_layer_without_source = first_spec
+    let has_layer_without_source = specs[0]
         .layers
         .iter()
         .any(|l| l.source.is_none() && l.filter.is_none());
@@ -1018,7 +1042,15 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("sales".to_string()));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should use temp table name
         assert_eq!(
@@ -1036,7 +1068,15 @@ mod tests {
         layer.source = Some(DataSource::Identifier("sales".to_string()));
         layer.filter = Some(SqlExpression::new("year = 2024"));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1051,7 +1091,15 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should use table name directly
         assert_eq!(
@@ -1068,7 +1116,15 @@ mod tests {
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
         layer.filter = Some(SqlExpression::new("value > 100"));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1083,7 +1139,15 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::FilePath("data/sales.csv".to_string()));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // File paths should be wrapped in single quotes
         assert_eq!(
@@ -1100,7 +1164,15 @@ mod tests {
         layer.source = Some(DataSource::FilePath("data.parquet".to_string()));
         layer.filter = Some(SqlExpression::new("x > 10"));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1115,7 +1187,8 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.filter = Some(SqlExpression::new("category = 'A'"));
 
-        let result = build_layer_query(&layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result =
+            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
 
         // Should query __ggsql_global__ with filter
         assert_eq!(
@@ -1128,9 +1201,10 @@ mod tests {
     fn test_build_layer_query_none_source_no_filter() {
         let materialized = HashSet::new();
 
-        let layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::Point);
 
-        let result = build_layer_query(&layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result =
+            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
 
         // Should return None - layer uses __global__ directly
         assert_eq!(result.unwrap(), None);
@@ -1143,7 +1217,15 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.filter = Some(SqlExpression::new("x > 10"));
 
-        let result = build_layer_query(&layer, &materialized, false, 2, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            2,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should return validation error
         assert!(result.is_err());
@@ -1160,7 +1242,15 @@ mod tests {
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
         layer.order_by = Some(SqlExpression::new("date ASC"));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1177,7 +1267,15 @@ mod tests {
         layer.filter = Some(SqlExpression::new("year = 2024"));
         layer.order_by = Some(SqlExpression::new("date DESC, value ASC"));
 
-        let result = build_layer_query(&layer, &materialized, false, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &materialized,
+            false,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         assert_eq!(
             result.unwrap(),
@@ -1195,7 +1293,8 @@ mod tests {
         let mut layer = Layer::new(Geom::Point);
         layer.order_by = Some(SqlExpression::new("x ASC"));
 
-        let result = build_layer_query(&layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result =
+            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
 
         // Should query __ggsql_global__ with order_by
         assert_eq!(
@@ -1222,7 +1321,7 @@ mod tests {
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
 
         let result = build_layer_query(
-            &layer,
+            &mut layer,
             &materialized,
             false,
             0,
@@ -1248,10 +1347,10 @@ mod tests {
         )];
 
         // No source but has constants - should use __ggsql_global__
-        let layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::Point);
 
         let result = build_layer_query(
-            &layer,
+            &mut layer,
             &materialized,
             true,
             0,
@@ -1544,14 +1643,14 @@ mod tests {
         assert!(result.data.contains_key("__layer_0__"));
         let layer_df = result.data.get("__layer_0__").unwrap();
 
-        // Should have x (bin) and y (count) columns
+        // Should have __ggsql_stat__bin and __ggsql_stat__count columns
         let col_names: Vec<&str> = layer_df
             .get_column_names()
             .iter()
             .map(|s| s.as_str())
             .collect();
-        assert!(col_names.contains(&"x"));
-        assert!(col_names.contains(&"y"));
+        assert!(col_names.contains(&"__ggsql_stat__bin"));
+        assert!(col_names.contains(&"__ggsql_stat__count"));
 
         // Should have fewer rows than original (binned)
         assert!(layer_df.height() < 100);
@@ -1587,14 +1686,14 @@ mod tests {
         // Should have 3 rows (3 unique categories: A, B, C)
         assert_eq!(layer_df.height(), 3);
 
-        // Should have x and y columns
+        // Should have category (original x) and __ggsql_stat__count columns
         let col_names: Vec<&str> = layer_df
             .get_column_names()
             .iter()
             .map(|s| s.as_str())
             .collect();
-        assert!(col_names.contains(&"x"));
-        assert!(col_names.contains(&"y"));
+        assert!(col_names.contains(&"category"));
+        assert!(col_names.contains(&"__ggsql_stat__count"));
     }
 
     #[cfg(feature = "duckdb")]
@@ -1666,8 +1765,8 @@ mod tests {
             .map(|s| s.as_str())
             .collect();
         assert!(col_names.contains(&"region"));
-        assert!(col_names.contains(&"x"));
-        assert!(col_names.contains(&"y"));
+        assert!(col_names.contains(&"__ggsql_stat__bin"));
+        assert!(col_names.contains(&"__ggsql_stat__count"));
     }
 
     #[cfg(feature = "duckdb")]
@@ -1707,8 +1806,8 @@ mod tests {
             .map(|s| s.as_str())
             .collect();
         assert!(col_names.contains(&"grp"));
-        assert!(col_names.contains(&"x"));
-        assert!(col_names.contains(&"y"));
+        assert!(col_names.contains(&"category"));
+        assert!(col_names.contains(&"__ggsql_stat__count"));
 
         // G1 has A(2), B(1) = 2 rows; G2 has A(1), B(1), C(1) = 3 rows; total = 5 rows
         assert_eq!(layer_df.height(), 5);
@@ -1980,10 +2079,12 @@ mod tests {
 
         // Verify y values are sums: A=30 (10+20), B=30
         // SUM returns f64
-        let y_col = layer_df.column("y").expect("y column should exist");
+        let y_col = layer_df
+            .column("__ggsql_stat__sum")
+            .expect("__ggsql_stat__sum column should exist");
         let y_values: Vec<f64> = y_col
             .f64()
-            .expect("y should be f64 (SUM result)")
+            .expect("__ggsql_stat__sum should be f64 (SUM result)")
             .into_iter()
             .flatten()
             .collect();
@@ -2034,10 +2135,12 @@ mod tests {
         assert_eq!(layer_df.height(), 2);
 
         // Verify y values are counts: A=2, B=1
-        let y_col = layer_df.column("y").expect("y column should exist");
+        let y_col = layer_df
+            .column("__ggsql_stat__count")
+            .expect("__ggsql_stat__count column should exist");
         let y_values: Vec<i64> = y_col
             .i64()
-            .expect("y should be i64")
+            .expect("__ggsql_stat__count should be i64")
             .into_iter()
             .flatten()
             .collect();
@@ -2087,10 +2190,12 @@ mod tests {
         assert_eq!(layer_df.height(), 2);
 
         // Verify y values are counts: A=2, B=1
-        let y_col = layer_df.column("y").expect("y column should exist");
+        let y_col = layer_df
+            .column("__ggsql_stat__count")
+            .expect("__ggsql_stat__count column should exist");
         let y_values: Vec<i64> = y_col
             .i64()
-            .expect("y should be i64")
+            .expect("__ggsql_stat__count should be i64")
             .into_iter()
             .flatten()
             .collect();
@@ -2208,10 +2313,12 @@ mod tests {
 
         // Verify y values are sums: A=30, B=30
         // SUM returns f64
-        let y_col = layer_df.column("y").expect("y column should exist");
+        let y_col = layer_df
+            .column("__ggsql_stat__sum")
+            .expect("__ggsql_stat__sum column should exist");
         let y_values: Vec<f64> = y_col
             .f64()
-            .expect("y should be f64 (SUM result)")
+            .expect("__ggsql_stat__sum should be f64 (SUM result)")
             .into_iter()
             .flatten()
             .collect();

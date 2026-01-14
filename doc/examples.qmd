@@ -196,6 +196,52 @@ DRAW line
     PARTITION BY category
 ```
 
+## Statistical Transformations
+
+Statistical transformations automatically compute aggregations for certain geom types.
+
+### Histogram
+
+When using `DRAW histogram`, ggSQL automatically bins continuous data and counts occurrences. You only need to specify the x aesthetic:
+
+```{ggsql}
+SELECT revenue FROM 'sales.csv'
+VISUALISE revenue AS x
+DRAW histogram
+LABEL
+    title => 'Revenue Distribution',
+    x => 'Revenue ($)',
+    y => 'Count'
+```
+
+### Bar with Automatic Count
+
+When using `DRAW bar` without a y aesthetic, ggSQL automatically counts occurrences of each x value:
+
+```{ggsql}
+SELECT category FROM 'sales.csv'
+VISUALISE category AS x
+DRAW bar
+LABEL
+    title => 'Sales Count by Category',
+    x => 'Category',
+    y => 'Count'
+```
+
+### Bar with Weighted Count
+
+You can also specify a weight aesthetic to sum values instead of counting:
+
+```{ggsql}
+SELECT category, revenue FROM 'sales.csv'
+VISUALISE category AS x, revenue AS weight
+DRAW bar
+LABEL
+    title => 'Total Revenue by Category',
+    x => 'Category',
+    y => 'Revenue ($)'
+```
+
 ## Multiple Layers
 
 ### Line with Points
