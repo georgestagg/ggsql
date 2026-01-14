@@ -446,7 +446,15 @@ fn parse_setting_clause(node: &Node, source: &str) -> Result<HashMap<String, Par
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "parameter_assignment" {
-            let (param, value) = parse_parameter_assignment(&child, source)?;
+            let (param, mut value) = parse_parameter_assignment(&child, source)?;
+            match param.as_str() {
+                "color" | "col" | "colour" | "fill" | "stroke" => {
+                    if let ParameterValue::String(color) = value {
+                        value = ParameterValue::String(color_to_hex(&color));
+                    }
+                }
+                _ => {}
+            }
             parameters.insert(param, value);
         }
     }
