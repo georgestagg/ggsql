@@ -371,6 +371,11 @@ impl VegaLiteWriter {
                     }
                 }
 
+                // Hide axis for dummy x column (used when x is not mapped for bar charts)
+                if aesthetic == "x" && col.starts_with("__ggsql_stat__") {
+                    encoding["axis"] = json!(null);
+                }
+
                 Ok(encoding)
             }
             AestheticValue::Literal(lit) => {

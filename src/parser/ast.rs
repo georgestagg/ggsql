@@ -304,12 +304,14 @@ impl Geom {
                 required: &["x", "y"],
             },
             Geom::Bar => GeomAesthetics {
-                // Bar supports optional y - stat decides COUNT vs identity
+                // Bar supports optional x and y - stat decides aggregation
+                // If x is missing: single bar showing total
+                // If y is missing: stat computes COUNT or SUM(weight)
                 // weight: optional, if mapped uses SUM(weight) instead of COUNT(*)
                 supported: &[
                     "x", "y", "weight", "color", "colour", "fill", "width", "opacity",
                 ],
-                required: &["x"],
+                required: &[],
             },
             Geom::Area => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "opacity"],
@@ -598,9 +600,9 @@ impl Geom {
     where
         F: Fn(&str) -> Result<DataFrame>,
     {
-        let x_col = get_column_name(aesthetics, "x").ok_or_else(|| {
-            GgsqlError::ValidationError("Bar requires 'x' aesthetic mapping".to_string())
-        })?;
+        // x is now optional - if not mapped, we'll use a dummy constant
+        let x_col = get_column_name(aesthetics, "x");
+        let use_dummy_x = x_col.is_none();
 
         // Lazily fetch schema columns (only when needed for column existence checks)
         let mut cached_columns: Option<Vec<String>> = None;
@@ -700,34 +702,85 @@ impl Geom {
             )
         };
 
-        // Build grouped columns (group_by includes partition_by + facet variables + x)
-        let group_cols = if group_by.is_empty() {
-            x_col.clone()
+        // Build the query based on whether x is mapped or not
+        let (transformed_query, new_mappings) = if use_dummy_x {
+            // x is not mapped - use dummy constant, no GROUP BY on x
+            let select_cols = if group_by.is_empty() {
+                format!(
+                    "'__ggsql_stat__dummy__' AS __ggsql_stat__x, {agg}",
+                    agg = agg_expr
+                )
+            } else {
+                let grp_cols = group_by.join(", ");
+                format!(
+                    "{g}, '__ggsql_stat__dummy__' AS __ggsql_stat__x, {agg}",
+                    g = grp_cols,
+                    agg = agg_expr
+                )
+            };
+
+            let query_str = if group_by.is_empty() {
+                // No grouping at all - single aggregate
+                format!(
+                    "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__",
+                    query = query,
+                    select = select_cols
+                )
+            } else {
+                // Group by partition/facet variables only
+                let group_cols = group_by.join(", ");
+                format!(
+                    "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
+                    query = query,
+                    select = select_cols,
+                    group = group_cols
+                )
+            };
+
+            // Add mappings for both x (dummy) and y (aggregate)
+            (
+                query_str,
+                vec![
+                    ("x".to_string(), "__ggsql_stat__x".to_string()),
+                    ("y".to_string(), agg_col_name),
+                ],
+            )
         } else {
-            let mut cols = group_by.to_vec();
-            cols.push(x_col.clone());
-            cols.join(", ")
+            // x is mapped - use existing logic
+            let x_col = x_col.unwrap();
+
+            // Build grouped columns (group_by includes partition_by + facet variables + x)
+            let group_cols = if group_by.is_empty() {
+                x_col.clone()
+            } else {
+                let mut cols = group_by.to_vec();
+                cols.push(x_col.clone());
+                cols.join(", ")
+            };
+
+            // Keep original x column name, only add the aggregated stat column
+            let select_cols = if group_by.is_empty() {
+                format!("{x}, {agg}", x = x_col, agg = agg_expr)
+            } else {
+                let grp_cols = group_by.join(", ");
+                format!("{g}, {x}, {agg}", g = grp_cols, x = x_col, agg = agg_expr)
+            };
+
+            let query_str = format!(
+                "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
+                query = query,
+                select = select_cols,
+                group = group_cols
+            );
+
+            // Only add y mapping
+            (query_str, vec![("y".to_string(), agg_col_name)])
         };
 
-        // Keep original x column name, only add the aggregated stat column
-        let select_cols = if group_by.is_empty() {
-            format!("{x}, {agg}", x = x_col, agg = agg_expr)
-        } else {
-            let grp_cols = group_by.join(", ");
-            format!("{g}, {x}, {agg}", g = grp_cols, x = x_col, agg = agg_expr)
-        };
-
-        let transformed_query = format!(
-            "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
-            query = query,
-            select = select_cols,
-            group = group_cols
-        );
-
-        // Return with mapping for y aesthetic to the computed stat column
+        // Return with new aesthetic mappings
         Ok(StatResult::Transformed {
             query: transformed_query,
-            new_mappings: vec![("y".to_string(), agg_col_name)],
+            new_mappings,
         })
     }
 }
@@ -1450,12 +1503,13 @@ mod tests {
         assert!(!line.supported.contains(&"size"));
         assert_eq!(line.required, &["x", "y"]);
 
-        // Bar geom - optional y (stat decides COUNT vs identity)
+        // Bar geom - optional x and y (stat decides aggregation)
         let bar = Geom::Bar.aesthetics();
         assert!(bar.supported.contains(&"fill"));
         assert!(bar.supported.contains(&"width"));
         assert!(bar.supported.contains(&"y")); // Bar accepts optional y
-        assert_eq!(bar.required, &["x"]); // Only x required
+        assert!(bar.supported.contains(&"x")); // Bar accepts optional x
+        assert_eq!(bar.required, &[] as &[&str]); // No required aesthetics
 
         // Text geom
         let text = Geom::Text.aesthetics();
