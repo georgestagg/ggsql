@@ -1367,6 +1367,16 @@ fn with_statement_has_trailing_select(with_node: &Node) -> bool {
     false
 }
 
+fn color_to_hex(value: &str) -> String {
+    match csscolorparser::parse(value) {
+        Ok(value) => value.to_css_hex(),
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
