@@ -715,6 +715,7 @@ fn parse_scale_type(text: &str) -> Result<ScaleType> {
         "viridis" => Ok(ScaleType::Viridis),
         "plasma" => Ok(ScaleType::Plasma),
         "diverging" => Ok(ScaleType::Diverging),
+        "sequential" => Ok(ScaleType::Sequential),
         _ => Err(GgsqlError::ParseError(format!(
             "Unknown scale type: {}",
             text
