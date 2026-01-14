@@ -315,7 +315,7 @@ LABEL
 SELECT category, SUM(revenue) as total
 FROM 'sales.csv'
 GROUP BY category
-VISUALISE total AS y, category AS fill
+VISUALISE category AS x, total AS y, category AS fill
 DRAW bar
 COORD polar
 LABEL 
