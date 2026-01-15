@@ -263,7 +263,11 @@ impl VegaLiteWriter {
         spec: &VizSpec,
     ) -> Result<Value> {
         match value {
-            AestheticValue::Column { name: col, .. } => {
+            AestheticValue::Column {
+                name: col,
+                is_dummy,
+                ..
+            } => {
                 // Check if there's a scale specification for this aesthetic
                 let field_type = if let Some(scale) = spec.find_scale(aesthetic) {
                     // Use scale type if explicitly specified
@@ -371,8 +375,8 @@ impl VegaLiteWriter {
                     }
                 }
 
-                // Hide axis for dummy x column (used when x is not mapped for bar charts)
-                if aesthetic == "x" && col.starts_with("__ggsql_stat__") {
+                // Hide axis for dummy columns (e.g., x when bar chart has no x mapped)
+                if *is_dummy {
                     encoding["axis"] = json!(null);
                 }
 

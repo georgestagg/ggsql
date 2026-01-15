@@ -133,6 +133,9 @@ pub enum StatResult {
         /// These are semantic names that will be prefixed with __ggsql_stat__
         /// and mapped to aesthetics via default_remappings or REMAPPING clause
         stat_columns: Vec<String>,
+        /// Names of stat columns that are dummy/placeholder values
+        /// (e.g., "x" when bar chart has no x mapped - produces a constant value)
+        dummy_columns: Vec<String>,
     },
 }
 
@@ -674,6 +677,7 @@ impl Geom {
         Ok(StatResult::Transformed {
             query: transformed_query,
             stat_columns: vec!["bin".to_string(), "count".to_string()],
+            dummy_columns: vec![],
         })
     }
 
@@ -769,7 +773,7 @@ impl Geom {
         };
 
         // Build the query based on whether x is mapped or not
-        let (transformed_query, stat_columns) = if use_dummy_x {
+        let (transformed_query, stat_columns, dummy_columns) = if use_dummy_x {
             // x is not mapped - use dummy constant, no GROUP BY on x
             let select_cols = if group_by.is_empty() {
                 format!(
@@ -803,8 +807,12 @@ impl Geom {
                 )
             };
 
-            // Stat columns: x (dummy) and count
-            (query_str, vec!["x".to_string(), "count".to_string()])
+            // Stat columns: x (dummy) and count - x is a dummy placeholder
+            (
+                query_str,
+                vec!["x".to_string(), "count".to_string()],
+                vec!["x".to_string()],
+            )
         } else {
             // x is mapped - use existing logic
             let x_col = x_col.unwrap();
@@ -833,14 +841,15 @@ impl Geom {
                 group = group_cols
             );
 
-            // Only count stat column (x is preserved from original data)
-            (query_str, vec!["count".to_string()])
+            // Only count stat column (x is preserved from original data), no dummies
+            (query_str, vec!["count".to_string()], vec![])
         };
 
         // Return with stat column names
         Ok(StatResult::Transformed {
             query: transformed_query,
             stat_columns,
+            dummy_columns,
         })
     }
 }
@@ -890,6 +899,8 @@ pub enum AestheticValue {
         name: String,
         /// Whether this mapping came from wildcard expansion
         from_wildcard: bool,
+        /// Whether this is a dummy/placeholder column (e.g., for bar charts without x mapped)
+        is_dummy: bool,
     },
     /// Literal value (quoted string, number, or boolean)
     Literal(LiteralValue),
@@ -901,6 +912,7 @@ impl AestheticValue {
         Self::Column {
             name: name.into(),
             from_wildcard: false,
+            is_dummy: false,
         }
     }
 
@@ -909,6 +921,16 @@ impl AestheticValue {
         Self::Column {
             name: name.into(),
             from_wildcard: true,
+            is_dummy: false,
+        }
+    }
+
+    /// Create a dummy/placeholder column mapping (e.g., for bar charts without x mapped)
+    pub fn dummy_column(name: impl Into<String>) -> Self {
+        Self::Column {
+            name: name.into(),
+            from_wildcard: false,
+            is_dummy: true,
         }
     }
 
@@ -924,6 +946,14 @@ impl AestheticValue {
     pub fn is_from_wildcard(&self) -> bool {
         match self {
             Self::Column { from_wildcard, .. } => *from_wildcard,
+            _ => false,
+        }
+    }
+
+    /// Check if this is a dummy/placeholder column
+    pub fn is_dummy(&self) -> bool {
+        match self {
+            Self::Column { is_dummy, .. } => *is_dummy,
             _ => false,
         }
     }

@@ -522,6 +522,7 @@ where
         StatResult::Transformed {
             query: transformed_query,
             stat_columns,
+            dummy_columns,
         } => {
             // Build final remappings: start with geom defaults, override with user remappings
             let mut final_remappings: HashMap<String, String> = layer
@@ -544,11 +545,13 @@ where
             for stat in &stat_columns {
                 if let Some(aesthetic) = final_remappings.get(stat) {
                     let col = format!("__ggsql_stat__{}", stat);
+                    let is_dummy = dummy_columns.contains(stat);
                     layer.aesthetics.insert(
                         aesthetic.clone(),
-                        AestheticValue::Column {
-                            name: col,
-                            from_wildcard: false,
+                        if is_dummy {
+                            AestheticValue::dummy_column(col)
+                        } else {
+                            AestheticValue::column(col)
                         },
                     );
                 }
