@@ -717,34 +717,46 @@ impl Geom {
         };
 
         // Use semantically meaningful column names with prefix to avoid conflicts
-        // Include bin (start), bin_end (end), and count/sum
-        let select_cols = if group_by.is_empty() {
-            format!(
-                "{} AS __ggsql_stat__bin, {} AS __ggsql_stat__bin_end, {} AS __ggsql_stat__count",
-                bin_expr, bin_end_expr, agg_expr
+        // Include bin (start), bin_end (end), count/sum, and density
+        // Use a two-stage query: first GROUP BY, then calculate density with window function
+        let (binned_select, final_select) = if group_by.is_empty() {
+            (
+                format!(
+                    "{} AS __ggsql_stat__bin, {} AS __ggsql_stat__bin_end, {} AS __ggsql_stat__count",
+                    bin_expr, bin_end_expr, agg_expr
+                ),
+                "*, __ggsql_stat__count * 1.0 / SUM(__ggsql_stat__count) OVER () AS __ggsql_stat__density".to_string()
             )
         } else {
             let grp_cols = group_by.join(", ");
-            format!(
-                "{}, {} AS __ggsql_stat__bin, {} AS __ggsql_stat__bin_end, {} AS __ggsql_stat__count",
-                grp_cols, bin_expr, bin_end_expr, agg_expr
+            (
+                format!(
+                    "{}, {} AS __ggsql_stat__bin, {} AS __ggsql_stat__bin_end, {} AS __ggsql_stat__count",
+                    grp_cols, bin_expr, bin_end_expr, agg_expr
+                ),
+                format!(
+                    "*, __ggsql_stat__count * 1.0 / SUM(__ggsql_stat__count) OVER (PARTITION BY {}) AS __ggsql_stat__density",
+                    grp_cols
+                )
             )
         };
 
         let transformed_query = format!(
-            "WITH __stat_src__ AS ({query}) SELECT {select} FROM __stat_src__ GROUP BY {group}",
+            "WITH __stat_src__ AS ({query}), __binned__ AS (SELECT {binned} FROM __stat_src__ GROUP BY {group}) SELECT {final} FROM __binned__",
             query = query,
-            select = select_cols,
-            group = group_cols
+            binned = binned_select,
+            group = group_cols,
+            final = final_select
         );
 
-        // Histogram always transforms - produces bin, bin_end, and count columns
+        // Histogram always transforms - produces bin, bin_end, count, and density columns
         Ok(StatResult::Transformed {
             query: transformed_query,
             stat_columns: vec![
                 "bin".to_string(),
                 "bin_end".to_string(),
                 "count".to_string(),
+                "density".to_string(),
             ],
             dummy_columns: vec![],
         })
