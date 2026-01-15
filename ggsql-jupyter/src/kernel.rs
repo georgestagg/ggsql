@@ -266,11 +266,11 @@ impl KernelServer {
                 "pygments_lexer": "sql",
                 "codemirror_mode": "sql",
                 "positron": {
-                    "input_prompt": "ggSQL> ",
+                    "input_prompt": "ggsql> ",
                     "continuation_prompt": "... "
                 }
             },
-            "banner": format!("ggSQL Jupyter Kernel v{}\nSQL with declarative visualization", env!("CARGO_PKG_VERSION")),
+            "banner": format!("ggsql Jupyter Kernel v{}", env!("CARGO_PKG_VERSION")),
             "help_links": []
         })
     }
@@ -499,11 +499,7 @@ impl KernelServer {
         if let Some(method) = data["method"].as_str() {
             let rpc_id = &data["id"];
 
-            tracing::info!(
-                "JSON-RPC request: method={}, id={}",
-                method,
-                rpc_id
-            );
+            tracing::info!("JSON-RPC request: method={}, id={}", method, rpc_id);
 
             // Handle positron.variables requests
             if Some(comm_id.to_string()) == self.variables_comm_id {
@@ -614,10 +610,7 @@ impl KernelServer {
     ) -> Result<()> {
         let target_name = parent.content["target_name"].as_str();
 
-        tracing::info!(
-            "COMM_INFO_REQUEST: target_name={:?}",
-            target_name
-        );
+        tracing::info!("COMM_INFO_REQUEST: target_name={:?}", target_name);
 
         self.send_status("busy", parent).await?;
 
@@ -640,7 +633,10 @@ impl KernelServer {
             }
         }
 
-        tracing::info!("Returning comms: {}", serde_json::to_string(&comms).unwrap_or_default());
+        tracing::info!(
+            "Returning comms: {}",
+            serde_json::to_string(&comms).unwrap_or_default()
+        );
 
         self.send_shell_reply(
             "comm_info_reply",
