@@ -264,6 +264,7 @@ pub enum DefaultParamValue {
     String(&'static str),
     Number(f64),
     Boolean(bool),
+    Null,
 }
 
 /// Layer parameter definition: name and default value
@@ -505,10 +506,20 @@ impl Geom {
     /// `Layer::apply_default_params()`.
     pub fn default_params(&self) -> &[DefaultParam] {
         match self {
-            Geom::Histogram => &[DefaultParam {
-                name: "bins",
-                default: DefaultParamValue::Number(30.0),
-            }],
+            Geom::Histogram => &[
+                DefaultParam {
+                    name: "bins",
+                    default: DefaultParamValue::Number(30.0),
+                },
+                DefaultParam {
+                    name: "closed",
+                    default: DefaultParamValue::String("right"),
+                },
+                DefaultParam {
+                    name: "binwidth",
+                    default: DefaultParamValue::Null,
+                },
+            ],
             // Future: Density might have bandwidth, Smooth might have span/method
             _ => &[],
         }
@@ -623,6 +634,21 @@ impl Geom {
             })
             .unwrap_or(30);
 
+        // Get closed parameter (default: "right")
+        let closed = parameters
+            .get("closed")
+            .and_then(|p| match p {
+                ParameterValue::String(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("right");
+
+        // Get binwidth from parameters (default: None - use bins to calculate)
+        let explicit_binwidth = parameters.get("binwidth").and_then(|p| match p {
+            ParameterValue::Number(n) => Some(*n),
+            _ => None,
+        });
+
         // Query min/max to compute bin width
         let stats_query = format!(
             "SELECT MIN({x}) as min_val, MAX({x}) as max_val FROM ({query})",
@@ -633,17 +659,37 @@ impl Geom {
 
         let (min_val, max_val) = extract_histogram_min_max(&stats_df)?;
 
-        // Compute bin width from fixed number of bins
-        let bin_width = if min_val >= max_val {
+        // Compute bin width: use explicit binwidth if provided, otherwise calculate from bins
+        // Round to 10 decimal places to avoid SQL DECIMAL overflow issues
+        let bin_width = if let Some(bw) = explicit_binwidth {
+            bw
+        } else if min_val >= max_val {
             1.0 // Fallback for edge case
         } else {
-            (max_val - min_val) / bins as f64
+            ((max_val - min_val) / (bins - 1) as f64 * 1e10).round() / 1e10
         };
+        let min_val = (min_val * 1e10).round() / 1e10;
 
         // Build the bin expression (bin start)
-        let bin_expr = format!("FLOOR({x} / {w}) * {w}", x = x_col, w = bin_width);
+        let bin_expr = if closed == "left" {
+            // Left-closed [a, b): use FLOOR
+            format!(
+                "(FLOOR(({x} - {min} + {w} * 0.5) / {w})) * {w} + {min} - {w} * 0.5",
+                x = x_col,
+                min = min_val,
+                w = bin_width
+            )
+        } else {
+            // Right-closed (a, b]: use CEIL - 1 with GREATEST for min value
+            format!(
+                "(GREATEST(CEIL(({x} - {min} + {w} * 0.5) / {w}) - 1, 0)) * {w} + {min} - {w} * 0.5",
+                x = x_col,
+                min = min_val,
+                w = bin_width
+            )
+        };
         // Build the bin end expression (bin start + bin width)
-        let bin_end_expr = format!("FLOOR({x} / {w}) * {w} + {w}", x = x_col, w = bin_width);
+        let bin_end_expr = format!("{expr} + {w}", expr = bin_expr, w = bin_width);
 
         // Build grouped columns (group_by includes partition_by + facet variables)
         let group_cols = if group_by.is_empty() {
@@ -1379,6 +1425,7 @@ impl Layer {
                     DefaultParamValue::String(s) => ParameterValue::String(s.to_string()),
                     DefaultParamValue::Number(n) => ParameterValue::Number(*n),
                     DefaultParamValue::Boolean(b) => ParameterValue::Boolean(*b),
+                    DefaultParamValue::Null => continue, // Don't insert null defaults
                 };
                 self.parameters.insert(param.name.to_string(), value);
             }
