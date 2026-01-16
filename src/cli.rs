@@ -10,7 +10,7 @@ use ggsql::{parser, VERSION};
 use std::path::PathBuf;
 
 #[cfg(feature = "duckdb")]
-use ggsql::execute::prepare_data;
+use ggsql::execute::{materialize_builtin_datasets, prepare_data};
 #[cfg(feature = "duckdb")]
 use ggsql::reader::{DuckDBReader, Reader};
 
@@ -308,6 +308,11 @@ fn print_table_fallback(query: &str, reader: &DuckDBReader, max_rows: usize) {
         std::process::exit(1);
     }
     let parsed = parsed.unwrap();
+
+    if let Err(e) = materialize_builtin_datasets(query, &|s| reader.execute(s)) {
+        eprintln!("Failed to find built-in datasets: {}", e);
+        std::process::exit(1)
+    }
 
     let data = reader.execute(&parsed);
     if let Err(e) = data {

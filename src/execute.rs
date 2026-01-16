@@ -505,7 +505,13 @@ where
     // Extract CTE definitions from the global SQL (in declaration order)
     let ctes = extract_ctes(&sql_part);
 
-    materialize_builtin_datasets(query, &execute_query)?;
+    // Search for and materialise built-in datasets found in the query
+    if let Err(e) = materialize_builtin_datasets(query, &execute_query) {
+        return Err(GgsqlError::ReaderError(format!(
+            "Failed to find built-in datasets: {}",
+            e
+        )));
+    }
 
     // Materialize CTEs as temporary tables
     // This creates __ggsql_cte_<name>__ tables that persist for the session
@@ -706,7 +712,7 @@ pub fn prepare_data(query: &str, reader: &DuckDBReader) -> Result<PreparedData> 
 
 // Parses the SQL query trying to look for built-in dataset identifiers. When
 // found, materialises the built-in datasets in memory.
-fn materialize_builtin_datasets<F>(sql: &str, execute: &F) -> Result<()>
+pub fn materialize_builtin_datasets<F>(sql: &str, execute: &F) -> Result<()>
 where
     F: Fn(&str) -> Result<DataFrame>,
 {
