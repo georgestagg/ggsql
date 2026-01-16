@@ -136,6 +136,10 @@ pub enum StatResult {
         /// Names of stat columns that are dummy/placeholder values
         /// (e.g., "x" when bar chart has no x mapped - produces a constant value)
         dummy_columns: Vec<String>,
+        /// Names of aesthetics consumed by this stat transform
+        /// These aesthetics were used as input to the stat and should be removed
+        /// from the layer mappings after the transform completes
+        consumed_aesthetics: Vec<String>,
     },
 }
 
@@ -754,6 +758,7 @@ impl Geom {
         );
 
         // Histogram always transforms - produces bin, bin_end, count, and density columns
+        // Consumed aesthetics: x (transformed into bin/bin_end) and weight (used for weighted counts)
         Ok(StatResult::Transformed {
             query: transformed_query,
             stat_columns: vec![
@@ -763,6 +768,7 @@ impl Geom {
                 "density".to_string(),
             ],
             dummy_columns: vec![],
+            consumed_aesthetics: vec!["x".to_string(), "weight".to_string()],
         })
     }
 
@@ -859,7 +865,7 @@ impl Geom {
 
         // Build the query based on whether x is mapped or not
         // Use two-stage query: first GROUP BY, then calculate proportion with window function
-        let (transformed_query, stat_columns, dummy_columns) = if use_dummy_x {
+        let (transformed_query, stat_columns, dummy_columns, consumed_aesthetics) = if use_dummy_x {
             // x is not mapped - use dummy constant, no GROUP BY on x
             let (grouped_select, final_select) = if group_by.is_empty() {
                 (
@@ -905,6 +911,7 @@ impl Geom {
             };
 
             // Stat columns: x (dummy), count, and proportion - x is a dummy placeholder
+            // Consumed: weight (used for weighted sums)
             (
                 query_str,
                 vec![
@@ -913,6 +920,7 @@ impl Geom {
                     "proportion".to_string(),
                 ],
                 vec!["x".to_string()],
+                vec!["weight".to_string()],
             )
         } else {
             // x is mapped - use existing logic with two-stage query
@@ -953,18 +961,21 @@ impl Geom {
             );
 
             // count and proportion stat columns (x is preserved from original data), no dummies
+            // Consumed: weight (used for weighted sums)
             (
                 query_str,
                 vec!["count".to_string(), "proportion".to_string()],
                 vec![],
+                vec!["weight".to_string()],
             )
         };
 
-        // Return with stat column names
+        // Return with stat column names and consumed aesthetics
         Ok(StatResult::Transformed {
             query: transformed_query,
             stat_columns,
             dummy_columns,
+            consumed_aesthetics,
         })
     }
 }

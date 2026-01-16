@@ -523,6 +523,7 @@ where
             query: transformed_query,
             stat_columns,
             dummy_columns,
+            consumed_aesthetics,
         } => {
             // Build final remappings: start with geom defaults, override with user remappings
             let mut final_remappings: HashMap<String, String> = layer
@@ -557,8 +558,10 @@ where
                 }
             }
 
-            // Remove the weight aesthetic if present - it has been consumed by the stat transform
-            layer.mappings.aesthetics.remove("weight");
+            // Remove consumed aesthetics - they were used as stat input, not visual output
+            for aes in &consumed_aesthetics {
+                layer.mappings.aesthetics.remove(aes);
+            }
 
             // Use the transformed query
             let mut final_query = transformed_query;
