@@ -210,6 +210,70 @@ where
         .collect())
 }
 
+/// Determine the data source table name for a layer
+///
+/// Returns the table/CTE name to query from:
+/// - Layer with explicit source (CTE, table, file) → that source name
+/// - Layer using global data → None (caller should use global schema)
+fn determine_layer_source(
+    layer: &Layer,
+    materialized_ctes: &HashSet<String>,
+) -> Option<String> {
+    match &layer.source {
+        Some(DataSource::Identifier(name)) => {
+            // Check if it's a materialized CTE
+            if materialized_ctes.contains(name) {
+                Some(get_cte_temp_table_name(name))
+            } else {
+                Some(name.clone())
+            }
+        }
+        Some(DataSource::FilePath(path)) => {
+            // File paths need single quotes for DuckDB
+            Some(format!("'{}'", path))
+        }
+        None => {
+            // Layer uses global data
+            None
+        }
+    }
+}
+
+/// Validate all layer mappings against their schemas
+///
+/// Called after wildcard expansion. Only validates aesthetics that the
+/// layer's geom actually supports - unsupported aesthetics are ignored
+/// since they won't be used anyway.
+fn validate_layer_mappings(layers: &[Layer], layer_schemas: &[Schema]) -> Result<()> {
+    for (idx, (layer, schema)) in layers.iter().zip(layer_schemas.iter()).enumerate() {
+        let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
+        let supported = layer.geom.aesthetics().supported;
+
+        for (aesthetic, value) in &layer.mappings.aesthetics {
+            // Only validate aesthetics supported by this geom
+            if !supported.contains(&aesthetic.as_str()) {
+                continue;
+            }
+
+            if let Some(col_name) = value.column_name() {
+                // Skip synthetic columns (stat-generated or constants)
+                if col_name.starts_with("__ggsql_stat__") || col_name.starts_with("__ggsql_const_") {
+                    continue;
+                }
+                if !schema_columns.contains(col_name) {
+                    return Err(GgsqlError::ValidationError(format!(
+                        "Layer {}: aesthetic '{}' references non-existent column '{}'",
+                        idx + 1,
+                        aesthetic,
+                        col_name
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Extract constant aesthetics from a layer
 fn extract_constants(layer: &Layer) -> Vec<(String, LiteralValue)> {
     layer
@@ -375,6 +439,7 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
 /// (e.g., mapping y to `__ggsql_stat__count` for histogram or bar count).
 fn build_layer_query<F>(
     layer: &mut Layer,
+    schema: &Schema,
     materialized_ctes: &HashSet<String>,
     has_global: bool,
     layer_idx: usize,
@@ -451,12 +516,10 @@ where
         }
     }
 
-    // Only fetch schema and validate aesthetic columns for stat transforms
-    // Non-stat geoms don't need grouping, so no validation needed
+    // For stat transforms, use pre-fetched schema to determine grouping columns
+    // Non-stat geoms don't need grouping
     let needs_stat = layer.geom.needs_stat_transform(&layer.mappings);
-    let schema = if needs_stat {
-        // Fetch schema once for the layer to validate columns and check types
-        let schema = fetch_layer_schema(&query, execute_query)?;
+    if needs_stat {
         let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
         let discrete_columns: HashSet<&str> = schema
             .iter()
@@ -466,22 +529,15 @@ where
 
         // Add columns for non-consumed aesthetics to group_by for preservation
         // This ensures columns mapped to fill, color, shape, etc. are kept during stat transforms
-        // Uses schema to validate column existence and discreteness
+        // Note: Column existence is validated upfront by validate_layer_mappings()
         let consumed_aesthetics = layer.geom.stat_consumed_aesthetics();
         for (aesthetic, value) in &layer.mappings.aesthetics {
             if consumed_aesthetics.contains(&aesthetic.as_str()) {
                 continue;
             }
             if let Some(col) = value.column_name() {
-                // Check if column exists in schema
+                // Skip columns not in schema (shouldn't happen after upfront validation)
                 if !schema_columns.contains(col) {
-                    // Column doesn't exist - skip if from wildcard, error if explicit
-                    if !value.is_from_wildcard() {
-                        return Err(GgsqlError::ValidationError(format!(
-                            "Column '{}' mapped to '{}' does not exist in data source",
-                            col, aesthetic
-                        )));
-                    }
                     continue;
                 }
 
@@ -496,11 +552,7 @@ where
                 }
             }
         }
-        schema
-    } else {
-        // For non-stat geoms, create empty schema (stat transform will return Identity anyway)
-        Vec::new()
-    };
+    }
 
     // Apply filter
     if let Some(f) = filter {
@@ -594,16 +646,17 @@ where
 
 /// Merge global mappings into layer aesthetics and expand wildcards
 ///
-/// This function performs smart wildcard expansion:
+/// This function performs smart wildcard expansion with schema awareness:
 /// 1. Merges explicit global aesthetics into layers (layer aesthetics take precedence)
 /// 2. Only merges aesthetics that the geom supports
-/// 3. Expands wildcards by adding mappings for all supported aesthetics not already mapped
-///    (wildcard means "map each aesthetic to a column of the same name")
-/// 4. Tracks which mappings came from wildcard expansion via the `from_wildcard` flag
-fn merge_global_mappings_into_layers(specs: &mut [VizSpec]) {
+/// 3. Expands wildcards by adding mappings only for supported aesthetics that:
+///    - Are not already mapped (either from global or layer)
+///    - Have a matching column in the layer's schema
+fn merge_global_mappings_into_layers(specs: &mut [VizSpec], layer_schemas: &[Schema]) {
     for spec in specs {
-        for layer in &mut spec.layers {
+        for (layer, schema) in spec.layers.iter_mut().zip(layer_schemas.iter()) {
             let supported = layer.geom.aesthetics().supported;
+            let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
 
             // 1. First merge explicit global aesthetics (layer overrides global)
             for (aesthetic, value) in &spec.global_mappings.aesthetics {
@@ -616,16 +669,18 @@ fn merge_global_mappings_into_layers(specs: &mut [VizSpec]) {
                 }
             }
 
-            // 2. Expand wildcards: add mapping for each supported aesthetic
-            //    that isn't already mapped (either from global or layer)
+            // 2. Smart wildcard expansion: only expand to columns that exist in schema
             let has_wildcard = layer.mappings.wildcard || spec.global_mappings.wildcard;
             if has_wildcard {
                 for &aes in supported {
-                    layer
-                        .mappings
-                        .aesthetics
-                        .entry(aes.to_string())
-                        .or_insert(AestheticValue::wildcard_column(aes));
+                    // Only create mapping if column exists in the schema
+                    if schema_columns.contains(aes) {
+                        layer
+                            .mappings
+                            .aesthetics
+                            .entry(aes.to_string())
+                            .or_insert(AestheticValue::standard_column(aes));
+                    }
                 }
             }
 
@@ -845,17 +900,46 @@ where
         }
     }
 
+    // Fetch schemas upfront for smart wildcard expansion and validation
+    let has_global = data_map.contains_key("__global__");
+
+    // Fetch global schema (used by layers without explicit source)
+    let global_schema = if has_global {
+        fetch_layer_schema("SELECT * FROM __ggsql_global__", &execute_query)?
+    } else {
+        Vec::new()
+    };
+
+    // Fetch schemas for all layers
+    let mut layer_schemas: Vec<Schema> = Vec::new();
+    for layer in &specs[0].layers {
+        let source = determine_layer_source(layer, &materialized_ctes);
+        let schema = match source {
+            Some(src) => {
+                let base_query = format!("SELECT * FROM {}", src);
+                fetch_layer_schema(&base_query, &execute_query)?
+            }
+            None => {
+                // Layer uses global data - use global schema
+                global_schema.clone()
+            }
+        };
+        layer_schemas.push(schema);
+    }
+
     // Merge global mappings into layer aesthetics and expand wildcards
-    // This is needed before build_layer_query so stat transforms can see all aesthetics
-    // (e.g., bar chart's count stat needs to see 'x' from global mapping)
-    merge_global_mappings_into_layers(&mut specs);
+    // Smart wildcard expansion only creates mappings for columns that exist in schema
+    merge_global_mappings_into_layers(&mut specs, &layer_schemas);
+
+    // Validate all layer mappings against their schemas
+    // This catches missing columns early with clear error messages
+    validate_layer_mappings(&specs[0].layers, &layer_schemas)?;
 
     // Execute layer-specific queries
     // build_layer_query() handles all cases:
     // - Layer with source (CTE, table, or file) → query that source
     // - Layer with filter/order_by but no source → query __ggsql_global__ with filter/order_by and constants
     // - Layer with no source, no filter, no order_by → returns None (use global directly, constants already injected)
-    let has_global = data_map.contains_key("__global__");
     let num_layers = specs[0].layers.len();
     let facet = specs[0].facet.clone();
 
@@ -873,6 +957,7 @@ where
         let layer = &mut specs[0].layers[idx];
         if let Some(layer_query) = build_layer_query(
             layer,
+            &layer_schemas[idx],
             &materialized_ctes,
             has_global,
             idx,
@@ -1156,12 +1241,14 @@ mod tests {
     fn test_build_layer_query_with_cte() {
         let mut materialized = HashSet::new();
         materialized.insert("sales".to_string());
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("sales".to_string()));
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1181,6 +1268,7 @@ mod tests {
     fn test_build_layer_query_with_cte_and_filter() {
         let mut materialized = HashSet::new();
         materialized.insert("sales".to_string());
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("sales".to_string()));
@@ -1188,6 +1276,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1205,12 +1294,14 @@ mod tests {
     #[test]
     fn test_build_layer_query_without_cte() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1229,6 +1320,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_table_with_filter() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
@@ -1236,6 +1328,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1253,12 +1346,14 @@ mod tests {
     #[test]
     fn test_build_layer_query_file_path() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::FilePath("data/sales.csv".to_string()));
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1277,6 +1372,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_file_path_with_filter() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::FilePath("data.parquet".to_string()));
@@ -1284,6 +1380,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1301,12 +1398,21 @@ mod tests {
     #[test]
     fn test_build_layer_query_none_source_with_filter() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.filter = Some(SqlExpression::new("category = 'A'"));
 
-        let result =
-            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &empty_schema,
+            &materialized,
+            true,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should query __ggsql_global__ with filter
         assert_eq!(
@@ -1318,11 +1424,20 @@ mod tests {
     #[test]
     fn test_build_layer_query_none_source_no_filter() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
 
-        let result =
-            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &empty_schema,
+            &materialized,
+            true,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should return None - layer uses __global__ directly
         assert_eq!(result.unwrap(), None);
@@ -1331,12 +1446,14 @@ mod tests {
     #[test]
     fn test_build_layer_query_filter_without_global_errors() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.filter = Some(SqlExpression::new("x > 10"));
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             2,
@@ -1355,6 +1472,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_with_order_by() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
@@ -1362,6 +1480,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1379,6 +1498,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_with_filter_and_order_by() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
@@ -1387,6 +1507,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1407,12 +1528,21 @@ mod tests {
     #[test]
     fn test_build_layer_query_none_source_with_order_by() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
 
         let mut layer = Layer::new(Geom::Point);
         layer.order_by = Some(SqlExpression::new("x ASC"));
 
-        let result =
-            build_layer_query(&mut layer, &materialized, true, 0, None, &[], &mock_execute);
+        let result = build_layer_query(
+            &mut layer,
+            &empty_schema,
+            &materialized,
+            true,
+            0,
+            None,
+            &[],
+            &mock_execute,
+        );
 
         // Should query __ggsql_global__ with order_by
         assert_eq!(
@@ -1424,6 +1554,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_with_constants() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
         let constants = vec![
             (
                 "color".to_string(),
@@ -1440,6 +1571,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             false,
             0,
@@ -1459,6 +1591,7 @@ mod tests {
     #[test]
     fn test_build_layer_query_constants_on_global() {
         let materialized = HashSet::new();
+        let empty_schema: Schema = Vec::new();
         let constants = vec![(
             "fill".to_string(),
             LiteralValue::String("value".to_string()),
@@ -1469,6 +1602,7 @@ mod tests {
 
         let result = build_layer_query(
             &mut layer,
+            &empty_schema,
             &materialized,
             true,
             0,

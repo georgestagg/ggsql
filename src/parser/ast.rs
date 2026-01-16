@@ -807,31 +807,29 @@ impl Geom {
         let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
 
         // Check if y is mapped
+        // Note: With upfront validation, if y is mapped to a column, that column must exist
         if let Some(y_value) = aesthetics.get("y") {
-            // Case 1: y is a literal value - use identity (no transformation)
+            // y is a literal value - use identity (no transformation)
             if y_value.is_literal() {
                 return Ok(StatResult::Identity);
             }
 
-            // Case 2: y is a column reference - check if it exists in the data
+            // y is a column reference - if it exists in schema, use identity
+            // (column existence validated upfront, but we still check schema for stat decision)
             if let Some(y_col) = y_value.column_name() {
                 if schema_columns.contains(y_col) {
                     // y column exists - use identity (no transformation)
                     return Ok(StatResult::Identity);
-                } else if !y_value.is_from_wildcard() {
-                    // y explicitly mapped but column doesn't exist - error
-                    return Err(GgsqlError::ValidationError(format!(
-                        "Bar y aesthetic mapped to non-existent column '{}'",
-                        y_col
-                    )));
                 }
-                // y from wildcard but column doesn't exist - fall through to aggregation
+                // y mapped but column doesn't exist in schema - fall through to aggregation
+                // (this shouldn't happen with upfront validation, but handle gracefully)
             }
         }
 
-        // y not mapped or wildcard y doesn't exist - apply aggregation (COUNT or SUM)
+        // y not mapped - apply aggregation (COUNT or SUM)
         // Determine aggregation expression based on weight aesthetic
         // Note: stat column is always "count" for predictability, even when using SUM
+        // Note: With upfront validation, if weight is mapped to a column, that column must exist
         let agg_expr = if let Some(weight_value) = aesthetics.get("weight") {
             // weight is mapped - check if it's valid
             if weight_value.is_literal() {
@@ -844,14 +842,9 @@ impl Geom {
                 if schema_columns.contains(weight_col) {
                     // weight column exists - use SUM (but still call it "count")
                     format!("SUM({}) AS __ggsql_stat__count", weight_col)
-                } else if !weight_value.is_from_wildcard() {
-                    // weight explicitly mapped but column doesn't exist - error
-                    return Err(GgsqlError::ValidationError(format!(
-                        "Bar weight aesthetic mapped to non-existent column '{}'",
-                        weight_col
-                    )));
                 } else {
-                    // weight from wildcard but column doesn't exist - fall back to COUNT
+                    // weight mapped but column doesn't exist - fall back to COUNT
+                    // (this shouldn't happen with upfront validation, but handle gracefully)
                     "COUNT(*) AS __ggsql_stat__count".to_string()
                 }
             } else {
@@ -1020,11 +1013,9 @@ fn extract_histogram_min_max(df: &DataFrame) -> Result<(f64, f64)> {
 /// Value for aesthetic mappings
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AestheticValue {
-    /// Column reference with optional wildcard origin tracking
+    /// Column reference
     Column {
         name: String,
-        /// Whether this mapping came from wildcard expansion
-        from_wildcard: bool,
         /// Whether this is a dummy/placeholder column (e.g., for bar charts without x mapped)
         is_dummy: bool,
     },
@@ -1033,20 +1024,10 @@ pub enum AestheticValue {
 }
 
 impl AestheticValue {
-    /// Create a column mapping (not from wildcard)
+    /// Create a column mapping
     pub fn standard_column(name: impl Into<String>) -> Self {
         Self::Column {
             name: name.into(),
-            from_wildcard: false,
-            is_dummy: false,
-        }
-    }
-
-    /// Create a column mapping from wildcard expansion
-    pub fn wildcard_column(name: impl Into<String>) -> Self {
-        Self::Column {
-            name: name.into(),
-            from_wildcard: true,
             is_dummy: false,
         }
     }
@@ -1055,7 +1036,6 @@ impl AestheticValue {
     pub fn dummy_column(name: impl Into<String>) -> Self {
         Self::Column {
             name: name.into(),
-            from_wildcard: false,
             is_dummy: true,
         }
     }
@@ -1065,14 +1045,6 @@ impl AestheticValue {
         match self {
             Self::Column { name, .. } => Some(name),
             _ => None,
-        }
-    }
-
-    /// Check if this mapping came from wildcard expansion
-    pub fn is_from_wildcard(&self) -> bool {
-        match self {
-            Self::Column { from_wildcard, .. } => *from_wildcard,
-            _ => false,
         }
     }
 
@@ -1697,18 +1669,18 @@ mod tests {
     #[test]
     fn test_aesthetic_value_column_constructors() {
         let col = AestheticValue::standard_column("date");
-        assert!(!col.is_from_wildcard());
+        assert!(!col.is_dummy());
         assert_eq!(col.column_name(), Some("date"));
 
-        let wildcard_col = AestheticValue::wildcard_column("x");
-        assert!(wildcard_col.is_from_wildcard());
-        assert_eq!(wildcard_col.column_name(), Some("x"));
+        let dummy_col = AestheticValue::dummy_column("x");
+        assert!(dummy_col.is_dummy());
+        assert_eq!(dummy_col.column_name(), Some("x"));
     }
 
     #[test]
     fn test_aesthetic_value_literal() {
         let lit = AestheticValue::Literal(LiteralValue::String("red".to_string()));
-        assert!(!lit.is_from_wildcard());
+        assert!(!lit.is_dummy());
         assert_eq!(lit.column_name(), None);
     }
 
