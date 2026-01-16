@@ -274,6 +274,54 @@ fn validate_layer_mappings(layers: &[Layer], layer_schemas: &[Schema]) -> Result
     Ok(())
 }
 
+/// Add discrete mapped columns to partition_by for all layers
+///
+/// For each layer, examines all aesthetic mappings and adds any that map to
+/// discrete columns (string, boolean, date, categorical) to the layer's
+/// partition_by. This ensures proper grouping for all layers, not just stat geoms.
+///
+/// Columns already in partition_by (from explicit PARTITION BY clause) are skipped.
+/// Stat-consumed aesthetics (x for bar, x for histogram) are also skipped.
+fn add_discrete_columns_to_partition_by(layers: &mut [Layer], layer_schemas: &[Schema]) {
+    for (layer, schema) in layers.iter_mut().zip(layer_schemas.iter()) {
+        let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
+        let discrete_columns: HashSet<&str> = schema
+            .iter()
+            .filter(|c| c.is_discrete)
+            .map(|c| c.name.as_str())
+            .collect();
+
+        // Get aesthetics consumed by stat transforms (if any)
+        let consumed_aesthetics = layer.geom.stat_consumed_aesthetics();
+
+        for (aesthetic, value) in &layer.mappings.aesthetics {
+            // Skip stat-consumed aesthetics (they're transformed, not grouped)
+            if consumed_aesthetics.contains(&aesthetic.as_str()) {
+                continue;
+            }
+
+            if let Some(col) = value.column_name() {
+                // Skip if column doesn't exist in schema
+                if !schema_columns.contains(col) {
+                    continue;
+                }
+
+                // Skip if column is not discrete
+                if !discrete_columns.contains(col) {
+                    continue;
+                }
+
+                // Skip if already in partition_by
+                if layer.partition_by.contains(&col.to_string()) {
+                    continue;
+                }
+
+                layer.partition_by.push(col.to_string());
+            }
+        }
+    }
+}
+
 /// Extract constant aesthetics from a layer
 fn extract_constants(layer: &Layer) -> Vec<(String, LiteralValue)> {
     layer
@@ -506,50 +554,13 @@ where
         format!("SELECT *, {} FROM {}", const_cols.join(", "), table_name)
     };
 
-    // Combine partition_by and facet variables for grouping
+    // Combine partition_by (which includes discrete mapped columns) and facet variables for grouping
+    // Note: partition_by is pre-populated with discrete columns by add_discrete_columns_to_partition_by()
     let mut group_by = layer.partition_by.clone();
     if let Some(f) = facet {
         for var in f.get_variables() {
             if !group_by.contains(&var) {
                 group_by.push(var);
-            }
-        }
-    }
-
-    // For stat transforms, use pre-fetched schema to determine grouping columns
-    // Non-stat geoms don't need grouping
-    let needs_stat = layer.geom.needs_stat_transform(&layer.mappings);
-    if needs_stat {
-        let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
-        let discrete_columns: HashSet<&str> = schema
-            .iter()
-            .filter(|c| c.is_discrete)
-            .map(|c| c.name.as_str())
-            .collect();
-
-        // Add columns for non-consumed aesthetics to group_by for preservation
-        // This ensures columns mapped to fill, color, shape, etc. are kept during stat transforms
-        // Note: Column existence is validated upfront by validate_layer_mappings()
-        let consumed_aesthetics = layer.geom.stat_consumed_aesthetics();
-        for (aesthetic, value) in &layer.mappings.aesthetics {
-            if consumed_aesthetics.contains(&aesthetic.as_str()) {
-                continue;
-            }
-            if let Some(col) = value.column_name() {
-                // Skip columns not in schema (shouldn't happen after upfront validation)
-                if !schema_columns.contains(col) {
-                    continue;
-                }
-
-                // Check if column is discrete (suitable for grouping)
-                if !discrete_columns.contains(col) {
-                    continue;
-                }
-
-                // Add discrete column to group_by
-                if !group_by.contains(&col.to_string()) {
-                    group_by.push(col.to_string());
-                }
             }
         }
     }
@@ -934,6 +945,10 @@ where
     // Validate all layer mappings against their schemas
     // This catches missing columns early with clear error messages
     validate_layer_mappings(&specs[0].layers, &layer_schemas)?;
+
+    // Add discrete mapped columns to partition_by for all layers
+    // This ensures proper grouping for color, fill, shape, etc. aesthetics
+    add_discrete_columns_to_partition_by(&mut specs[0].layers, &layer_schemas);
 
     // Execute layer-specific queries
     // build_layer_query() handles all cases:
