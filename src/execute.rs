@@ -6,7 +6,7 @@
 use crate::parser::ast::{AestheticValue, GlobalMapping, GlobalMappingItem, Layer, LiteralValue};
 use crate::{parser, DataFrame, GgsqlError, LayerSource, Result, VizSpec};
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, StreamingIterator};
 
 #[cfg(feature = "duckdb")]
 use crate::reader::{DuckDBReader, Reader};
@@ -505,6 +505,8 @@ where
     // Extract CTE definitions from the global SQL (in declaration order)
     let ctes = extract_ctes(&sql_part);
 
+    materialize_builtin_datasets(query, &execute_query)?;
+
     // Materialize CTEs as temporary tables
     // This creates __ggsql_cte_<name>__ tables that persist for the session
     let materialized_ctes = materialize_ctes(&ctes, &execute_query)?;
@@ -700,6 +702,101 @@ where
 #[cfg(feature = "duckdb")]
 pub fn prepare_data(query: &str, reader: &DuckDBReader) -> Result<PreparedData> {
     prepare_data_with_executor(query, |sql| reader.execute(sql))
+}
+
+// Parses the SQL query trying to look for built-in dataset identifiers. When
+// found, materialises the built-in datasets in memory.
+fn materialize_builtin_datasets<F>(sql: &str, execute: &F) -> Result<()>
+where
+    F: Fn(&str) -> Result<DataFrame>,
+{
+    // Setup parsed tree
+    let mut parser = Parser::new();
+    if let Err(_e) = parser.set_language(&tree_sitter_ggsql::language()) {
+        // Give up trying to parse anything
+        return Ok(());
+    }
+
+    let tree = parser.parse(sql, None);
+    if tree.is_none() {
+        // Give up
+        return Ok(());
+    }
+    let tree = tree.unwrap();
+
+    let root = tree.root_node();
+    if root.has_error() {
+        // Give up
+        return Ok(());
+    }
+
+    // Query to capture dataset in 'SELECT {whatever} FROM {dataset}', where
+    // dataset can be an (unquoted) identifier or string with quotes.
+    let query = r#"
+    (select_statement
+      (select_body
+        (sql_keyword) @key
+        [
+          (string)
+          (identifier)
+        ] @select
+        (#eq? @key "FROM")
+    ))
+    "#;
+
+    let query = tree_sitter::Query::new(&tree.language(), query);
+    if query.is_err() {
+        // Give up
+        return Ok(());
+    }
+    let query = query.unwrap();
+
+    // Eventually, we want to filter to only keep the @select part and dump the @key part.
+    // We need the index for the match that we want to keep.
+    let select_index = query.capture_index_for_name("select");
+    if select_index.is_none() {
+        // Give up
+        return Ok(());
+    }
+    let select_index = select_index.unwrap();
+
+    // Find matches for query of interest
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut matches = cursor.matches(&query, root, sql.as_bytes());
+
+    // Collect identifiers
+    let mut datasets = Vec::new();
+    while let Some(matched) = matches.next() {
+        for captured in matched.captures {
+            if captured.index != select_index {
+                // Skips over the @key match
+                continue;
+            }
+            let identifier = get_node_text(&captured.node, sql);
+            let identifier = identifier.trim_matches(['"', '\'']);
+            datasets.push(identifier);
+        }
+    }
+
+    // Don't bother materialising anything if no builtin datasets are detected
+    if datasets.is_empty() {
+        return Ok(());
+    }
+
+    // Remove duplicate entries
+    datasets.sort_unstable();
+    datasets.dedup();
+
+    for dataset in datasets {
+        let materialize_query = match dataset {
+            "penguins" => &crate::reader::data::prep_penguins_query(),
+            "__MY_OTHER_DATASET__" => "",
+            // We'll ignore other options for now
+            _ => "",
+        };
+        execute(materialize_query)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
