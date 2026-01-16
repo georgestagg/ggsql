@@ -1,6 +1,9 @@
 use std::{env, fs};
 
-static PENGUINS: &[u8] = include_bytes!("../../data/penguins.parquet");
+static PENGUINS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../data/penguins.parquet"
+));
 
 pub fn prep_penguins_query() -> String {
     let mut tmp_path = env::temp_dir();
