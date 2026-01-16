@@ -11,7 +11,6 @@
   "line"
   "path"
   "bar"
-  "col"
   "area"
   "tile"
   "polygon"
@@ -35,6 +34,7 @@
 [
   "x"
   "y"
+  "weight"
   "xmin"
   "xmax"
   "ymin"
