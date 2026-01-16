@@ -291,7 +291,7 @@ impl Geom {
             },
             Geom::Bar => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "width", "opacity"],
-                required: &["x", "y"],
+                required: &["y"],
             },
             Geom::Col => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "width", "opacity"],
@@ -1176,7 +1176,7 @@ mod tests {
         let bar = Geom::Bar.aesthetics();
         assert!(bar.supported.contains(&"fill"));
         assert!(bar.supported.contains(&"width"));
-        assert_eq!(bar.required, &["x", "y"]);
+        assert_eq!(bar.required, &["y"]);
 
         // Text geom
         let text = Geom::Text.aesthetics();

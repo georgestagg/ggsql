@@ -981,6 +981,9 @@ impl VegaLiteWriter {
 
 impl Writer for VegaLiteWriter {
     fn write(&self, spec: &VizSpec, data: &HashMap<String, DataFrame>) -> Result<String> {
+        // Validate spec before processing
+        self.validate(spec)?;
+
         // Determine which dataset key each layer should use
         // A layer uses __layer_{idx}__ if:
         // - It has an explicit source (FROM clause), OR
@@ -1017,6 +1020,10 @@ impl Writer for VegaLiteWriter {
         let mut vl_spec = json!({
             "$schema": self.schema
         });
+
+        // Responsive plot sizing
+        vl_spec["width"] = json!("container");
+        vl_spec["height"] = json!("container");
 
         // Add title if present
         if let Some(labels) = &spec.labels {
@@ -1470,12 +1477,22 @@ mod tests {
             let mut spec = VizSpec::new();
             let layer = Layer::new(geom.clone())
                 .with_aesthetic("x".to_string(), AestheticValue::Column("x".to_string()))
-                .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()));
+                .with_aesthetic("y".to_string(), AestheticValue::Column("y".to_string()))
+                .with_aesthetic(
+                    "ymin".to_string(),
+                    AestheticValue::Column("ymin".to_string()),
+                )
+                .with_aesthetic(
+                    "ymax".to_string(),
+                    AestheticValue::Column("ymax".to_string()),
+                );
             spec.layers.push(layer);
 
             let df = df! {
                 "x" => &[1, 2, 3],
                 "y" => &[4, 5, 6],
+                "ymin" => &[3, 4, 5],
+                "ymax" => &[5, 6, 7],
             }
             .unwrap();
 
