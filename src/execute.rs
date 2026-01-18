@@ -296,8 +296,14 @@ fn validate(layers: &[Layer], layer_schemas: &[Schema]) -> Result<()> {
         }
 
         // Validate remapping target aesthetics are supported by geom
+        // Target can be in supported OR hidden (hidden = valid REMAPPING targets but not MAPPING targets)
+        let aesthetics_info = layer.geom.aesthetics();
         for target_aesthetic in layer.remappings.aesthetics.keys() {
-            if !supported.contains(&target_aesthetic.as_str()) {
+            let is_supported = aesthetics_info
+                .supported
+                .contains(&target_aesthetic.as_str());
+            let is_hidden = aesthetics_info.hidden.contains(&target_aesthetic.as_str());
+            if !is_supported && !is_hidden {
                 return Err(GgsqlError::ValidationError(format!(
                     "Layer {}: REMAPPING targets unsupported aesthetic '{}' for geom '{}'",
                     idx + 1,

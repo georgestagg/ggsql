@@ -256,10 +256,13 @@ pub enum Geom {
 /// Aesthetic information for a geom type
 #[derive(Debug, Clone, Copy)]
 pub struct GeomAesthetics {
-    /// All aesthetics this geom type supports
+    /// All aesthetics this geom type supports for user MAPPING
     pub supported: &'static [&'static str],
     /// Aesthetics required for this geom type to be valid
     pub required: &'static [&'static str],
+    /// Hidden aesthetics (valid REMAPPING targets, not valid MAPPING targets)
+    /// These are produced by stat transforms but shouldn't be manually mapped
+    pub hidden: &'static [&'static str],
 }
 
 /// Default value for a layer parameter
@@ -319,6 +322,7 @@ impl Geom {
                     "x", "y", "color", "colour", "fill", "size", "shape", "opacity",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Line => GeomAesthetics {
                 supported: &[
@@ -331,6 +335,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Path => GeomAesthetics {
                 supported: &[
@@ -343,6 +348,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Bar => GeomAesthetics {
                 // Bar supports optional x and y - stat decides aggregation
@@ -353,46 +359,57 @@ impl Geom {
                     "x", "y", "weight", "color", "colour", "fill", "width", "opacity",
                 ],
                 required: &[],
+                hidden: &[],
             },
             Geom::Area => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Tile => GeomAesthetics {
                 supported: &[
                     "x", "y", "color", "colour", "fill", "width", "height", "opacity",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Polygon => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Ribbon => GeomAesthetics {
                 supported: &["x", "ymin", "ymax", "color", "colour", "fill", "opacity"],
                 required: &["x", "ymin", "ymax"],
+                hidden: &[],
             },
 
             // Statistical geoms
             Geom::Histogram => GeomAesthetics {
                 supported: &["x", "weight", "color", "colour", "fill", "opacity"],
                 required: &["x"],
+                // y and x2 are produced by stat_histogram but not valid for manual MAPPING
+                hidden: &["y", "x2"],
             },
             Geom::Density => GeomAesthetics {
                 supported: &["x", "color", "colour", "fill", "opacity"],
                 required: &["x"],
+                hidden: &[],
             },
             Geom::Smooth => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "linetype", "opacity"],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Boxplot => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Violin => GeomAesthetics {
                 supported: &["x", "y", "color", "colour", "fill", "opacity"],
                 required: &["x", "y"],
+                hidden: &[],
             },
 
             // Annotation geoms
@@ -402,6 +419,7 @@ impl Geom {
                     "hjust", "vjust",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Label => GeomAesthetics {
                 supported: &[
@@ -409,6 +427,7 @@ impl Geom {
                     "fontface", "hjust", "vjust",
                 ],
                 required: &["x", "y"],
+                hidden: &[],
             },
             Geom::Segment => GeomAesthetics {
                 supported: &[
@@ -423,6 +442,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["x", "y", "xend", "yend"],
+                hidden: &[],
             },
             Geom::Arrow => GeomAesthetics {
                 supported: &[
@@ -437,6 +457,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["x", "y", "xend", "yend"],
+                hidden: &[],
             },
             Geom::HLine => GeomAesthetics {
                 supported: &[
@@ -448,6 +469,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["yintercept"],
+                hidden: &[],
             },
             Geom::VLine => GeomAesthetics {
                 supported: &[
@@ -459,6 +481,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["xintercept"],
+                hidden: &[],
             },
             Geom::AbLine => GeomAesthetics {
                 supported: &[
@@ -471,6 +494,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &["slope", "intercept"],
+                hidden: &[],
             },
             Geom::ErrorBar => GeomAesthetics {
                 supported: &[
@@ -486,6 +510,7 @@ impl Geom {
                     "opacity",
                 ],
                 required: &[],
+                hidden: &[],
             },
         }
     }
