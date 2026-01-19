@@ -349,6 +349,12 @@ fn validate(layers: &[Layer], layer_schemas: &[Schema]) -> Result<()> {
 /// Columns already in partition_by (from explicit PARTITION BY clause) are skipped.
 /// Stat-consumed aesthetics (x for bar, x for histogram) are also skipped.
 fn add_discrete_columns_to_partition_by(layers: &mut [Layer], layer_schemas: &[Schema]) {
+    // Positional aesthetics should NOT be auto-added to grouping.
+    // Stats that need to group by positional aesthetics (like bar/histogram)
+    // already handle this themselves via stat_consumed_aesthetics().
+    const POSITIONAL_AESTHETICS: &[&str] =
+        &["x", "y", "xmin", "xmax", "ymin", "ymax", "xend", "yend"];
+
     for (layer, schema) in layers.iter_mut().zip(layer_schemas.iter()) {
         let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
         let discrete_columns: HashSet<&str> = schema
@@ -361,6 +367,11 @@ fn add_discrete_columns_to_partition_by(layers: &mut [Layer], layer_schemas: &[S
         let consumed_aesthetics = layer.geom.stat_consumed_aesthetics();
 
         for (aesthetic, value) in &layer.mappings.aesthetics {
+            // Skip positional aesthetics - these should not trigger auto-grouping
+            if POSITIONAL_AESTHETICS.contains(&aesthetic.as_str()) {
+                continue;
+            }
+
             // Skip stat-consumed aesthetics (they're transformed, not grouped)
             if consumed_aesthetics.contains(&aesthetic.as_str()) {
                 continue;
