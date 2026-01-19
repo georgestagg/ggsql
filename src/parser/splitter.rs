@@ -95,18 +95,16 @@ pub fn split_query(query: &str) -> Result<(String, String)> {
 fn extract_from_identifier(node: &Node, source: &str) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "identifier" {
-            // Identifier: table name or CTE name
-            return Some(get_node_text(&child, source).to_string());
+        eprintln!("NODE: {}", get_node_text(&child, source));
+        if child.kind() != "from_clause" {
+            continue;
         }
-        if child.kind() == "string" {
-            // String literal: file path (e.g., 'mtcars.csv')
-            // Return as-is with quotes - DuckDB handles it
-            return Some(get_node_text(&child, source).to_string());
-        }
-        if child.kind() == "viz_type" {
-            // If we hit viz_type without finding identifier/string, there's no FROM
-            return None;
+        let mut from_cursor = child.walk();
+        for table_ref in child.children(&mut from_cursor) {
+            if table_ref.kind() != "table_ref" {
+                continue;
+            }
+            return Some(get_node_text(&table_ref, source).to_string());
         }
     }
     None

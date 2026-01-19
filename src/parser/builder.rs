@@ -83,13 +83,17 @@ fn build_visualise_statement(node: &Node, source: &str) -> Result<VizSpec> {
                 // Handle wildcard (*) mapping
                 spec.global_mapping = GlobalMapping::Wildcard;
             }
-            "identifier" | "string" => {
-                // This is the FROM source (table name or file path)
-                spec.source = Some(
-                    get_node_text(&child, source)
-                        .trim_matches(|c| c == '\'' || c == '"')
-                        .to_string(),
-                );
+            "from_clause" => {
+                for from_child in child.children(&mut child.walk()) {
+                    if from_child.kind() == "table_ref" {
+                        spec.source = Some(
+                            get_node_text(&from_child, source)
+                                .trim_matches(|c| c == '\'' || c == '"')
+                                .to_string(),
+                        );
+                        break;
+                    }
+                }
             }
             "viz_clause" => {
                 // Process visualization clause
