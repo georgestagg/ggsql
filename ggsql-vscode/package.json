@@ -30,10 +30,6 @@
     "languages": [
       {
         "id": "ggsql",
-        "aliases": [
-          "ggsql",
-          "ggsql"
-        ],
         "extensions": [
           ".ggsql",
           ".ggsql.sql",
@@ -60,7 +56,7 @@
     ],
     "configuration": {
       "type": "object",
-      "title": "ggSQL",
+      "title": "ggsql",
       "properties": {
         "ggsql.kernelPath": {
           "type": "string",

@@ -87,6 +87,7 @@ function generateMetadata(
     context: vscode.ExtensionContext
 ): positron.LanguageRuntimeMetadata {
     const kernelPath = getKernelPath();
+    const version = context.extension.packageJSON.version as string;
 
     let base64Icon: string;
     const iconPath = path.join(context.extensionPath, 'resources', 'ggsql-icon.svg');
@@ -95,13 +96,13 @@ function generateMetadata(
     return {
         runtimeId: 'ggsql-jupyter',
         runtimePath: kernelPath,
-        runtimeName: 'ggsql',
+        runtimeName: `ggsql ${version}`,
         runtimeShortName: 'ggsql',
-        runtimeVersion: '1.0.0',
+        runtimeVersion: version,
         runtimeSource: 'ggsql',
         languageId: 'ggsql',
-        languageName: 'ggSQL',
-        languageVersion: '1.0.0',
+        languageName: 'ggsql',
+        languageVersion: version,
         base64EncodedIconSvg: base64Icon,
         startupBehavior: 'explicit' as positron.LanguageRuntimeStartupBehavior,
         sessionLocation: 'workspace' as positron.LanguageRuntimeSessionLocation,
