@@ -396,14 +396,14 @@ impl fmt::Display for ParseError {
 
 - Precise error location reporting for user-friendly diagnostics
 - Context information helps identify where parsing failed
-- Converts to ggsqlError for unified error handling
+- Converts to GgsqlError for unified error handling
 
 #### Main Error Type (`lib.rs`)
 
 The library uses a unified error type for all operations:
 
 ```rust
-pub enum ggsqlError {
+pub enum GgsqlError {
     ParseError(String),        // Query parsing errors
     ValidationError(String),   // Semantic validation errors
     ReaderError(String),       // Data source errors
@@ -411,7 +411,7 @@ pub enum ggsqlError {
     InternalError(String),     // Unexpected internal errors
 }
 
-pub type Result<T> = std::result::Result<T, ggsqlError>;
+pub type Result<T> = std::result::Result<T, GgsqlError>;
 ```
 
 **Error Types**:

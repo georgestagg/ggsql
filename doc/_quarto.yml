@@ -13,17 +13,17 @@ website:
           - text: Overview
             href: syntax/index.qmd
           - text: ---
-          - text: "VISUALISE"
+          - text: "`VISUALISE`"
             href: syntax/clause/visualise.qmd
-          - text: "DRAW"
+          - text: "`DRAW`"
             href: syntax/clause/draw.qmd
-          - text: "SCALE"
+          - text: "`SCALE`"
             href: syntax/clause/scale.qmd
-          - text: "FACET"
+          - text: "`FACET`"
             href: syntax/clause/facet.qmd
-          - text: "PROJECT"
+          - text: "`PROJECT`"
             href: syntax/clause/project.qmd
-          - text: "LABEL"
+          - text: "`LABEL`"
             href: syntax/clause/label.qmd
       - examples.qmd
   sidebar:
@@ -58,7 +58,7 @@ format:
     theme:
       - cosmo
       - brand
-    css: styles.css
+    css: styles.scss
     toc: true
 
 

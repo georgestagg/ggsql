@@ -22,7 +22,7 @@
 
 use crate::parser::ast::{ArrayElement, Coord, CoordPropertyValue, CoordType, LiteralValue};
 use crate::writer::Writer;
-use crate::{ggsqlError, AestheticValue, DataFrame, Geom, Result, VizSpec};
+use crate::{AestheticValue, DataFrame, Geom, GgsqlError, Result, VizSpec};
 use polars::prelude::*;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ impl VegaLiteWriter {
 
             for (col_idx, col_name) in column_names.iter().enumerate() {
                 let series = df.get_columns().get(col_idx).ok_or_else(|| {
-                    ggsqlError::WriterError(format!("Failed to get column {}", col_name))
+                    GgsqlError::WriterError(format!("Failed to get column {}", col_name))
                 })?;
 
                 // Get value from series and convert to JSON Value
@@ -76,48 +76,48 @@ impl VegaLiteWriter {
             Int8 => {
                 let ca = series
                     .i8()
-                    .map_err(|e| ggsqlError::WriterError(format!("Failed to cast to i8: {}", e)))?;
+                    .map_err(|e| GgsqlError::WriterError(format!("Failed to cast to i8: {}", e)))?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Int16 => {
                 let ca = series.i16().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to i16: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to i16: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Int32 => {
                 let ca = series.i32().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to i32: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to i32: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Int64 => {
                 let ca = series.i64().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to i64: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to i64: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Float32 => {
                 let ca = series.f32().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to f32: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to f32: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Float64 => {
                 let ca = series.f64().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to f64: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to f64: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             Boolean => {
                 let ca = series.bool().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to bool: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to bool: {}", e))
                 })?;
                 Ok(ca.get(idx).map(|v| json!(v)).unwrap_or(Value::Null))
             }
             String => {
                 let ca = series.str().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to string: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to string: {}", e))
                 })?;
                 // Try to parse as number if it looks numeric
                 if let Some(val) = ca.get(idx) {
@@ -133,7 +133,7 @@ impl VegaLiteWriter {
             Date => {
                 // Convert days since epoch to ISO date string: "YYYY-MM-DD"
                 let ca = series.date().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to date: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to date: {}", e))
                 })?;
                 if let Some(days) = ca.get(idx) {
                     let unix_epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -146,7 +146,7 @@ impl VegaLiteWriter {
             Datetime(time_unit, _) => {
                 // Convert timestamp to ISO datetime: "YYYY-MM-DDTHH:MM:SS.sssZ"
                 let ca = series.datetime().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to datetime: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to datetime: {}", e))
                 })?;
                 if let Some(timestamp) = ca.get(idx) {
                     // Convert to microseconds based on time unit
@@ -169,7 +169,7 @@ impl VegaLiteWriter {
             Time => {
                 // Convert nanoseconds since midnight to ISO time: "HH:MM:SS.sss"
                 let ca = series.time().map_err(|e| {
-                    ggsqlError::WriterError(format!("Failed to cast to time: {}", e))
+                    GgsqlError::WriterError(format!("Failed to cast to time: {}", e))
                 })?;
                 if let Some(nanos) = ca.get(idx) {
                     let hours = nanos / 3_600_000_000_000;
@@ -541,7 +541,7 @@ impl VegaLiteWriter {
                     } else {
                         " (global data)".to_string()
                     };
-                    return Err(ggsqlError::ValidationError(format!(
+                    return Err(GgsqlError::ValidationError(format!(
                         "Column '{}' referenced in aesthetic '{}' (layer {}{}) does not exist.\nAvailable columns: {}",
                         col,
                         aesthetic,
@@ -561,7 +561,7 @@ impl VegaLiteWriter {
                 } else {
                     " (global data)".to_string()
                 };
-                return Err(ggsqlError::ValidationError(format!(
+                return Err(GgsqlError::ValidationError(format!(
                     "Column '{}' referenced in PARTITION BY (layer {}{}) does not exist.\nAvailable columns: {}",
                     col,
                     layer_idx + 1,
@@ -787,7 +787,7 @@ impl VegaLiteWriter {
     fn update_encoding_for_polar(&self, encoding: &mut Value, theta_aesthetic: &str) -> Result<()> {
         let enc_obj = encoding
             .as_object_mut()
-            .ok_or_else(|| ggsqlError::WriterError("Encoding is not an object".to_string()))?;
+            .ok_or_else(|| GgsqlError::WriterError("Encoding is not an object".to_string()))?;
 
         // Map the theta aesthetic to theta channel
         if theta_aesthetic == "y" {
@@ -823,7 +823,7 @@ impl VegaLiteWriter {
         match value {
             CoordPropertyValue::Array(arr) => {
                 if arr.len() != 2 {
-                    return Err(ggsqlError::WriterError(format!(
+                    return Err(GgsqlError::WriterError(format!(
                         "xlim/ylim must be exactly 2 numbers, got {}",
                         arr.len()
                     )));
@@ -831,7 +831,7 @@ impl VegaLiteWriter {
                 let min = match &arr[0] {
                     ArrayElement::Number(n) => *n,
                     _ => {
-                        return Err(ggsqlError::WriterError(
+                        return Err(GgsqlError::WriterError(
                             "xlim/ylim values must be numbers".to_string(),
                         ))
                     }
@@ -839,7 +839,7 @@ impl VegaLiteWriter {
                 let max = match &arr[1] {
                     ArrayElement::Number(n) => *n,
                     _ => {
-                        return Err(ggsqlError::WriterError(
+                        return Err(GgsqlError::WriterError(
                             "xlim/ylim values must be numbers".to_string(),
                         ))
                     }
@@ -850,7 +850,7 @@ impl VegaLiteWriter {
 
                 Ok(Some((min, max)))
             }
-            _ => Err(ggsqlError::WriterError(
+            _ => Err(GgsqlError::WriterError(
                 "xlim/ylim must be an array".to_string(),
             )),
         }
@@ -1012,7 +1012,7 @@ impl Writer for VegaLiteWriter {
         for (layer_idx, (layer, key)) in spec.layers.iter().zip(layer_data_keys.iter()).enumerate()
         {
             let df = data.get(key).ok_or_else(|| {
-                ggsqlError::WriterError(format!(
+                GgsqlError::WriterError(format!(
                     "Missing data source '{}' for layer {}",
                     key,
                     layer_idx + 1
@@ -1048,7 +1048,7 @@ impl Writer for VegaLiteWriter {
         if faceting_mode {
             let unique_keys: std::collections::HashSet<_> = layer_data_keys.iter().collect();
             if unique_keys.len() > 1 {
-                return Err(ggsqlError::ValidationError(
+                return Err(GgsqlError::ValidationError(
                     "Faceting requires all layers to use the same data source. \
                      Layers with different FROM sources cannot be faceted."
                         .to_string(),
@@ -1264,14 +1264,14 @@ impl Writer for VegaLiteWriter {
         }
 
         serde_json::to_string_pretty(&vl_spec).map_err(|e| {
-            ggsqlError::WriterError(format!("Failed to serialize Vega-Lite JSON: {}", e))
+            GgsqlError::WriterError(format!("Failed to serialize Vega-Lite JSON: {}", e))
         })
     }
 
     fn validate(&self, spec: &VizSpec) -> Result<()> {
         // Check that we have at least one layer
         if spec.layers.is_empty() {
-            return Err(ggsqlError::ValidationError(
+            return Err(GgsqlError::ValidationError(
                 "VegaLiteWriter requires at least one layer".to_string(),
             ));
         }
@@ -1280,12 +1280,12 @@ impl Writer for VegaLiteWriter {
         for layer in &spec.layers {
             // Check required aesthetics
             layer.validate_required_aesthetics().map_err(|e| {
-                ggsqlError::ValidationError(format!("Layer validation failed: {}", e))
+                GgsqlError::ValidationError(format!("Layer validation failed: {}", e))
             })?;
 
             // Check SETTING parameters are valid for this geom
             layer.validate_settings().map_err(|e| {
-                ggsqlError::ValidationError(format!("Layer validation failed: {}", e))
+                GgsqlError::ValidationError(format!("Layer validation failed: {}", e))
             })?;
         }
 

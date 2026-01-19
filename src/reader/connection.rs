@@ -2,7 +2,7 @@
 //!
 //! Parses URI-style connection strings to determine database type and connection parameters.
 
-use crate::{ggsqlError, Result};
+use crate::{GgsqlError, Result};
 
 /// Parsed connection information
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +49,7 @@ pub fn parse_connection_string(uri: &str) -> Result<ConnectionInfo> {
         // Remove leading slashes for file paths
         let cleaned_path = path.trim_start_matches('/');
         if cleaned_path.is_empty() {
-            return Err(ggsqlError::ReaderError(
+            return Err(GgsqlError::ReaderError(
                 "DuckDB file path cannot be empty".to_string(),
             ));
         }
@@ -63,14 +63,14 @@ pub fn parse_connection_string(uri: &str) -> Result<ConnectionInfo> {
     if let Some(path) = uri.strip_prefix("sqlite://") {
         let cleaned_path = path.trim_start_matches('/');
         if cleaned_path.is_empty() {
-            return Err(ggsqlError::ReaderError(
+            return Err(GgsqlError::ReaderError(
                 "SQLite file path cannot be empty".to_string(),
             ));
         }
         return Ok(ConnectionInfo::SQLite(cleaned_path.to_string()));
     }
 
-    Err(ggsqlError::ReaderError(format!(
+    Err(GgsqlError::ReaderError(format!(
         "Unsupported connection string format: {}. Supported: duckdb://, postgres://, sqlite://",
         uri
     )))

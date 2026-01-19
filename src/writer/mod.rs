@@ -48,7 +48,7 @@ pub trait Writer {
     ///
     /// # Errors
     ///
-    /// Returns `ggsqlError::WriterError` if:
+    /// Returns `GgsqlError::WriterError` if:
     /// - The spec is incompatible with this writer
     /// - The data doesn't match the spec's requirements
     /// - Output generation fails

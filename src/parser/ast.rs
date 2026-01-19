@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::{ggsqlError, DataFrame, Result};
+use crate::{DataFrame, GgsqlError, Result};
 
 /// Column information from a data source schema
 #[derive(Debug, Clone)]
@@ -668,7 +668,7 @@ impl Geom {
     {
         // Get x column name from aesthetics
         let x_col = get_column_name(aesthetics, "x").ok_or_else(|| {
-            ggsqlError::ValidationError("Histogram requires 'x' aesthetic mapping".to_string())
+            GgsqlError::ValidationError("Histogram requires 'x' aesthetic mapping".to_string())
         })?;
 
         // Get bins from parameters (default: 30)
@@ -749,7 +749,7 @@ impl Geom {
         // Determine aggregation expression based on weight aesthetic
         let agg_expr = if let Some(weight_value) = aesthetics.get("weight") {
             if weight_value.is_literal() {
-                return Err(ggsqlError::ValidationError(
+                return Err(GgsqlError::ValidationError(
                     "Histogram weight aesthetic must be a column, not a literal".to_string(),
                 ));
             }
@@ -871,7 +871,7 @@ impl Geom {
         let agg_expr = if let Some(weight_value) = aesthetics.get("weight") {
             // weight is mapped - check if it's valid
             if weight_value.is_literal() {
-                return Err(ggsqlError::ValidationError(
+                return Err(GgsqlError::ValidationError(
                     "Bar weight aesthetic must be a column, not a literal".to_string(),
                 ));
             }
@@ -1022,7 +1022,7 @@ fn get_column_name(aesthetics: &Mappings, aesthetic: &str) -> Option<String> {
 /// Extract min and max from histogram stats DataFrame
 fn extract_histogram_min_max(df: &DataFrame) -> Result<(f64, f64)> {
     if df.height() == 0 {
-        return Err(ggsqlError::ValidationError(
+        return Err(GgsqlError::ValidationError(
             "No data for histogram statistics".to_string(),
         ));
     }
@@ -1033,7 +1033,7 @@ fn extract_histogram_min_max(df: &DataFrame) -> Result<(f64, f64)> {
         .and_then(|s| s.f64().ok())
         .and_then(|ca| ca.get(0))
         .ok_or_else(|| {
-            ggsqlError::ValidationError("Could not extract min value for histogram".to_string())
+            GgsqlError::ValidationError("Could not extract min value for histogram".to_string())
         })?;
 
     let max_val = df
@@ -1042,7 +1042,7 @@ fn extract_histogram_min_max(df: &DataFrame) -> Result<(f64, f64)> {
         .and_then(|s| s.f64().ok())
         .and_then(|ca| ca.get(0))
         .ok_or_else(|| {
-            ggsqlError::ValidationError("Could not extract max value for histogram".to_string())
+            GgsqlError::ValidationError("Could not extract max value for histogram".to_string())
         })?;
 
     Ok((min_val, max_val))

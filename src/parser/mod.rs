@@ -38,7 +38,7 @@ assert_eq!(specs[0].layers[0].geom, Geom::Line);
 ```
 */
 
-use crate::{ggsqlError, Result};
+use crate::{GgsqlError, Result};
 use tree_sitter::Tree;
 
 pub mod ast;
@@ -72,16 +72,16 @@ fn parse_full_query(query: &str) -> Result<Tree> {
     // Set the tree-sitter-ggsql language
     parser
         .set_language(&tree_sitter_ggsql::language())
-        .map_err(|e| ggsqlError::ParseError(format!("Failed to set language: {}", e)))?;
+        .map_err(|e| GgsqlError::ParseError(format!("Failed to set language: {}", e)))?;
 
     // Parse the full query (SQL + VISUALISE portions together)
     let tree = parser
         .parse(query, None)
-        .ok_or_else(|| ggsqlError::ParseError("Failed to parse query".to_string()))?;
+        .ok_or_else(|| GgsqlError::ParseError("Failed to parse query".to_string()))?;
 
     // Check for parse errors
     if tree.root_node().has_error() {
-        return Err(ggsqlError::ParseError(
+        return Err(GgsqlError::ParseError(
             "Parse tree contains errors".to_string(),
         ));
     }

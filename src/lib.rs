@@ -58,7 +58,7 @@ pub use polars::prelude::DataFrame;
 
 /// Main library error type
 #[derive(thiserror::Error, Debug)]
-pub enum ggsqlError {
+pub enum GgsqlError {
     #[error("Parse error: {0}")]
     ParseError(String),
 
@@ -75,7 +75,7 @@ pub enum ggsqlError {
     InternalError(String),
 }
 
-pub type Result<T> = std::result::Result<T, ggsqlError>;
+pub type Result<T> = std::result::Result<T, GgsqlError>;
 
 /// Version information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -3,7 +3,7 @@ meta:
   link: https://github.com/georgestagg/ggsql
 
 logo:
-  small: assets/icon.png
+  small: assets/icon.svg
   medium: assets/logo.png
 
 color:

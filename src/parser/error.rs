@@ -59,8 +59,8 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-impl From<ParseError> for crate::ggsqlError {
+impl From<ParseError> for crate::GgsqlError {
     fn from(err: ParseError) -> Self {
-        crate::ggsqlError::ParseError(err.to_string())
+        crate::GgsqlError::ParseError(err.to_string())
     }
 }

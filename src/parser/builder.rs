@@ -4,7 +4,7 @@
 //! handling all the node types defined in the grammar.
 
 use super::ast::*;
-use crate::{ggsqlError, Result};
+use crate::{GgsqlError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Tree};
 
@@ -14,7 +14,7 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
 
     // Check if root is a query node
     if root.kind() != "query" {
-        return Err(ggsqlError::ParseError(format!(
+        return Err(GgsqlError::ParseError(format!(
             "Expected 'query' root node, got '{}'",
             root.kind()
         )));
@@ -42,7 +42,7 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
 
             // Validate VISUALISE FROM usage
             if spec.source.is_some() && last_is_select {
-                return Err(ggsqlError::ParseError(
+                return Err(GgsqlError::ParseError(
                     "Cannot use VISUALISE FROM when the last SQL statement is SELECT. \
                      Use either 'SELECT ... VISUALISE' or remove the SELECT and use \
                      'VISUALISE FROM ...'."
@@ -55,7 +55,7 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
     }
 
     if specs.is_empty() {
-        return Err(ggsqlError::ParseError(
+        return Err(GgsqlError::ParseError(
             "No VISUALISE statements found in query".to_string(),
         ));
     }
@@ -190,7 +190,7 @@ fn parse_explicit_mapping(node: &Node, source: &str) -> Result<(String, Aestheti
 
     match (value, aesthetic) {
         (Some(val), Some(aes)) => Ok((aes, val)),
-        _ => Err(ggsqlError::ParseError(
+        _ => Err(GgsqlError::ParseError(
             "Invalid explicit mapping: missing value or aesthetic".to_string(),
         )),
     }
@@ -213,7 +213,7 @@ fn validate_scale_coord_conflicts(spec: &VizSpec) -> Result<()> {
                 if scale.aesthetic == aesthetic {
                     // Check if this scale has a domain property
                     if scale.properties.contains_key("domain") {
-                        return Err(ggsqlError::ParseError(format!(
+                        return Err(GgsqlError::ParseError(format!(
                             "Domain for '{}' specified in both SCALE and COORD clauses. \
                             Please specify domain in only one location.",
                             aesthetic
@@ -465,7 +465,7 @@ fn parse_parameter_assignment(node: &Node, source: &str) -> Result<(String, Para
     }
 
     if param_name.is_empty() || param_value.is_none() {
-        return Err(ggsqlError::ParseError(format!(
+        return Err(GgsqlError::ParseError(format!(
             "Invalid parameter assignment: param='{}', value={:?}",
             param_name, param_value
         )));
@@ -487,7 +487,7 @@ fn parse_parameter_value(node: &Node, source: &str) -> Result<ParameterValue> {
             "number" => {
                 let text = get_node_text(&child, source);
                 let num = text.parse::<f64>().map_err(|e| {
-                    ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                    GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
                 })?;
                 return Ok(ParameterValue::Number(num));
             }
@@ -500,7 +500,7 @@ fn parse_parameter_value(node: &Node, source: &str) -> Result<ParameterValue> {
         }
     }
 
-    Err(ggsqlError::ParseError(format!(
+    Err(GgsqlError::ParseError(format!(
         "Could not parse parameter value from node: {}",
         node.kind()
     )))
@@ -520,7 +520,7 @@ fn parse_filter_clause(node: &Node, source: &str) -> Result<SqlExpression> {
         }
     }
 
-    Err(ggsqlError::ParseError(
+    Err(GgsqlError::ParseError(
         "Could not find filter expression in filter clause".to_string(),
     ))
 }
@@ -536,7 +536,7 @@ fn parse_order_clause(node: &Node, source: &str) -> Result<SqlExpression> {
         }
     }
 
-    Err(ggsqlError::ParseError(
+    Err(GgsqlError::ParseError(
         "Could not find order expression in order clause".to_string(),
     ))
 }
@@ -565,7 +565,7 @@ fn parse_geom_type(text: &str) -> Result<Geom> {
         "vline" => Ok(Geom::VLine),
         "abline" => Ok(Geom::AbLine),
         "errorbar" => Ok(Geom::ErrorBar),
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unknown geom type: {}",
             text
         ))),
@@ -587,7 +587,7 @@ fn parse_literal_value(node: &Node, source: &str) -> Result<AestheticValue> {
             "number" => {
                 let text = get_node_text(&child, source);
                 let num = text.parse::<f64>().map_err(|e| {
-                    ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                    GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
                 })?;
                 return Ok(AestheticValue::Literal(LiteralValue::Number(num)));
             }
@@ -600,7 +600,7 @@ fn parse_literal_value(node: &Node, source: &str) -> Result<AestheticValue> {
         }
     }
 
-    Err(ggsqlError::ParseError(format!(
+    Err(GgsqlError::ParseError(format!(
         "Could not parse literal value from node: {}",
         node.kind()
     )))
@@ -652,7 +652,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
     }
 
     if aesthetic.is_empty() {
-        return Err(ggsqlError::ParseError(
+        return Err(GgsqlError::ParseError(
             "Scale clause missing aesthetic name".to_string(),
         ));
     }
@@ -678,7 +678,7 @@ fn parse_scale_type(text: &str) -> Result<ScaleType> {
         "viridis" => Ok(ScaleType::Viridis),
         "plasma" => Ok(ScaleType::Plasma),
         "diverging" => Ok(ScaleType::Diverging),
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unknown scale type: {}",
             text
         ))),
@@ -698,7 +698,7 @@ fn parse_scale_property_value(node: &Node, source: &str) -> Result<ScaleProperty
             "number" => {
                 let text = get_node_text(&child, source);
                 let num = text.parse::<f64>().map_err(|e| {
-                    ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                    GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
                 })?;
                 return Ok(ScalePropertyValue::Number(num));
             }
@@ -744,7 +744,7 @@ fn parse_scale_property_value(node: &Node, source: &str) -> Result<ScaleProperty
         }
     }
 
-    Err(ggsqlError::ParseError(format!(
+    Err(GgsqlError::ParseError(format!(
         "Could not parse scale property value from node: {}",
         node.kind()
     )))
@@ -827,7 +827,7 @@ fn parse_facet_scales(node: &Node, source: &str) -> Result<FacetScales> {
         "free" => Ok(FacetScales::Free),
         "free_x" => Ok(FacetScales::FreeX),
         "free_y" => Ok(FacetScales::FreeY),
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unknown facet scales: {}",
             text
         ))),
@@ -911,7 +911,7 @@ fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, Coo
     }
 
     if prop_name.is_empty() || prop_value.is_none() {
-        return Err(ggsqlError::ParseError(format!(
+        return Err(GgsqlError::ParseError(format!(
             "Invalid coord property: name='{}', value present={}",
             prop_name,
             prop_value.is_some()
@@ -956,7 +956,7 @@ fn validate_coord_properties(
                 CoordType::Polar => "theta, <aesthetics>",
                 _ => "<varies>",
             };
-            return Err(ggsqlError::ParseError(format!(
+            return Err(GgsqlError::ParseError(format!(
                 "Property '{}' not valid for {:?} coordinates. Valid properties: {}",
                 prop_name, coord_type, valid_props
             )));
@@ -1006,7 +1006,7 @@ fn parse_coord_type(node: &Node, source: &str) -> Result<CoordType> {
         "trans" => Ok(CoordType::Trans),
         "map" => Ok(CoordType::Map),
         "quickmap" => Ok(CoordType::QuickMap),
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unknown coord type: {}",
             text
         ))),
@@ -1024,7 +1024,7 @@ fn parse_coord_property_value(node: &Node, source: &str) -> Result<CoordProperty
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
-                ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
             Ok(CoordPropertyValue::Number(num))
         }
@@ -1066,7 +1066,7 @@ fn parse_coord_property_value(node: &Node, source: &str) -> Result<CoordProperty
             }
             Ok(CoordPropertyValue::Array(values))
         }
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unexpected coord property value type: {}",
             node.kind()
         ))),
@@ -1156,7 +1156,7 @@ fn build_guide(node: &Node, source: &str) -> Result<Guide> {
     }
 
     if aesthetic.is_empty() {
-        return Err(ggsqlError::ParseError(
+        return Err(GgsqlError::ParseError(
             "Guide clause missing aesthetic name".to_string(),
         ));
     }
@@ -1175,7 +1175,7 @@ fn parse_guide_type(text: &str) -> Result<GuideType> {
         "colorbar" => Ok(GuideType::ColorBar),
         "axis" => Ok(GuideType::Axis),
         "none" => Ok(GuideType::None),
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unknown guide type: {}",
             text
         ))),
@@ -1193,7 +1193,7 @@ fn parse_guide_property_value(node: &Node, source: &str) -> Result<GuideProperty
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
-                ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
             Ok(GuidePropertyValue::Number(num))
         }
@@ -1202,7 +1202,7 @@ fn parse_guide_property_value(node: &Node, source: &str) -> Result<GuideProperty
             let bool_val = text == "true";
             Ok(GuidePropertyValue::Boolean(bool_val))
         }
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unexpected guide property value type: {}",
             node.kind()
         ))),
@@ -1263,7 +1263,7 @@ fn parse_theme_property_value(node: &Node, source: &str) -> Result<ThemeProperty
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
-                ggsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
+                GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
             Ok(ThemePropertyValue::Number(num))
         }
@@ -1272,7 +1272,7 @@ fn parse_theme_property_value(node: &Node, source: &str) -> Result<ThemeProperty
             let bool_val = text == "true";
             Ok(ThemePropertyValue::Boolean(bool_val))
         }
-        _ => Err(ggsqlError::ParseError(format!(
+        _ => Err(GgsqlError::ParseError(format!(
             "Unexpected theme property value type: {}",
             node.kind()
         ))),
@@ -1353,7 +1353,7 @@ mod tests {
 
         // Check for parse errors like the main parse_full_query does
         if tree.root_node().has_error() {
-            return Err(ggsqlError::ParseError(
+            return Err(GgsqlError::ParseError(
                 "Parse tree contains errors".to_string(),
             ));
         }

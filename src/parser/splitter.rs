@@ -3,7 +3,7 @@
 //! Splits ggsql queries into SQL and visualization portions, and injects
 //! SELECT * FROM <source> when VISUALISE FROM is used.
 
-use crate::{ggsqlError, Result};
+use crate::{GgsqlError, Result};
 use tree_sitter::{Node, Parser};
 
 /// Split a ggsql query into SQL and visualization portions
@@ -21,11 +21,11 @@ pub fn split_query(query: &str) -> Result<(String, String)> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_ggsql::language())
-        .map_err(|e| ggsqlError::InternalError(format!("Failed to set language: {}", e)))?;
+        .map_err(|e| GgsqlError::InternalError(format!("Failed to set language: {}", e)))?;
 
     let tree = parser
         .parse(query, None)
-        .ok_or_else(|| ggsqlError::ParseError("Failed to parse query".to_string()))?;
+        .ok_or_else(|| GgsqlError::ParseError("Failed to parse query".to_string()))?;
 
     let root = tree.root_node();
 
@@ -39,7 +39,7 @@ pub fn split_query(query: &str) -> Result<(String, String)> {
     if !has_visualise_statement {
         let query_upper = query.to_uppercase();
         if query_upper.contains("VISUALISE FROM") || query_upper.contains("VISUALIZE FROM") {
-            return Err(ggsqlError::ParseError(
+            return Err(GgsqlError::ParseError(
                 "Error parsing VISUALISE statement. Did you forget a semicolon?".to_string(),
             ));
         }

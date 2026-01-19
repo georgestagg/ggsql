@@ -46,7 +46,7 @@ pub trait Reader {
     ///
     /// # Errors
     ///
-    /// Returns `ggsqlError::ReaderError` if:
+    /// Returns `GgsqlError::ReaderError` if:
     /// - The SQL is invalid
     /// - The connection fails
     /// - The table or columns don't exist
