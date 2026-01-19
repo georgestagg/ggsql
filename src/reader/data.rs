@@ -30,7 +30,7 @@ fn prep_builtin_dataset_query(name: &str, data: &[u8]) -> String {
         fs::write(&tmp_path, data).expect("Failed to write dataset");
     }
     format!(
-        "CREATE TABLE '{}' AS SELECT * FROM read_parquet('{}')",
+        "CREATE TABLE IF NOT EXISTS {} AS SELECT * FROM read_parquet('{}')",
         name,
         tmp_path.display()
     )
@@ -40,29 +40,22 @@ pub fn init_builtin_data(sql: &str) -> Result<Vec<String>, GgsqlError> {
     // This definition pulls out the dataset from SELECT {} FROM {string/identifiers} by
     // @select'ing the string/identifier token.
     let token_def = r#"
-    (select_statement
-      (select_body
-        (sql_keyword) @key
-        [
-          (string)
-          (identifier)
-        ] @select
-        (#eq? @key "FROM")
-    ))
+    (table_ref
+      table: (identifier) @select
+    )
     "#;
-    let tokens = tokens_from_tree(sql, token_def, "select")?;
+    let mut tokens = tokens_from_tree(sql, token_def, "select")?;
     let mut result = Vec::new();
     if tokens.is_empty() {
         return Ok(result);
     }
 
-    // Remove quotation marks from tokens
-    let mut tokens: Vec<&str> = tokens.iter().map(|s| s.trim_matches(['"', '\''])).collect();
+    // Deduplicate tokens
     tokens.sort_unstable();
     tokens.dedup();
 
     for dataset in tokens {
-        let materialize_query = match dataset {
+        let materialize_query = match dataset.as_str() {
             "penguins" => &prep_penguins_query(),
             "airquality" => &prep_airquality_query(),
             _ => "",
@@ -143,7 +136,7 @@ fn test_builtin_data_is_available() {
     let reader = crate::reader::DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
     // We need the VISUALISE here so `prepare_data` doesn't get tripped up
-    let query = "SELECT * FROM 'penguins' VISUALISE";
+    let query = "SELECT * FROM penguins VISUALISE";
     let result = crate::execute::prepare_data(query, &reader).unwrap();
     let dataframe = result.data.get("__global__").unwrap();
     let colnames = dataframe.get_column_names();
