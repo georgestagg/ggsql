@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-// Re-export input types for backward compatibility
+// Re-export input types
 pub use super::types::{
     AestheticValue, ArrayElement, ColumnInfo, DataSource, LiteralValue, Mappings, ParameterValue,
     Schema, SqlExpression,

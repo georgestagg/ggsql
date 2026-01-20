@@ -9,7 +9,7 @@ use crate::{GgsqlError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Tree};
 
-/// Build a Plot AST from a tree-sitter parse tree
+/// Build a Plot struct from a tree-sitter parse tree
 pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<Plot>> {
     let root = tree.root_node();
 

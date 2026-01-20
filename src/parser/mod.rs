@@ -38,15 +38,13 @@ assert_eq!(specs[0].layers[0].geom, Geom::line());
 ```
 */
 
-use crate::{GgsqlError, Result};
+use crate::{GgsqlError, Plot, Result};
 use tree_sitter::Tree;
 
 pub mod builder;
 pub mod error;
 pub mod splitter;
 
-// Re-export key types from the plot module for backward compatibility
-pub use crate::plot::*;
 pub use error::ParseError;
 pub use splitter::split_query;
 
@@ -97,6 +95,8 @@ pub fn extract_sql(query: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plot::LiteralValue;
+    use crate::{AestheticValue, DataSource, Geom};
 
     #[test]
     fn test_simple_query_parsing() {
