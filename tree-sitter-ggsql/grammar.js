@@ -64,7 +64,7 @@ module.exports = grammar({
       $.sql_keyword,
       $.string,
       $.number,
-      ',', '*', '.', '=', '<', '>', '!', '+', '-', '/', '%', '|', '&', '^', '~',
+      ',', '*', '.', '=', '<', '>', '!', '+', '-', '/', '%', '|', '&', '^', '~', '::',
       $.subquery,
       $.identifier
     ))),
@@ -161,37 +161,28 @@ module.exports = grammar({
     },
 
     // Subquery in parentheses - fully recursive, can contain any SQL
-    // Restructured to prioritize complete WITH/SELECT statements over token-by-token parsing
+    // Prioritizes WITH/SELECT statements, falls back to token-by-token parsing
     subquery: $ => prec(1, seq(
       '(',
       choice(
-        // If starts with WITH or SELECT, parse as complete statement first
-        seq(
-          choice($.with_statement, $.select_statement),
-          optional(repeat(choice(
-            $.window_function,
-            $.function_call,
-            $.string,
-            $.number,
-            $.identifier,
-            $.subquery,
-            $.typecast_value,
-            ',', '*', '.', '=', '<', '>', '!'
-          )))
-        ),
-        // Otherwise, fall back to token-by-token parsing
-        repeat1(choice(
-          $.window_function,
-          $.function_call,
-          $.string,
-          $.number,
-          $.identifier,
-          $.subquery,
-          $.typecast_value,
-          ',', '*', '.', '=', '<', '>', '!'
-        ))
+        $.with_statement,
+        $.select_statement,
+        $.subquery_body
       ),
       ')'
+    )),
+
+    // Token-by-token fallback for any other subquery content
+    subquery_body: $ => repeat1(choice(
+      $.window_function,
+      $.function_call,
+      $.sql_keyword,
+      $.string,
+      $.number,
+      $.identifier,
+      $.subquery,
+      ',', '*', '.', '=', '<', '>', '!', '::',
+      token(/[^\s;(),'\"]+/)
     )),
 
     // Function call with parentheses (can be empty like ROW_NUMBER())
@@ -289,16 +280,12 @@ module.exports = grammar({
       $.identifier,
       $.number,
       $.string,
-      $.typecast_value,
       '*'
     ),
 
-    typecast_value: $ => seq($.literal_value, "::", $.identifier),
-
-    builtin_dataset: $ => choice(
-      "ggsql:penguins",
-      "ggsql:airquality"
-    ),
+    // Namespaced identifier: matches "namespace:name" pattern
+    // Examples: ggsql:penguins, ggsql:airquality
+    namespaced_identifier: $ => token(/[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z_][a-zA-Z0-9_]*/),
 
     window_specification: $ => seq(
       '(',
@@ -342,12 +329,17 @@ module.exports = grammar({
       seq($.number, choice(caseInsensitive('PRECEDING'), caseInsensitive('FOLLOWING')))
     ),
 
+    // Dotted identifier (for catalog.schema.table)
+    qualified_name: $ => prec.left(seq(
+      $.identifier,
+      repeat(seq('.', $.identifier))
+    )),
+
     table_ref: $ => prec.right(seq(
       choice(
-        field('table', choice($.identifier, $.string, $.builtin_dataset)),
+        field('table', choice($.qualified_name, $.string, $.namespaced_identifier)),
         $.subquery,
       ),
-      optional(seq('.', field('schema_table', $.identifier))), // Not sure what this is
       optional(seq(
         optional(caseInsensitive('AS')),
         field('alias', $.identifier)
@@ -450,14 +442,14 @@ module.exports = grammar({
         // Option 1: Just FROM (inherit global mappings)
         seq(
           caseInsensitive('FROM'),
-          field('layer_source', choice($.identifier, $.string, $.builtin_dataset))
+          field('layer_source', choice($.qualified_name, $.string, $.namespaced_identifier))
         ),
         // Option 2: Mapping list (uses shared structure), optionally followed by FROM
         seq(
           $.mapping_list,
           optional(seq(
             caseInsensitive('FROM'),
-            field('layer_source', choice($.identifier, $.string, $.builtin_dataset))
+            field('layer_source', choice($.qualified_name, $.string, $.namespaced_identifier))
           ))
         )
       )

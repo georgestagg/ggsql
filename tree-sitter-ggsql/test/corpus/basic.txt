@@ -579,7 +579,8 @@ DRAW point
             (select_body
               (from_clause
                 (table_ref
-                  table: (identifier)))))))))
+                  table: (qualified_name
+                  (identifier))))))))))
   (visualise_statement
     (global_mapping
       (mapping_list
@@ -597,7 +598,8 @@ DRAW point
             aesthetic: (aesthetic_name)))))
     (from_clause
       (table_ref
-        table: (identifier)))
+        table: (qualified_name
+                  (identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -619,7 +621,8 @@ DRAW bar
         (select_body
           (from_clause
             (table_ref
-              table: (identifier)))))))
+              table: (qualified_name
+                  (identifier))))))))
   (visualise_statement
     (global_mapping
       (mapping_list
@@ -683,7 +686,8 @@ DRAW bar MAPPING category AS x, total AS y
   (visualise_statement
     (from_clause
       (table_ref
-        table: (identifier)))
+        table: (qualified_name
+                  (identifier))))
     (viz_clause
       (draw_clause
         (geom_type)
@@ -777,7 +781,8 @@ DRAW point MAPPING x AS x, y AS y FROM my_cte
                   (column_reference
                     (identifier)))
                 aesthetic: (aesthetic_name))))
-          layer_source: (identifier))))))
+          layer_source: (qualified_name
+                (identifier)))))))
 
 ================================================================================
 PARTITION BY single column
@@ -915,7 +920,8 @@ DRAW point MAPPING x AS x, rn AS y
           (identifier)
           (from_clause
             (table_ref
-              table: (identifier)))))))
+              table: (qualified_name
+                  (identifier))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -963,7 +969,8 @@ DRAW point MAPPING x AS x, rnk AS y
           (identifier)
           (from_clause
             (table_ref
-              table: (identifier)))))))
+              table: (qualified_name
+                  (identifier))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1017,7 +1024,8 @@ DRAW line MAPPING x AS x, total AS y
           (identifier)
           (from_clause
             (table_ref
-              table: (identifier)))))))
+              table: (qualified_name
+                  (identifier))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1066,11 +1074,13 @@ DRAW point MAPPING x AS x
                 (identifier)
                 (from_clause
                   (table_ref
-                    table: (identifier))))))))))
+                    table: (qualified_name
+                  (identifier)))))))))))
   (visualise_statement
     (from_clause
       (table_ref
-        table: (identifier)))
+        table: (qualified_name
+                  (identifier))))
     (viz_clause
       (draw_clause
         (geom_type)
@@ -1115,7 +1125,8 @@ DRAW point MAPPING interval AS x
           (identifier)
           (from_clause
             (table_ref
-              table: (identifier)))))))
+              table: (qualified_name
+                  (identifier))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1600,7 +1611,8 @@ DRAW point MAPPING x AS x
                   (select_body
                     (from_clause
                       (table_ref
-                        table: (identifier))))))))))))
+                        table: (qualified_name
+                  (identifier)))))))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1638,7 +1650,8 @@ DRAW point MAPPING x AS x
                   (select_body
                     (from_clause
                       (table_ref
-                        table: (identifier))))))
+                        table: (qualified_name
+                  (identifier)))))))
               alias: (identifier)))))))
   (visualise_statement
     (viz_clause
@@ -1682,7 +1695,8 @@ DRAW point MAPPING x AS x
                             (select_body
                               (from_clause
                                 (table_ref
-                                  table: (identifier)))))))))))))))))
+                                  table: (qualified_name
+                  (identifier))))))))))))))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1718,7 +1732,8 @@ DRAW point MAPPING x AS x
                   (select_body
                     (from_clause
                       (table_ref
-                        table: (identifier))))))
+                        table: (qualified_name
+                  (identifier)))))))
               alias: (identifier))
             (table_ref
               (subquery
@@ -1726,7 +1741,8 @@ DRAW point MAPPING x AS x
                   (select_body
                     (from_clause
                       (table_ref
-                        table: (identifier))))))
+                        table: (qualified_name
+                  (identifier)))))))
               alias: (identifier)))))))
   (visualise_statement
     (viz_clause
@@ -1742,7 +1758,7 @@ DRAW point MAPPING x AS x
                 aesthetic: (aesthetic_name)))))))))
 
 ================================================================================
-Detecting builtin datasets
+Detecting namespaced datasets
 ================================================================================
 
 SELECT foo FROM ggsql:airquality
@@ -1759,7 +1775,7 @@ DRAW point MAPPING x AS x FROM ggsql:penguins
           (identifier)
           (from_clause
             (table_ref
-              (builtin_dataset)))))))
+              table: (namespaced_identifier)))))))
   (visualise_statement
     (viz_clause
       (draw_clause
@@ -1768,8 +1784,8 @@ DRAW point MAPPING x AS x FROM ggsql:penguins
           (mapping_list
             (mapping_element
               (explicit_mapping
-                (mapping_value
+                value: (mapping_value
                   (column_reference
                     (identifier)))
-                (aesthetic_name))))
-          (builtin_dataset))))))
+                aesthetic: (aesthetic_name))))
+          layer_source: (namespaced_identifier))))))
