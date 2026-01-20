@@ -3,6 +3,17 @@ use tree_sitter::{Parser, Query, StreamingIterator};
 
 use crate::GgsqlError;
 
+// To add new built-in datasets follow these steps:
+//
+// 1. Add a parquet file of your dataset to the /data/ folder
+// 2. Include the bytes of that parquet file in the binary, like is done
+//    beneath this block.
+// 3. Make a `prep_{dataset}_query()` convenience function.
+// 4. In the `init_builtin_dataset()` below, include a `match`-arm for your
+//    dataset.
+// 5. In the 'tree-sitter-ggsql/grammar.js' file, expand the 'builtin_dataset'
+//    rule to include your dataset.
+
 static PENGUINS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../data/penguins.parquet"
@@ -39,11 +50,7 @@ fn prep_builtin_dataset_query(name: &str, data: &[u8]) -> String {
 pub fn init_builtin_data(sql: &str) -> Result<Vec<String>, GgsqlError> {
     // This definition pulls out the dataset from SELECT {} FROM {string/identifiers} by
     // @select'ing the string/identifier token.
-    let token_def = r#"
-    (table_ref
-      table: (identifier) @select
-    )
-    "#;
+    let token_def = r#"(builtin_dataset) @select"#;
     let mut tokens = tokens_from_tree(sql, token_def, "select")?;
     let mut result = Vec::new();
     if tokens.is_empty() {
@@ -56,8 +63,8 @@ pub fn init_builtin_data(sql: &str) -> Result<Vec<String>, GgsqlError> {
 
     for dataset in tokens {
         let materialize_query = match dataset.as_str() {
-            "penguins" => &prep_penguins_query(),
-            "airquality" => &prep_airquality_query(),
+            "ggsql:penguins" => &prep_penguins_query(),
+            "ggsql:airquality" => &prep_airquality_query(),
             _ => "",
         };
         if !materialize_query.is_empty() {
@@ -136,7 +143,7 @@ fn test_builtin_data_is_available() {
     let reader = crate::reader::DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
     // We need the VISUALISE here so `prepare_data` doesn't get tripped up
-    let query = "SELECT * FROM penguins VISUALISE";
+    let query = "SELECT * FROM ggsql:penguins VISUALISE";
     let result = crate::execute::prepare_data(query, &reader).unwrap();
     let dataframe = result.data.get("__global__").unwrap();
     let colnames = dataframe.get_column_names();
@@ -155,7 +162,7 @@ fn test_builtin_data_is_available() {
         ]
     );
 
-    let query = "SELECT * FROM airquality VISUALISE";
+    let query = "VISUALISE * FROM ggsql:airquality";
     let result = crate::execute::prepare_data(query, &reader).unwrap();
     let dataframe = result.data.get("__global__").unwrap();
     let colnames = dataframe.get_column_names();

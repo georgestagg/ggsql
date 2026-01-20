@@ -295,6 +295,11 @@ module.exports = grammar({
 
     typecast_value: $ => seq($.literal_value, "::", $.identifier),
 
+    builtin_dataset: $ => choice(
+      "ggsql:penguins",
+      "ggsql:airquality"
+    ),
+
     window_specification: $ => seq(
       '(',
       optional($.window_partition_clause),
@@ -339,7 +344,7 @@ module.exports = grammar({
 
     table_ref: $ => prec.right(seq(
       choice(
-        field('table', choice($.identifier, $.string)),
+        field('table', choice($.identifier, $.string, $.builtin_dataset)),
         $.subquery,
       ),
       optional(seq('.', field('schema_table', $.identifier))), // Not sure what this is
@@ -445,14 +450,14 @@ module.exports = grammar({
         // Option 1: Just FROM (inherit global mappings)
         seq(
           caseInsensitive('FROM'),
-          field('layer_source', choice($.identifier, $.string))
+          field('layer_source', choice($.identifier, $.string, $.builtin_dataset))
         ),
         // Option 2: Mapping list (uses shared structure), optionally followed by FROM
         seq(
           $.mapping_list,
           optional(seq(
             caseInsensitive('FROM'),
-            field('layer_source', choice($.identifier, $.string))
+            field('layer_source', choice($.identifier, $.string, $.builtin_dataset))
           ))
         )
       )
