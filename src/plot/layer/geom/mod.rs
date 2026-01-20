@@ -28,55 +28,55 @@ use std::sync::Arc;
 pub mod types;
 
 // Geom implementations
-mod point;
+mod abline;
+mod area;
+mod arrow;
+mod bar;
+mod boxplot;
+mod density;
+mod errorbar;
+mod histogram;
+mod hline;
+mod label;
 mod line;
 mod path;
-mod bar;
-mod area;
-mod tile;
+mod point;
 mod polygon;
 mod ribbon;
-mod histogram;
-mod density;
-mod smooth;
-mod boxplot;
-mod violin;
-mod text;
-mod label;
 mod segment;
-mod arrow;
-mod hline;
+mod smooth;
+mod text;
+mod tile;
+mod violin;
 mod vline;
-mod abline;
-mod errorbar;
 
 // Re-export types
 pub use types::{DefaultParam, DefaultParamValue, GeomAesthetics, StatResult};
 
 // Re-export geom structs for direct access if needed
-pub use point::Point;
+pub use abline::AbLine;
+pub use area::Area;
+pub use arrow::Arrow;
+pub use bar::Bar;
+pub use boxplot::Boxplot;
+pub use density::Density;
+pub use errorbar::ErrorBar;
+pub use histogram::Histogram;
+pub use hline::HLine;
+pub use label::Label;
 pub use line::Line;
 pub use path::Path;
-pub use bar::Bar;
-pub use area::Area;
-pub use tile::Tile;
+pub use point::Point;
 pub use polygon::Polygon;
 pub use ribbon::Ribbon;
-pub use histogram::Histogram;
-pub use density::Density;
-pub use smooth::Smooth;
-pub use boxplot::Boxplot;
-pub use violin::Violin;
-pub use text::Text;
-pub use label::Label;
 pub use segment::Segment;
-pub use arrow::Arrow;
-pub use hline::HLine;
+pub use smooth::Smooth;
+pub use text::Text;
+pub use tile::Tile;
+pub use violin::Violin;
 pub use vline::VLine;
-pub use abline::AbLine;
-pub use errorbar::ErrorBar;
 
-use super::ast::{ParameterValue, Schema};
+use crate::plot::types::{ParameterValue, Schema};
 
 /// Enum of all geom types for pattern matching and serialization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -393,7 +393,14 @@ impl Geom {
         parameters: &HashMap<String, ParameterValue>,
         execute_query: &dyn Fn(&str) -> Result<DataFrame>,
     ) -> Result<StatResult> {
-        self.0.apply_stat_transform(query, schema, aesthetics, group_by, parameters, execute_query)
+        self.0.apply_stat_transform(
+            query,
+            schema,
+            aesthetics,
+            group_by,
+            parameters,
+            execute_query,
+        )
     }
 
     /// Get valid settings

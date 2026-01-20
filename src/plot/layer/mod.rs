@@ -6,8 +6,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::ast::{AestheticValue, DataSource, LiteralValue, Mappings, ParameterValue};
-use super::geom::{DefaultParamValue, Geom};
+// Geom is now a submodule of layer
+pub mod geom;
+
+// Re-export geom types for convenience
+pub use geom::{
+    DefaultParam, DefaultParamValue, Geom, GeomAesthetics, GeomTrait, GeomType, StatResult,
+};
+
+use crate::plot::types::{
+    AestheticValue, DataSource, LiteralValue, Mappings, ParameterValue, SqlExpression,
+};
 
 /// A single visualization layer (from DRAW clause)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,36 +38,6 @@ pub struct Layer {
     pub order_by: Option<SqlExpression>,
     /// Columns for grouping/partitioning (from PARTITION BY clause)
     pub partition_by: Vec<String>,
-}
-
-/// Raw SQL expression for layer-specific clauses (FILTER, ORDER BY)
-///
-/// This stores raw SQL text verbatim, which is passed directly to the database
-/// backend. This allows any valid SQL expression to be used.
-///
-/// Example values:
-/// - `"x > 10"` (filter)
-/// - `"region = 'North' AND year >= 2020"` (filter)
-/// - `"date ASC"` (order by)
-/// - `"category, value DESC"` (order by)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SqlExpression(pub String);
-
-impl SqlExpression {
-    /// Create a new SQL expression from raw text
-    pub fn new(sql: impl Into<String>) -> Self {
-        Self(sql.into())
-    }
-
-    /// Get the raw SQL text
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Consume and return the raw SQL text
-    pub fn into_string(self) -> String {
-        self.0
-    }
 }
 
 impl Layer {

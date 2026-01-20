@@ -41,24 +41,20 @@ assert_eq!(specs[0].layers[0].geom, Geom::line());
 use crate::{GgsqlError, Result};
 use tree_sitter::Tree;
 
-pub mod ast;
 pub mod builder;
 pub mod error;
-pub mod geom;
-pub mod layer;
 pub mod splitter;
 
-// Re-export key types
-pub use ast::*;
+// Re-export key types from the plot module for backward compatibility
+pub use crate::plot::*;
 pub use error::ParseError;
-pub use geom::{Geom, GeomType, GeomTrait, GeomAesthetics, DefaultParam, DefaultParamValue, StatResult};
 pub use splitter::split_query;
 
 /// Main entry point for parsing ggsql queries
 ///
 /// Takes a complete ggsql query (SQL + VISUALISE) and returns a vector of
 /// parsed specifications (one per VISUALISE statement).
-pub fn parse_query(query: &str) -> Result<Vec<VizSpec>> {
+pub fn parse_query(query: &str) -> Result<Vec<Plot>> {
     // Parse the full query using tree-sitter (includes SQL + VISUALISE portions)
     let tree = parse_full_query(query)?;
 

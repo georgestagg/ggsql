@@ -1,7 +1,7 @@
 //! Output writer abstraction layer for ggsql
 //!
 //! The writer module provides a pluggable interface for generating visualization
-//! outputs from VizSpec + DataFrame combinations.
+//! outputs from Plot + DataFrame combinations.
 //!
 //! # Architecture
 //!
@@ -20,7 +20,7 @@
 //! println!("{}", json);
 //! ```
 
-use crate::{DataFrame, Result, VizSpec};
+use crate::{DataFrame, Plot, Result};
 use std::collections::HashMap;
 
 #[cfg(feature = "vegalite")]
@@ -31,7 +31,7 @@ pub use vegalite::VegaLiteWriter;
 
 /// Trait for visualization output writers
 ///
-/// Writers take a VizSpec and data sources and produce formatted output
+/// Writers take a Plot and data sources and produce formatted output
 /// (JSON, R code, PNG bytes, etc.).
 pub trait Writer {
     /// Generate output from a visualization specification and data sources
@@ -52,7 +52,7 @@ pub trait Writer {
     /// - The spec is incompatible with this writer
     /// - The data doesn't match the spec's requirements
     /// - Output generation fails
-    fn write(&self, spec: &VizSpec, data: &HashMap<String, DataFrame>) -> Result<String>;
+    fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<String>;
 
     /// Validate that a spec is compatible with this writer
     ///
@@ -66,5 +66,5 @@ pub trait Writer {
     /// # Returns
     ///
     /// Ok(()) if the spec is compatible, otherwise an error
-    fn validate(&self, spec: &VizSpec) -> Result<()>;
+    fn validate(&self, spec: &Plot) -> Result<()>;
 }

@@ -2,7 +2,7 @@
 //!
 //! These types are used by all geom implementations and are shared across the module.
 
-use crate::{DataFrame, GgsqlError, Mappings, Result};
+use crate::Mappings;
 
 /// Aesthetic information for a geom type
 ///
@@ -61,9 +61,9 @@ pub enum StatResult {
     },
 }
 
+pub use crate::plot::types::ColumnInfo;
 /// Schema of a data source - list of columns with type info
-pub use super::super::ast::Schema;
-pub use super::super::ast::ColumnInfo;
+pub use crate::plot::types::Schema;
 
 /// Helper to extract column name from aesthetic value
 pub fn get_column_name(aesthetics: &Mappings, aesthetic: &str) -> Option<String> {

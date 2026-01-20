@@ -1,13 +1,13 @@
-//! AST (Abstract Syntax Tree) types for ggsql specification
+//! Plot types for ggsql specification
 //!
-//! This module defines the typed AST structures that represent parsed ggsql queries.
-//! The AST is built from the tree-sitter CST (Concrete Syntax Tree) and provides
+//! This module defines the typed Plot structures that represent parsed ggsql queries.
+//! The Plot is built from the tree-sitter CST (Concrete Syntax Tree) and provides
 //! a more convenient, typed interface for working with ggsql specifications.
 //!
-//! # AST Structure
+//! # Plot Structure
 //!
 //! ```text
-//! VizSpec
+//! Plot
 //! ├─ global_mappings: GlobalMapping  (from VISUALISE clause mappings)
 //! ├─ source: Option<DataSource>     (optional, from VISUALISE FROM clause)
 //! ├─ layers: Vec<Layer>             (1+ LayerNode, one per DRAW clause)
@@ -22,30 +22,32 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+// Re-export input types for backward compatibility
+pub use super::types::{
+    AestheticValue, ArrayElement, ColumnInfo, DataSource, LiteralValue, Mappings, ParameterValue,
+    Schema, SqlExpression,
+};
 
-// Re-export Geom and related types from the geom module
-pub use super::geom::{Geom, GeomType, GeomTrait, GeomAesthetics, DefaultParam, DefaultParamValue, StatResult};
+// Re-export Geom and related types from the layer::geom module
+pub use super::layer::geom::{
+    DefaultParam, DefaultParamValue, Geom, GeomAesthetics, GeomTrait, GeomType, StatResult,
+};
 
-// Re-export Layer and SqlExpression from the layer module
-pub use super::layer::{Layer, SqlExpression};
+// Re-export Layer from the layer module
+pub use super::layer::Layer;
 
-/// Column information from a data source schema
-#[derive(Debug, Clone)]
-pub struct ColumnInfo {
-    /// Column name
-    pub name: String,
-    /// Whether this column is discrete (suitable for grouping)
-    /// Discrete: String, Boolean, Categorical, Date
-    /// Continuous: numeric types, Datetime, Time
-    pub is_discrete: bool,
-}
+// Re-export Scale and Guide types from the scale module
+pub use super::scale::{Guide, GuideType, Scale, ScaleType};
 
-/// Schema of a data source - list of columns with type info
-pub type Schema = Vec<ColumnInfo>;
+// Re-export Coord types from the coord module
+pub use super::coord::{Coord, CoordType};
+
+// Re-export Facet types from the facet module
+pub use super::facet::{Facet, FacetScales};
 
 /// Complete ggsql visualization specification
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VizSpec {
+pub struct Plot {
     /// Global aesthetic mappings (from VISUALISE clause)
     pub global_mappings: Mappings,
     /// FROM source (CTE, table, or file) when using VISUALISE FROM syntax
@@ -66,320 +68,11 @@ pub struct VizSpec {
     pub theme: Option<Theme>,
 }
 
-/// Unified aesthetic mapping specification
-///
-/// Used for both global mappings (VISUALISE clause) and layer mappings (MAPPING clause).
-/// Supports wildcards combined with explicit mappings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct Mappings {
-    /// Whether a wildcard (*) was specified
-    pub wildcard: bool,
-    /// Explicit aesthetic mappings (aesthetic → value)
-    pub aesthetics: HashMap<String, AestheticValue>,
-}
-
-impl Mappings {
-    /// Create a new empty Mappings
-    pub fn new() -> Self {
-        Self {
-            wildcard: false,
-            aesthetics: HashMap::new(),
-        }
-    }
-
-    /// Create a new Mappings with wildcard flag set
-    pub fn with_wildcard() -> Self {
-        Self {
-            wildcard: true,
-            aesthetics: HashMap::new(),
-        }
-    }
-
-    /// Check if the mappings are empty (no wildcard and no aesthetics)
-    pub fn is_empty(&self) -> bool {
-        !self.wildcard && self.aesthetics.is_empty()
-    }
-
-    /// Insert an aesthetic mapping
-    pub fn insert(&mut self, aesthetic: impl Into<String>, value: AestheticValue) {
-        self.aesthetics.insert(aesthetic.into(), value);
-    }
-
-    /// Get an aesthetic value by name
-    pub fn get(&self, aesthetic: &str) -> Option<&AestheticValue> {
-        self.aesthetics.get(aesthetic)
-    }
-
-    /// Check if an aesthetic is mapped
-    pub fn contains_key(&self, aesthetic: &str) -> bool {
-        self.aesthetics.contains_key(aesthetic)
-    }
-
-    /// Get the number of explicit aesthetic mappings
-    pub fn len(&self) -> usize {
-        self.aesthetics.len()
-    }
-}
-
-/// Data source for visualization or layer (from VISUALISE FROM or MAPPING ... FROM clause)
-///
-/// Allows specification of a data source - either a CTE/table name or a file path.
-/// Used both for global `VISUALISE FROM` and layer-specific `MAPPING ... FROM`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum DataSource {
-    /// CTE or table name (unquoted identifier)
-    Identifier(String),
-    /// File path (quoted string like 'data.csv')
-    FilePath(String),
-}
-
-impl DataSource {
-    /// Returns the source as a string reference
-    pub fn as_str(&self) -> &str {
-        match self {
-            DataSource::Identifier(s) => s,
-            DataSource::FilePath(s) => s,
-        }
-    }
-
-    /// Returns true if this is a file path source
-    pub fn is_file(&self) -> bool {
-        matches!(self, DataSource::FilePath(_))
-    }
-}
-
-/// Value for aesthetic mappings
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AestheticValue {
-    /// Column reference
-    Column {
-        name: String,
-        /// Whether this is a dummy/placeholder column (e.g., for bar charts without x mapped)
-        is_dummy: bool,
-    },
-    /// Literal value (quoted string, number, or boolean)
-    Literal(LiteralValue),
-}
-
-impl AestheticValue {
-    /// Create a column mapping
-    pub fn standard_column(name: impl Into<String>) -> Self {
-        Self::Column {
-            name: name.into(),
-            is_dummy: false,
-        }
-    }
-
-    /// Create a dummy/placeholder column mapping (e.g., for bar charts without x mapped)
-    pub fn dummy_column(name: impl Into<String>) -> Self {
-        Self::Column {
-            name: name.into(),
-            is_dummy: true,
-        }
-    }
-
-    /// Get column name if this is a column mapping
-    pub fn column_name(&self) -> Option<&str> {
-        match self {
-            Self::Column { name, .. } => Some(name),
-            _ => None,
-        }
-    }
-
-    /// Check if this is a dummy/placeholder column
-    pub fn is_dummy(&self) -> bool {
-        match self {
-            Self::Column { is_dummy, .. } => *is_dummy,
-            _ => false,
-        }
-    }
-
-    /// Check if this is a literal value (not a column mapping)
-    pub fn is_literal(&self) -> bool {
-        matches!(self, Self::Literal(_))
-    }
-}
-
-/// Literal values in aesthetic mappings
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum LiteralValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Value for geom parameters
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ParameterValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Scale configuration (from SCALE clause)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Scale {
-    /// The aesthetic this scale applies to
-    pub aesthetic: String,
-    /// Scale type (optional, inferred if not specified)
-    pub scale_type: Option<ScaleType>,
-    /// Scale properties
-    pub properties: HashMap<String, ScalePropertyValue>,
-}
-
-/// Scale types
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ScaleType {
-    // Continuous scales
-    Linear,
-    Log10,
-    Log,
-    Log2,
-    Sqrt,
-    Reverse,
-
-    // Discrete scales
-    Ordinal,
-    Categorical,
-
-    // Temporal scales
-    Date,
-    DateTime,
-    Time,
-
-    // Color palettes
-    Viridis,
-    Plasma,
-    Magma,
-    Inferno,
-    Cividis,
-    Diverging,
-    Sequential,
-}
-
-/// Values for scale properties
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ScalePropertyValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-    Array(Vec<ArrayElement>),
-}
-
-/// Elements in arrays
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ArrayElement {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Faceting specification (from FACET clause)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Facet {
-    /// FACET WRAP variables
-    Wrap {
-        variables: Vec<String>,
-        scales: FacetScales,
-    },
-    /// FACET rows BY cols
-    Grid {
-        rows: Vec<String>,
-        cols: Vec<String>,
-        scales: FacetScales,
-    },
-}
-
-/// Scale sharing options for facets
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum FacetScales {
-    Fixed,
-    Free,
-    FreeX,
-    FreeY,
-}
-
-impl Facet {
-    /// Get all variables used for faceting
-    ///
-    /// Returns all column names that will be used to split the data into facets.
-    /// For Wrap facets, returns the variables list.
-    /// For Grid facets, returns combined rows and cols variables.
-    pub fn get_variables(&self) -> Vec<String> {
-        match self {
-            Facet::Wrap { variables, .. } => variables.clone(),
-            Facet::Grid { rows, cols, .. } => {
-                let mut vars = rows.clone();
-                vars.extend(cols.iter().cloned());
-                vars
-            }
-        }
-    }
-}
-
-/// Coordinate system (from COORD clause)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Coord {
-    /// Coordinate system type
-    pub coord_type: CoordType,
-    /// Coordinate-specific options
-    pub properties: HashMap<String, CoordPropertyValue>,
-}
-
-/// Coordinate system types
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum CoordType {
-    Cartesian,
-    Polar,
-    Flip,
-    Fixed,
-    Trans,
-    Map,
-    QuickMap,
-}
-
-/// Values for coordinate properties
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum CoordPropertyValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-    Array(Vec<ArrayElement>),
-}
-
 /// Text labels (from LABELS clause)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Labels {
     /// Label assignments (label type → text)
     pub labels: HashMap<String, String>,
-}
-
-/// Guide configuration (from GUIDE clause)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Guide {
-    /// The aesthetic this guide applies to
-    pub aesthetic: String,
-    /// Guide type
-    pub guide_type: Option<GuideType>,
-    /// Guide properties
-    pub properties: HashMap<String, GuidePropertyValue>,
-}
-
-/// Guide types
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum GuideType {
-    Legend,
-    ColorBar,
-    Axis,
-    None,
-}
-
-/// Values for guide properties
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum GuidePropertyValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
 }
 
 /// Theme styling (from THEME clause)
@@ -388,19 +81,11 @@ pub struct Theme {
     /// Base theme style
     pub style: Option<String>,
     /// Theme property overrides
-    pub properties: HashMap<String, ThemePropertyValue>,
+    pub properties: HashMap<String, ParameterValue>,
 }
 
-/// Values for theme properties
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ThemePropertyValue {
-    String(String),
-    Number(f64),
-    Boolean(bool),
-}
-
-impl VizSpec {
-    /// Create a new empty VizSpec
+impl Plot {
+    /// Create a new empty Plot
     pub fn new() -> Self {
         Self {
             global_mappings: Mappings::new(),
@@ -415,7 +100,7 @@ impl VizSpec {
         }
     }
 
-    /// Create a new VizSpec with the given global mapping
+    /// Create a new Plot with the given global mapping
     pub fn with_global_mappings(global_mappings: Mappings) -> Self {
         Self {
             global_mappings,
@@ -519,28 +204,9 @@ impl VizSpec {
     }
 }
 
-impl Default for VizSpec {
+impl Default for Plot {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl std::fmt::Display for AestheticValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AestheticValue::Column { name, .. } => write!(f, "{}", name),
-            AestheticValue::Literal(lit) => write!(f, "{}", lit),
-        }
-    }
-}
-
-impl std::fmt::Display for LiteralValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LiteralValue::String(s) => write!(f, "'{}'", s),
-            LiteralValue::Number(n) => write!(f, "{}", n),
-            LiteralValue::Boolean(b) => write!(f, "{}", b),
-        }
     }
 }
 
@@ -549,8 +215,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_viz_spec_creation() {
-        let spec = VizSpec::new();
+    fn test_plot_creation() {
+        let spec = Plot::new();
         assert!(spec.global_mappings.is_empty());
         assert_eq!(spec.layers.len(), 0);
         assert!(!spec.has_layers());
@@ -558,11 +224,11 @@ mod tests {
     }
 
     #[test]
-    fn test_viz_spec_with_global_mappings() {
+    fn test_plot_with_global_mappings() {
         let mut mapping = Mappings::new();
         mapping.insert("x", AestheticValue::standard_column("date"));
         mapping.insert("y", AestheticValue::standard_column("y"));
-        let spec = VizSpec::with_global_mappings(mapping.clone());
+        let spec = Plot::with_global_mappings(mapping.clone());
         assert_eq!(spec.global_mappings.aesthetics.len(), 2);
         assert!(spec.global_mappings.aesthetics.contains_key("x"));
     }
@@ -570,7 +236,7 @@ mod tests {
     #[test]
     fn test_global_mappings_wildcard() {
         let mapping = Mappings::with_wildcard();
-        let spec = VizSpec::with_global_mappings(mapping);
+        let spec = Plot::with_global_mappings(mapping);
         assert!(spec.global_mappings.wildcard);
     }
 
@@ -621,8 +287,8 @@ mod tests {
     }
 
     #[test]
-    fn test_viz_spec_layer_operations() {
-        let mut spec = VizSpec::new();
+    fn test_plot_layer_operations() {
+        let mut spec = Plot::new();
 
         let layer1 = Layer::new(Geom::point());
         let layer2 = Layer::new(Geom::line());
@@ -762,7 +428,10 @@ mod tests {
         // Reference lines
         assert_eq!(Geom::hline().aesthetics().required, &["yintercept"]);
         assert_eq!(Geom::vline().aesthetics().required, &["xintercept"]);
-        assert_eq!(Geom::abline().aesthetics().required, &["slope", "intercept"]);
+        assert_eq!(
+            Geom::abline().aesthetics().required,
+            &["slope", "intercept"]
+        );
 
         // ErrorBar has no strict requirements
         assert_eq!(Geom::errorbar().aesthetics().required, &[] as &[&str]);

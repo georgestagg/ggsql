@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use super::types::get_column_name;
 use super::{DefaultParam, DefaultParamValue, GeomAesthetics, GeomTrait, GeomType, StatResult};
-use crate::parser::ast::ParameterValue;
+use crate::plot::types::ParameterValue;
 use crate::{DataFrame, GgsqlError, Mappings, Result};
 
 use super::types::Schema;
