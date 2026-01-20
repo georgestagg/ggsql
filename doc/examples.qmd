@@ -159,6 +159,11 @@ VISUALISE x, y
 DRAW point
 ```
 
+```{ggsql}
+VISUALISE bill_len AS x, bill_dep AS y, species AS color FROM ggsql:penguins
+DRAW point
+```
+
 ### Line Chart with Date Scale
 
 ```{ggsql}
@@ -171,6 +176,13 @@ LABEL
     title => 'Electronics Revenue Over Time', 
     x => 'Date', 
     y => 'Revenue ($)'
+```
+
+```{ggsql}
+SELECT * FROM ggsql:airquality
+VISUALISE Date AS x
+DRAW line MAPPING Ozone AS y, "Ozone" AS color
+DRAW line MAPPING Temp AS y, "Temp" AS color
 ```
 
 ### Bar Chart by Category
