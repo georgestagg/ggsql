@@ -766,7 +766,7 @@ fn merge_global_mappings_into_layers(specs: &mut [Plot], layer_schemas: &[Schema
                         layer
                             .mappings
                             .aesthetics
-                            .entry(aes.to_string())
+                            .entry(crate::parser::builder::normalise_aes_name(aes))
                             .or_insert(AestheticValue::standard_column(aes));
                     }
                 }

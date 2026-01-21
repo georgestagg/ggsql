@@ -387,11 +387,14 @@ fn parse_mapping_element(node: &Node, source: &str, mappings: &mut Mappings) -> 
             }
             "explicit_mapping" => {
                 let (aesthetic, value) = parse_explicit_mapping(&child, source)?;
-                mappings.insert(aesthetic, value);
+                mappings.insert(normalise_aes_name(&aesthetic), value);
             }
             "implicit_mapping" | "identifier" => {
                 let name = get_node_text(&child, source);
-                mappings.insert(&name, AestheticValue::standard_column(&name));
+                mappings.insert(
+                    normalise_aes_name(&name),
+                    AestheticValue::standard_column(&name),
+                );
             }
             _ => continue,
         }
@@ -1333,6 +1336,13 @@ fn with_statement_has_trailing_select(with_node: &Node) -> bool {
     }
 
     false
+}
+
+pub fn normalise_aes_name(name: &str) -> String {
+    match name {
+        "col" | "colour" => "color".to_string(),
+        _ => name.to_string(),
+    }
 }
 
 fn color_to_hex(value: &str) -> String {
