@@ -32,6 +32,7 @@ pub enum ScaleType {
     // Discrete scales
     Ordinal,
     Categorical,
+    Manual,
 
     // Temporal scales
     Date,
@@ -46,6 +47,9 @@ pub enum ScaleType {
     Cividis,
     Diverging,
     Sequential,
+
+    // Special
+    Identity,
 }
 
 /// Guide configuration (from GUIDE clause)

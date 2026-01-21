@@ -274,6 +274,9 @@ impl VegaLiteWriter {
                 ..
             } => {
                 // Check if there's a scale specification for this aesthetic
+                let inferred = self.infer_field_type(df, col);
+                let mut identity_scale = false;
+
                 let field_type = if let Some(scale) = spec.find_scale(aesthetic) {
                     // Use scale type if explicitly specified
                     if let Some(scale_type) = &scale.scale_type {
@@ -285,7 +288,9 @@ impl VegaLiteWriter {
                             | ScaleType::Log2
                             | ScaleType::Sqrt
                             | ScaleType::Reverse => "quantitative",
-                            ScaleType::Ordinal | ScaleType::Categorical => "nominal",
+                            ScaleType::Ordinal | ScaleType::Categorical | ScaleType::Manual => {
+                                "nominal"
+                            }
                             ScaleType::Date | ScaleType::DateTime | ScaleType::Time => "temporal",
                             ScaleType::Viridis
                             | ScaleType::Plasma
@@ -294,6 +299,10 @@ impl VegaLiteWriter {
                             | ScaleType::Cividis
                             | ScaleType::Diverging
                             | ScaleType::Sequential => "quantitative", // Color scales
+                            ScaleType::Identity => {
+                                identity_scale = true;
+                                inferred.as_str()
+                            }
                         }
                         .to_string()
                     } else if scale.properties.contains_key("domain") {
@@ -307,11 +316,11 @@ impl VegaLiteWriter {
                         }
                     } else {
                         // Scale exists but no type specified, infer from data
-                        self.infer_field_type(df, col)
+                        inferred
                     }
                 } else {
                     // No scale specification, infer from data
-                    self.infer_field_type(df, col)
+                    inferred
                 };
 
                 let mut encoding = json!({
@@ -330,10 +339,11 @@ impl VegaLiteWriter {
                     }
                 }
 
-                // Apply scale properties from SCALE if specified
+                let mut scale_obj = serde_json::Map::new();
+
                 if let Some(scale) = spec.find_scale(aesthetic) {
+                    // Apply scale properties from SCALE if specified
                     use crate::plot::{ArrayElement, ParameterValue};
-                    let mut scale_obj = serde_json::Map::new();
 
                     // Apply domain
                     if let Some(ParameterValue::Array(domain_values)) =
@@ -377,10 +387,18 @@ impl VegaLiteWriter {
                             .collect();
                         scale_obj.insert("range".to_string(), json!(range_json));
                     }
+                }
+                // We don't automatically want to include 0 in our position scales
+                if aesthetic == "x" || aesthetic == "y" {
+                    scale_obj.insert("zero".to_string(), json!(Value::Bool(false)));
+                }
 
-                    if !scale_obj.is_empty() {
-                        encoding["scale"] = json!(scale_obj);
-                    }
+                if identity_scale {
+                    // When we have an identity scale, these scale properties don't matter.
+                    // We should return a `"scale": null`` in the encoding channel
+                    encoding["scale"] = json!(Value::Null)
+                } else if !scale_obj.is_empty() {
+                    encoding["scale"] = json!(scale_obj);
                 }
 
                 // Hide axis for dummy columns (e.g., x when bar chart has no x mapped)
