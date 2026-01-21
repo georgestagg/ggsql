@@ -740,6 +740,7 @@ where
 /// 3. Expands wildcards by adding mappings only for supported aesthetics that:
 ///    - Are not already mapped (either from global or layer)
 ///    - Have a matching column in the layer's schema
+/// 4. Moreover it propagates 'color' to 'fill' and 'stroke'
 fn merge_global_mappings_into_layers(specs: &mut [Plot], layer_schemas: &[Schema]) {
     for spec in specs {
         for (layer, schema) in spec.layers.iter_mut().zip(layer_schemas.iter()) {
@@ -768,6 +769,20 @@ fn merge_global_mappings_into_layers(specs: &mut [Plot], layer_schemas: &[Schema
                             .aesthetics
                             .entry(crate::parser::builder::normalise_aes_name(aes))
                             .or_insert(AestheticValue::standard_column(aes));
+                    }
+                }
+            }
+
+            // Divide 'color' over 'fill' and 'stroke
+            if layer.mappings.aesthetics.contains_key("color") {
+                for &aes in &["stroke", "fill"] {
+                    if supported.contains(&aes) {
+                        let color = layer.mappings.aesthetics.get("color").unwrap().clone();
+                        layer
+                            .mappings
+                            .aesthetics
+                            .entry(aes.to_string())
+                            .or_insert(color);
                     }
                 }
             }
@@ -2671,5 +2686,29 @@ mod tests {
             .collect();
 
         assert!(y_values.contains(&30.0), "Should have sum values");
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_expansion_of_color_aesthetic() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        let query = r#"
+            VISUALISE bill_len AS x, bill_dep AS y FROM ggsql:penguins
+            DRAW point MAPPING species AS color, island AS fill
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+
+        let aes = &result.specs[0].layers[0].mappings.aesthetics;
+
+        assert!(aes.contains_key("stroke"));
+        assert!(aes.contains_key("fill"));
+
+        let stroke = aes.get("stroke").unwrap().column_name().unwrap();
+        assert_eq!(stroke, "species");
+
+        let fill = aes.get("fill").unwrap().column_name().unwrap();
+        assert_eq!(fill, "island");
     }
 }

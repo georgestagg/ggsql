@@ -2857,8 +2857,6 @@ mod tests {
         // color should expand into stroke and fill
         assert_eq!(specs[0].layers[1].mappings.len(), 1);
         assert!(specs[0].layers[1].mappings.contains_key("color"));
-        assert!(specs[0].layers[1].mappings.contains_key("stroke"));
-        assert!(specs[0].layers[1].mappings.contains_key("fill"));
     }
 
     #[test]
