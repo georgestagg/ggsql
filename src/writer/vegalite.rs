@@ -3529,7 +3529,13 @@ mod tests {
         let values = Series::new("value".into(), &[100, 120]);
         let categories = Series::new("category".into(), &["A", "B"]);
         let regions = Series::new("region".into(), &["North", "South"]);
-        let df = DataFrame::new(vec![dates.into(), values.into(), categories.into(), regions.into()]).unwrap();
+        let df = DataFrame::new(vec![
+            dates.into(),
+            values.into(),
+            categories.into(),
+            regions.into(),
+        ])
+        .unwrap();
         let mut data = std::collections::HashMap::new();
         data.insert("__global__".to_string(), df);
 
