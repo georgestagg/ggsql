@@ -32,22 +32,19 @@ let query = r#"
 let specs = parse_query(query)?;
 assert_eq!(specs.len(), 1);
 assert_eq!(specs[0].layers.len(), 1);
-assert_eq!(specs[0].layers[0].geom, Geom::Line);
+assert_eq!(specs[0].layers[0].geom, Geom::line());
 # Ok(())
 # }
 ```
 */
 
-use crate::{GgsqlError, Result};
+use crate::{GgsqlError, Plot, Result};
 use tree_sitter::Tree;
 
-pub mod ast;
 pub mod builder;
 pub mod error;
 pub mod splitter;
 
-// Re-export key types
-pub use ast::*;
 pub use error::ParseError;
 pub use splitter::split_query;
 
@@ -55,7 +52,7 @@ pub use splitter::split_query;
 ///
 /// Takes a complete ggsql query (SQL + VISUALISE) and returns a vector of
 /// parsed specifications (one per VISUALISE statement).
-pub fn parse_query(query: &str) -> Result<Vec<VizSpec>> {
+pub fn parse_query(query: &str) -> Result<Vec<Plot>> {
     // Parse the full query using tree-sitter (includes SQL + VISUALISE portions)
     let tree = parse_full_query(query)?;
 
@@ -98,6 +95,8 @@ pub fn extract_sql(query: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plot::LiteralValue;
+    use crate::{AestheticValue, DataSource, Geom};
 
     #[test]
     fn test_simple_query_parsing() {
@@ -113,7 +112,7 @@ mod tests {
         let specs = result.unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].layers.len(), 1);
-        assert_eq!(specs[0].layers[0].geom, Geom::Point);
+        assert_eq!(specs[0].layers[0].geom, Geom::point());
     }
 
     #[test]
@@ -143,8 +142,8 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].layers.len(), 2);
         // First layer is line, second layer is point
-        assert_eq!(specs[0].layers[0].geom, Geom::Line);
-        assert_eq!(specs[0].layers[1].geom, Geom::Point);
+        assert_eq!(specs[0].layers[0].geom, Geom::line());
+        assert_eq!(specs[0].layers[1].geom, Geom::point());
 
         // Second layer should have y and color
         assert_eq!(specs[0].layers[1].mappings.len(), 2);
@@ -180,7 +179,7 @@ mod tests {
 
         let specs = parse_query(query).unwrap();
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].layers[0].geom, Geom::Tile);
+        assert_eq!(specs[0].layers[0].geom, Geom::tile());
     }
 
     #[test]
@@ -255,9 +254,9 @@ mod tests {
 
         let specs = parse_query(query).unwrap();
         assert_eq!(specs.len(), 3);
-        assert_eq!(specs[0].layers[0].geom, Geom::Line);
-        assert_eq!(specs[1].layers[0].geom, Geom::Tile);
-        assert_eq!(specs[2].layers[0].geom, Geom::Bar);
+        assert_eq!(specs[0].layers[0].geom, Geom::line());
+        assert_eq!(specs[1].layers[0].geom, Geom::tile());
+        assert_eq!(specs[2].layers[0].geom, Geom::bar());
     }
 
     #[test]

@@ -34,6 +34,7 @@ ggsql splits queries at the `VISUALISE` boundary:
 */
 
 pub mod parser;
+pub mod plot;
 
 #[cfg(any(feature = "duckdb", feature = "postgres", feature = "sqlite"))]
 pub mod reader;
@@ -45,8 +46,8 @@ pub mod writer;
 pub mod execute;
 
 // Re-export key types for convenience
-pub use parser::{
-    AestheticValue, DataSource, Facet, Geom, Layer, Mappings, Scale, SqlExpression, VizSpec,
+pub use plot::{
+    AestheticValue, DataSource, Facet, Geom, Layer, Mappings, Plot, Scale, SqlExpression,
 };
 
 // Future modules - not yet implemented
@@ -84,7 +85,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(all(feature = "duckdb", feature = "vegalite"))]
 mod integration_tests {
     use super::*;
-    use crate::parser::ast::{AestheticValue, Geom, Layer};
+    use crate::plot::{AestheticValue, Geom, Layer};
     use crate::reader::{DuckDBReader, Reader};
     use crate::writer::{VegaLiteWriter, Writer};
     use std::collections::HashMap;
@@ -123,8 +124,8 @@ mod integration_tests {
         ));
 
         // Create visualization spec
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Line)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::line())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("date".to_string()),
@@ -179,8 +180,8 @@ mod integration_tests {
         ));
 
         // Create visualization spec
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Area)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::area())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("timestamp".to_string()),
@@ -233,8 +234,8 @@ mod integration_tests {
         ));
 
         // Create visualization spec
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Point)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("int_col".to_string()),
@@ -285,8 +286,8 @@ mod integration_tests {
         ));
 
         // Create viz spec
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Point)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("int_col".to_string()),
@@ -318,8 +319,8 @@ mod integration_tests {
         let sql = "SELECT * FROM (VALUES ('A', 10), ('B', 20), ('A', 15), ('C', 30)) AS t(category, value)";
         let df = reader.execute(sql).unwrap();
 
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Bar)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::bar())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("category".to_string()),
@@ -372,8 +373,8 @@ mod integration_tests {
             polars::prelude::DataType::Date | polars::prelude::DataType::Datetime(_, _)
         ));
 
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Line)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::line())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("day".to_string()),
@@ -416,8 +417,8 @@ mod integration_tests {
             polars::prelude::DataType::Float64
         ));
 
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Point)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("small".to_string()),
@@ -470,8 +471,8 @@ mod integration_tests {
             polars::prelude::DataType::Int64
         ));
 
-        let mut spec = VizSpec::new();
-        let layer = Layer::new(Geom::Bar)
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::bar())
             .with_aesthetic(
                 "x".to_string(),
                 AestheticValue::standard_column("int".to_string()),

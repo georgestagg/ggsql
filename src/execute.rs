@@ -3,8 +3,8 @@
 //! Provides shared execution logic for building data maps from queries,
 //! handling both global SQL and layer-specific data sources.
 
-use crate::parser::ast::{AestheticValue, ColumnInfo, Layer, LiteralValue, Schema, StatResult};
-use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Result, VizSpec};
+use crate::plot::{AestheticValue, ColumnInfo, Layer, LiteralValue, Schema, StatResult};
+use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Plot, Result};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
@@ -424,7 +424,7 @@ fn extract_constants(layer: &Layer) -> Vec<(String, LiteralValue)> {
 /// For layers using global data (no source, no filter), uses layer-indexed column names
 /// (e.g., `__ggsql_const_color_0__`) since constants are injected into global data.
 /// For other layers, uses non-indexed column names (e.g., `__ggsql_const_color__`).
-fn replace_literals_with_columns(spec: &mut VizSpec) {
+fn replace_literals_with_columns(spec: &mut Plot) {
     for (layer_idx, layer) in spec.layers.iter_mut().enumerate() {
         for (aesthetic, value) in layer.mappings.aesthetics.iter_mut() {
             if matches!(value, AestheticValue::Literal(_)) {
@@ -740,7 +740,7 @@ where
 /// 3. Expands wildcards by adding mappings only for supported aesthetics that:
 ///    - Are not already mapped (either from global or layer)
 ///    - Have a matching column in the layer's schema
-fn merge_global_mappings_into_layers(specs: &mut [VizSpec], layer_schemas: &[Schema]) {
+fn merge_global_mappings_into_layers(specs: &mut [Plot], layer_schemas: &[Schema]) {
     for spec in specs {
         for (layer, schema) in spec.layers.iter_mut().zip(layer_schemas.iter()) {
             let supported = layer.geom.aesthetics().supported;
@@ -851,7 +851,7 @@ pub struct PreparedData {
     /// Data map with global and layer-specific DataFrames
     pub data: HashMap<String, DataFrame>,
     /// Parsed and resolved visualization specifications
-    pub specs: Vec<VizSpec>,
+    pub specs: Vec<Plot>,
 }
 
 /// Build data map from a query using a custom query executor function
@@ -1116,7 +1116,7 @@ pub fn prepare_data(query: &str, reader: &DuckDBReader) -> Result<PreparedData> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::SqlExpression;
+    use crate::plot::SqlExpression;
     use crate::Geom;
 
     #[cfg(feature = "duckdb")]
@@ -1338,7 +1338,7 @@ mod tests {
         materialized.insert("sales".to_string());
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("sales".to_string()));
 
         let result = build_layer_query(
@@ -1365,7 +1365,7 @@ mod tests {
         materialized.insert("sales".to_string());
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("sales".to_string()));
         layer.filter = Some(SqlExpression::new("year = 2024"));
 
@@ -1391,7 +1391,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
 
         let result = build_layer_query(
@@ -1417,7 +1417,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
         layer.filter = Some(SqlExpression::new("value > 100"));
 
@@ -1443,7 +1443,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::FilePath("data/sales.csv".to_string()));
 
         let result = build_layer_query(
@@ -1469,7 +1469,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::FilePath("data.parquet".to_string()));
         layer.filter = Some(SqlExpression::new("x > 10"));
 
@@ -1495,7 +1495,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.filter = Some(SqlExpression::new("category = 'A'"));
 
         let result = build_layer_query(
@@ -1521,7 +1521,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
 
         let result = build_layer_query(
             &mut layer,
@@ -1543,7 +1543,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.filter = Some(SqlExpression::new("x > 10"));
 
         let result = build_layer_query(
@@ -1569,7 +1569,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
         layer.order_by = Some(SqlExpression::new("date ASC"));
 
@@ -1595,7 +1595,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
         layer.filter = Some(SqlExpression::new("year = 2024"));
         layer.order_by = Some(SqlExpression::new("date DESC, value ASC"));
@@ -1625,7 +1625,7 @@ mod tests {
         let materialized = HashSet::new();
         let empty_schema: Schema = Vec::new();
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.order_by = Some(SqlExpression::new("x ASC"));
 
         let result = build_layer_query(
@@ -1661,7 +1661,7 @@ mod tests {
             ),
         ];
 
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
         layer.source = Some(DataSource::Identifier("some_table".to_string()));
 
         let result = build_layer_query(
@@ -1693,7 +1693,7 @@ mod tests {
         )];
 
         // No source but has constants - should use __ggsql_global__
-        let mut layer = Layer::new(Geom::Point);
+        let mut layer = Layer::new(Geom::point());
 
         let result = build_layer_query(
             &mut layer,

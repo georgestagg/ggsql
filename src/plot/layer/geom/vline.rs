@@ -1,0 +1,34 @@
+//! VLine geom implementation
+
+use super::{GeomAesthetics, GeomTrait, GeomType};
+
+/// VLine geom - vertical reference lines
+#[derive(Debug, Clone, Copy)]
+pub struct VLine;
+
+impl GeomTrait for VLine {
+    fn geom_type(&self) -> GeomType {
+        GeomType::VLine
+    }
+
+    fn aesthetics(&self) -> GeomAesthetics {
+        GeomAesthetics {
+            supported: &[
+                "xintercept",
+                "color",
+                "colour",
+                "linetype",
+                "linewidth",
+                "opacity",
+            ],
+            required: &["xintercept"],
+            hidden: &[],
+        }
+    }
+}
+
+impl std::fmt::Display for VLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "vline")
+    }
+}

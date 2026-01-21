@@ -192,7 +192,7 @@ Key grammar rules:
 3. **VISUALISE FROM extraction**: Grammar identifies FROM identifier for SELECT injection
 
 ```rust
-pub fn parse_query(query: &str) -> Result<Vec<VizSpec>> {
+pub fn parse_query(query: &str) -> Result<Vec<Plot>> {
     // Parse full query (SQL + VISUALISE) with tree-sitter
     let tree = parse_full_query(query)?;
 
@@ -202,12 +202,12 @@ pub fn parse_query(query: &str) -> Result<Vec<VizSpec>> {
 }
 ```
 
-#### AST Types (`ast.rs`)
+#### Plot Types (`plot.rs`)
 
 Core data structures representing visualization specifications:
 
 ```rust
-pub struct VizSpec {
+pub struct Plot {
     pub global_mapping: GlobalMapping, // From VISUALISE clause: Empty, Wildcard, or Mappings
     pub source: Option<String>,        // FROM source (for VISUALISE FROM)
     pub layers: Vec<Layer>,            // DRAW clauses
@@ -305,7 +305,7 @@ pub enum FacetScales {
 
 pub struct Coord {
     pub coord_type: CoordType,
-    pub properties: HashMap<String, CoordPropertyValue>,
+    pub properties: HashMap<String, ParameterValue>,
 }
 
 pub enum CoordType {
@@ -325,7 +325,7 @@ pub struct Labels {
 pub struct Guide {
     pub aesthetic: String,
     pub guide_type: Option<GuideType>,
-    pub properties: HashMap<String, GuidePropertyValue>,
+    pub properties: HashMap<String, ParameterValue>,
 }
 
 pub enum GuideType {
@@ -337,20 +337,20 @@ pub enum GuideType {
 
 pub struct Theme {
     pub style: Option<String>,
-    pub properties: HashMap<String, ThemePropertyValue>,
+    pub properties: HashMap<String, ParameterValue>,
 }
 ```
 
 **Key Methods**:
 
-**VizSpec methods:**
+**Plot methods:**
 
-- `VizSpec::new()` - Create a new empty VizSpec
-- `VizSpec::with_global_mapping(mapping)` - Create VizSpec with a global mapping
-- `VizSpec::find_scale(aesthetic)` - Look up scale specification for an aesthetic
-- `VizSpec::find_guide(aesthetic)` - Find a guide specification for an aesthetic
-- `VizSpec::has_layers()` - Check if VizSpec has any layers
-- `VizSpec::layer_count()` - Get the number of layers
+- `Plot::new()` - Create a new empty Plot
+- `Plot::with_global_mapping(mapping)` - Create Plot with a global mapping
+- `Plot::find_scale(aesthetic)` - Look up scale specification for an aesthetic
+- `Plot::find_guide(aesthetic)` - Find a guide specification for an aesthetic
+- `Plot::has_layers()` - Check if Plot has any layers
+- `Plot::layer_count()` - Get the number of layers
 
 **Layer methods:**
 
@@ -478,13 +478,13 @@ The codebase includes connection string parsing and feature flags for additional
 
 ### 3. Writer Module (`src/writer/`)
 
-**Responsibility**: Convert DataFrame + VizSpec → output format (JSON, PNG, R code, etc.)
+**Responsibility**: Convert DataFrame + Plot → output format (JSON, PNG, R code, etc.)
 
 #### Writer Trait (`mod.rs`)
 
 ```rust
 pub trait Writer {
-    fn write(&self, df: &DataFrame, spec: &VizSpec) -> Result<String>;
+    fn write(&self, df: &DataFrame, spec: &Plot) -> Result<String>;
     fn file_extension(&self) -> &str;
 }
 ```
@@ -495,7 +495,7 @@ pub trait Writer {
 
 **Features**:
 
-- Converts VizSpec → Vega-Lite JSON specification
+- Converts Plot → Vega-Lite JSON specification
 - Multi-layer composition support
 - Scale type → Vega field type mapping
 - Faceting (wrap and grid layouts)
@@ -506,7 +506,7 @@ pub trait Writer {
 
 ```rust
 impl Writer for VegaLiteWriter {
-    fn write(&self, df: &DataFrame, spec: &VizSpec) -> Result<String> {
+    fn write(&self, df: &DataFrame, spec: &Plot) -> Result<String> {
         // 1. Convert DataFrame to JSON values
         let data_values = self.dataframe_to_json(df)?;
 
@@ -1237,7 +1237,7 @@ ResultSet → DataFrame (Polars)
 // parser/mod.rs
 Tree-sitter CST → AST
 
-VizSpec {
+Plot {
   global_mapping: GlobalMapping::Empty,
   layers: [
     Layer { geom: Geom::Line, aesthetics: {"x": "sale_date", "y": "total", "color": "region"} },

@@ -1,15 +1,16 @@
-//! AST builder - converts tree-sitter CST to typed AST
+//! Plot builder - converts tree-sitter CST to typed Plot
 //!
-//! Takes a tree-sitter parse tree and builds a typed VizSpec AST,
+//! Takes a tree-sitter parse tree and builds a typed Plot,
 //! handling all the node types defined in the grammar.
 
-use super::ast::*;
+use crate::plot::layer::geom::Geom;
+use crate::plot::*;
 use crate::{GgsqlError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Tree};
 
-/// Build a VizSpec AST from a tree-sitter parse tree
-pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
+/// Build a Plot struct from a tree-sitter parse tree
+pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<Plot>> {
     let root = tree.root_node();
 
     // Check if root is a query node
@@ -34,7 +35,7 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
 
     let mut specs = Vec::new();
 
-    // Walk through child nodes - each visualise_statement becomes a VizSpec
+    // Walk through child nodes - each visualise_statement becomes a Plot
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if child.kind() == "visualise_statement" {
@@ -63,9 +64,9 @@ pub fn build_ast(tree: &Tree, source: &str) -> Result<Vec<VizSpec>> {
     Ok(specs)
 }
 
-/// Build a single VizSpec from a visualise_statement node
-fn build_visualise_statement(node: &Node, source: &str) -> Result<VizSpec> {
-    let mut spec = VizSpec::new();
+/// Build a single Plot from a visualise_statement node
+fn build_visualise_statement(node: &Node, source: &str) -> Result<Plot> {
+    let mut spec = Plot::new();
 
     // Walk through children of visualise_statement
     let mut cursor = node.walk();
@@ -203,7 +204,7 @@ fn parse_explicit_mapping(node: &Node, source: &str) -> Result<(String, Aestheti
 }
 
 /// Check for conflicts between SCALE domain and COORD aesthetic domain specifications
-fn validate_scale_coord_conflicts(spec: &VizSpec) -> Result<()> {
+fn validate_scale_coord_conflicts(spec: &Plot) -> Result<()> {
     if let Some(ref coord) = spec.coord {
         // Get all aesthetic names that have domains in COORD
         let coord_aesthetics: Vec<String> = coord
@@ -234,7 +235,7 @@ fn validate_scale_coord_conflicts(spec: &VizSpec) -> Result<()> {
 }
 
 /// Process a visualization clause node
-fn process_viz_clause(node: &Node, source: &str, spec: &mut VizSpec) -> Result<()> {
+fn process_viz_clause(node: &Node, source: &str, spec: &mut Plot) -> Result<()> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
@@ -283,7 +284,7 @@ fn process_viz_clause(node: &Node, source: &str, spec: &mut VizSpec) -> Result<(
 /// Build a Layer from a draw_clause node
 /// Syntax: DRAW geom [MAPPING col AS x, ... [FROM source]] [REMAPPING stat AS aes, ...] [SETTING param => val, ...] [PARTITION BY col, ...] [FILTER condition]
 fn build_layer(node: &Node, source: &str) -> Result<Layer> {
-    let mut geom = Geom::Point; // default
+    let mut geom = Geom::point(); // default
     let mut aesthetics = Mappings::new();
     let mut remappings = Mappings::new();
     let mut parameters = HashMap::new();
@@ -544,30 +545,30 @@ fn parse_order_clause(node: &Node, source: &str) -> Result<SqlExpression> {
     ))
 }
 
-/// Parse a geom_type node text into a Geom enum
+/// Parse a geom_type node text into a Geom
 fn parse_geom_type(text: &str) -> Result<Geom> {
     match text.to_lowercase().as_str() {
-        "point" => Ok(Geom::Point),
-        "line" => Ok(Geom::Line),
-        "path" => Ok(Geom::Path),
-        "bar" => Ok(Geom::Bar),
-        "area" => Ok(Geom::Area),
-        "tile" => Ok(Geom::Tile),
-        "polygon" => Ok(Geom::Polygon),
-        "ribbon" => Ok(Geom::Ribbon),
-        "histogram" => Ok(Geom::Histogram),
-        "density" => Ok(Geom::Density),
-        "smooth" => Ok(Geom::Smooth),
-        "boxplot" => Ok(Geom::Boxplot),
-        "violin" => Ok(Geom::Violin),
-        "text" => Ok(Geom::Text),
-        "label" => Ok(Geom::Label),
-        "segment" => Ok(Geom::Segment),
-        "arrow" => Ok(Geom::Arrow),
-        "hline" => Ok(Geom::HLine),
-        "vline" => Ok(Geom::VLine),
-        "abline" => Ok(Geom::AbLine),
-        "errorbar" => Ok(Geom::ErrorBar),
+        "point" => Ok(Geom::point()),
+        "line" => Ok(Geom::line()),
+        "path" => Ok(Geom::path()),
+        "bar" => Ok(Geom::bar()),
+        "area" => Ok(Geom::area()),
+        "tile" => Ok(Geom::tile()),
+        "polygon" => Ok(Geom::polygon()),
+        "ribbon" => Ok(Geom::ribbon()),
+        "histogram" => Ok(Geom::histogram()),
+        "density" => Ok(Geom::density()),
+        "smooth" => Ok(Geom::smooth()),
+        "boxplot" => Ok(Geom::boxplot()),
+        "violin" => Ok(Geom::violin()),
+        "text" => Ok(Geom::text()),
+        "label" => Ok(Geom::label()),
+        "segment" => Ok(Geom::segment()),
+        "arrow" => Ok(Geom::arrow()),
+        "hline" => Ok(Geom::hline()),
+        "vline" => Ok(Geom::vline()),
+        "abline" => Ok(Geom::abline()),
+        "errorbar" => Ok(Geom::errorbar()),
         _ => Err(GgsqlError::ParseError(format!(
             "Unknown geom type: {}",
             text
@@ -626,7 +627,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
                 // Parse scale property: name = value
                 let mut prop_cursor = child.walk();
                 let mut prop_name = String::new();
-                let mut prop_value: Option<ScalePropertyValue> = None;
+                let mut prop_value: Option<ParameterValue> = None;
 
                 for prop_child in child.children(&mut prop_cursor) {
                     match prop_child.kind() {
@@ -643,7 +644,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
 
                 // If this is a 'type' property, set scale_type
                 if prop_name == "type" {
-                    if let Some(ScalePropertyValue::String(type_str)) = prop_value {
+                    if let Some(ParameterValue::String(type_str)) = prop_value {
                         scale_type = Some(parse_scale_type(&type_str)?);
                     }
                 } else if !prop_name.is_empty() && prop_value.is_some() {
@@ -665,7 +666,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
         aesthetic.as_str(),
         "stroke" | "colour" | "fill" | "color" | "col"
     ) {
-        if let Some(ScalePropertyValue::Array(elements)) = properties.get("palette") {
+        if let Some(ParameterValue::Array(elements)) = properties.get("palette") {
             let mut hex_codes = Vec::new();
             for elem in elements {
                 if let ArrayElement::String(color) = elem {
@@ -675,7 +676,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
                     hex_codes.push(elem.clone());
                 }
             }
-            properties.insert("palette".to_string(), ScalePropertyValue::Array(hex_codes));
+            properties.insert("palette".to_string(), ParameterValue::Array(hex_codes));
         }
     }
 
@@ -711,26 +712,26 @@ fn parse_scale_type(text: &str) -> Result<ScaleType> {
 }
 
 /// Parse scale property value
-fn parse_scale_property_value(node: &Node, source: &str) -> Result<ScalePropertyValue> {
+fn parse_scale_property_value(node: &Node, source: &str) -> Result<ParameterValue> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
             "string" => {
                 let text = get_node_text(&child, source);
                 let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-                return Ok(ScalePropertyValue::String(unquoted.to_string()));
+                return Ok(ParameterValue::String(unquoted.to_string()));
             }
             "number" => {
                 let text = get_node_text(&child, source);
                 let num = text.parse::<f64>().map_err(|e| {
                     GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
                 })?;
-                return Ok(ScalePropertyValue::Number(num));
+                return Ok(ParameterValue::Number(num));
             }
             "boolean" => {
                 let text = get_node_text(&child, source);
                 let bool_val = text == "true";
-                return Ok(ScalePropertyValue::Boolean(bool_val));
+                return Ok(ParameterValue::Boolean(bool_val));
             }
             "array" => {
                 // Parse array of values
@@ -763,7 +764,7 @@ fn parse_scale_property_value(node: &Node, source: &str) -> Result<ScaleProperty
                         }
                     }
                 }
-                return Ok(ScalePropertyValue::Array(values));
+                return Ok(ParameterValue::Array(values));
             }
             _ => {}
         }
@@ -896,9 +897,9 @@ fn build_coord(node: &Node, source: &str) -> Result<Coord> {
 }
 
 /// Parse a single coord_property node into (name, value)
-fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, CoordPropertyValue)> {
+fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, ParameterValue)> {
     let mut prop_name = String::new();
-    let mut prop_value: Option<CoordPropertyValue> = None;
+    let mut prop_value: Option<ParameterValue> = None;
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -928,7 +929,7 @@ fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, Coo
             "identifier" => {
                 // New: identifiers can be property values (e.g., theta = y)
                 let ident = get_node_text(&child, source);
-                prop_value = Some(CoordPropertyValue::String(ident));
+                prop_value = Some(ParameterValue::String(ident));
             }
             "=" => continue,
             _ => {}
@@ -949,7 +950,7 @@ fn parse_single_coord_property(node: &Node, source: &str) -> Result<(String, Coo
 /// Validate that properties are valid for the given coord type
 fn validate_coord_properties(
     coord_type: &CoordType,
-    properties: &HashMap<String, CoordPropertyValue>,
+    properties: &HashMap<String, ParameterValue>,
 ) -> Result<()> {
     for prop_name in properties.keys() {
         let valid = match coord_type {
@@ -1039,24 +1040,24 @@ fn parse_coord_type(node: &Node, source: &str) -> Result<CoordType> {
 }
 
 /// Parse coord property value
-fn parse_coord_property_value(node: &Node, source: &str) -> Result<CoordPropertyValue> {
+fn parse_coord_property_value(node: &Node, source: &str) -> Result<ParameterValue> {
     match node.kind() {
         "string" => {
             let text = get_node_text(node, source);
             let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-            Ok(CoordPropertyValue::String(unquoted.to_string()))
+            Ok(ParameterValue::String(unquoted.to_string()))
         }
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
                 GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
-            Ok(CoordPropertyValue::Number(num))
+            Ok(ParameterValue::Number(num))
         }
         "boolean" => {
             let text = get_node_text(node, source);
             let bool_val = text == "true";
-            Ok(CoordPropertyValue::Boolean(bool_val))
+            Ok(ParameterValue::Boolean(bool_val))
         }
         "array" => {
             // Parse array of values
@@ -1089,7 +1090,7 @@ fn parse_coord_property_value(node: &Node, source: &str) -> Result<CoordProperty
                     }
                 }
             }
-            Ok(CoordPropertyValue::Array(values))
+            Ok(ParameterValue::Array(values))
         }
         _ => Err(GgsqlError::ParseError(format!(
             "Unexpected coord property value type: {}",
@@ -1208,24 +1209,24 @@ fn parse_guide_type(text: &str) -> Result<GuideType> {
 }
 
 /// Parse guide property value
-fn parse_guide_property_value(node: &Node, source: &str) -> Result<GuidePropertyValue> {
+fn parse_guide_property_value(node: &Node, source: &str) -> Result<ParameterValue> {
     match node.kind() {
         "string" => {
             let text = get_node_text(node, source);
             let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-            Ok(GuidePropertyValue::String(unquoted.to_string()))
+            Ok(ParameterValue::String(unquoted.to_string()))
         }
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
                 GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
-            Ok(GuidePropertyValue::Number(num))
+            Ok(ParameterValue::Number(num))
         }
         "boolean" => {
             let text = get_node_text(node, source);
             let bool_val = text == "true";
-            Ok(GuidePropertyValue::Boolean(bool_val))
+            Ok(ParameterValue::Boolean(bool_val))
         }
         _ => Err(GgsqlError::ParseError(format!(
             "Unexpected guide property value type: {}",
@@ -1250,7 +1251,7 @@ fn build_theme(node: &Node, source: &str) -> Result<Theme> {
                 // Parse theme property: name = value
                 let mut prop_cursor = child.walk();
                 let mut prop_name = String::new();
-                let mut prop_value: Option<ThemePropertyValue> = None;
+                let mut prop_value: Option<ParameterValue> = None;
 
                 for prop_child in child.children(&mut prop_cursor) {
                     match prop_child.kind() {
@@ -1278,24 +1279,24 @@ fn build_theme(node: &Node, source: &str) -> Result<Theme> {
 }
 
 /// Parse theme property value
-fn parse_theme_property_value(node: &Node, source: &str) -> Result<ThemePropertyValue> {
+fn parse_theme_property_value(node: &Node, source: &str) -> Result<ParameterValue> {
     match node.kind() {
         "string" => {
             let text = get_node_text(node, source);
             let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-            Ok(ThemePropertyValue::String(unquoted.to_string()))
+            Ok(ParameterValue::String(unquoted.to_string()))
         }
         "number" => {
             let text = get_node_text(node, source);
             let num = text.parse::<f64>().map_err(|e| {
                 GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
             })?;
-            Ok(ThemePropertyValue::Number(num))
+            Ok(ParameterValue::Number(num))
         }
         "boolean" => {
             let text = get_node_text(node, source);
             let bool_val = text == "true";
-            Ok(ThemePropertyValue::Boolean(bool_val))
+            Ok(ParameterValue::Boolean(bool_val))
         }
         _ => Err(GgsqlError::ParseError(format!(
             "Unexpected theme property value type: {}",
@@ -1370,7 +1371,7 @@ mod tests {
     use super::*;
     use tree_sitter::Parser;
 
-    fn parse_test_query(query: &str) -> Result<Vec<VizSpec>> {
+    fn parse_test_query(query: &str) -> Result<Vec<Plot>> {
         let mut parser = Parser::new();
         parser.set_language(&tree_sitter_ggsql::language()).unwrap();
 
@@ -3094,7 +3095,7 @@ mod tests {
         let palette = palette.unwrap();
 
         let mut ok = false;
-        if let ScalePropertyValue::Array(elems) = palette {
+        if let ParameterValue::Array(elems) = palette {
             ok = matches!(&elems[0], ArrayElement::String(color) if color == "#0000ff");
             ok = ok && matches!(&elems[1], ArrayElement::String(color) if color == "#008000");
             ok = ok && matches!(&elems[2], ArrayElement::String(color) if color == "#ff0000");
