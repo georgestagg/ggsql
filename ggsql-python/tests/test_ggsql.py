@@ -21,10 +21,11 @@ def test_split_query_no_visualise():
     assert viz == ""
 
 
-def test_split_query_invalid_raises():
-    # Test that malformed VISUALISE FROM without semicolon raises
-    with pytest.raises(ValueError):
-        ggsql.split_query("CREATE TABLE x VISUALISE FROM x")
+def test_split_query_visualise_from():
+    # VISUALISE FROM injects SELECT * FROM <source>
+    sql, viz = ggsql.split_query("CREATE TABLE x; VISUALISE FROM x")
+    assert sql == "CREATE TABLE x; SELECT * FROM x"
+    assert viz == "VISUALISE FROM x"
 
 
 def test_render_simple():
@@ -125,3 +126,55 @@ def test_full_workflow():
     # Should have 2 layers (line + point)
     assert "layer" in spec
     assert len(spec["layer"]) == 2
+
+
+def test_render_uses_correct_global_data_key():
+    """Test that render uses __ggsql_global__ as the dataset key.
+
+    This verifies the fix for using GLOBAL_DATA_KEY constant instead of
+    a hardcoded "__global__" which caused 'Missing data source' errors.
+    """
+    df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
+    output = ggsql.render(df, "VISUALISE x, y DRAW point")
+    spec = json.loads(output)
+
+    # The datasets dict should use __ggsql_global__ as the key
+    assert "datasets" in spec
+    assert "__ggsql_global__" in spec["datasets"]
+
+    # Verify data is present
+    data = spec["datasets"]["__ggsql_global__"]
+    assert len(data) == 3
+    assert data[0]["x"] == 1
+
+
+def test_render_narwhals_dataframe():
+    """Test that narwhals DataFrames are properly converted to polars."""
+    import narwhals as nw
+
+    # Create a polars DataFrame and wrap it in narwhals
+    pl_df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
+    nw_df = nw.from_native(pl_df)
+
+    # Render should accept narwhals DataFrame
+    output = ggsql.render(nw_df, "VISUALISE x, y DRAW point")
+    spec = json.loads(output)
+
+    assert "datasets" in spec
+    assert "__ggsql_global__" in spec["datasets"]
+    assert len(spec["datasets"]["__ggsql_global__"]) == 3
+
+
+def test_render_pandas_dataframe():
+    """Test that pandas DataFrames are properly converted via narwhals."""
+    pytest.importorskip("pandas")
+    import pandas as pd
+
+    pd_df = pd.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
+
+    output = ggsql.render(pd_df, "VISUALISE x, y DRAW point")
+    spec = json.loads(output)
+
+    assert "datasets" in spec
+    assert "__ggsql_global__" in spec["datasets"]
+    assert len(spec["datasets"]["__ggsql_global__"]) == 3
