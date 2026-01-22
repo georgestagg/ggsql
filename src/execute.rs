@@ -2734,7 +2734,7 @@ mod tests {
 
         // Colors as global constant
         let query = r#"
-          VISUALISE bill_len AS x, bill_dep AS y, "blue" AS color FROM ggsql:penguins
+          VISUALISE bill_len AS x, bill_dep AS y, 'blue' AS color FROM ggsql:penguins
           DRAW point MAPPING island AS stroke
         "#;
 
@@ -2750,7 +2750,7 @@ mod tests {
         // Colors as layer constant
         let query = r#"
           VISUALISE bill_len AS x, bill_dep AS y, island AS fill FROM ggsql:penguins
-          DRAW point MAPPING "blue" AS color
+          DRAW point MAPPING 'blue' AS color
         "#;
 
         let result = prepare_data(query, &reader).unwrap();
