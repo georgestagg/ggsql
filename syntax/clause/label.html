@@ -113,7 +113,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <meta property="og:title" content="Define different titles with LABEL – ggsql">
 <meta property="og:description" content="The home of ggsql. A declarative visualisation language build on top of SQL and the grammar of graphics.">
-<meta property="og:image" content="ggsql.org/syntax/clause/assets/logo.png">
+<meta property="og:image" content="https://ggsql.org/syntax/clause/assets/logo.png">
 <meta property="og:site_name" content="ggsql">
 <meta property="og:image:alt" content="The ggsql logo showing a pencil tracing a lineplot with points. The pencil
 handle is made up of the classic database silo icon and is coloured in a
@@ -121,7 +121,7 @@ gradient teal.
 ">
 <meta name="twitter:title" content="Define different titles with LABEL – ggsql">
 <meta name="twitter:description" content="The home of ggsql. A declarative visualisation language build on top of SQL and the grammar of graphics.">
-<meta name="twitter:image" content="ggsql.org/syntax/clause/assets/logo.png">
+<meta name="twitter:image" content="https://ggsql.org/syntax/clause/assets/logo.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:image:alt" content="The ggsql logo showing a pencil tracing a lineplot with points. The pencil
 handle is made up of the classic database silo icon and is coloured in a
@@ -487,7 +487,7 @@ gradient teal.
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp("ggsql\.org");
+        var filterRegex = new RegExp("https:\/\/ggsql\.org");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
