@@ -4,4 +4,4 @@
 
 mod types;
 
-pub use types::{Guide, GuideType, Scale, ScaleType};
+pub use types::{Guide, GuideType, OutputRange, Scale, ScaleType};

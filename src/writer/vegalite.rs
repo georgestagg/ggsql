@@ -274,40 +274,55 @@ impl VegaLiteWriter {
                 is_dummy,
                 ..
             } => {
-                // Check if there's a scale specification for this aesthetic
+                // Check if there's a scale specification for this aesthetic or its primary
+                // E.g., "xmin" should use the "x" scale
+                let primary = GeomAesthetics::primary_aesthetic(aesthetic);
                 let inferred = self.infer_field_type(df, col);
                 let mut identity_scale = false;
 
-                let field_type = if let Some(scale) = spec.find_scale(aesthetic) {
+                let field_type = if let Some(scale) = spec.find_scale(primary) {
                     // Use scale type if explicitly specified
                     if let Some(scale_type) = &scale.scale_type {
                         use crate::plot::ScaleType;
                         match scale_type {
+                            // New data type indicators
+                            ScaleType::Continuous => "quantitative",
+                            ScaleType::Discrete => "nominal",
+                            ScaleType::Binned => "quantitative", // Binned data is still quantitative
+
+                            // Legacy continuous scales
                             ScaleType::Linear
                             | ScaleType::Log10
                             | ScaleType::Log
                             | ScaleType::Log2
                             | ScaleType::Sqrt
                             | ScaleType::Reverse => "quantitative",
+
+                            // Legacy discrete scales
                             ScaleType::Ordinal | ScaleType::Categorical | ScaleType::Manual => {
                                 "nominal"
                             }
+
+                            // Temporal scales
                             ScaleType::Date | ScaleType::DateTime | ScaleType::Time => "temporal",
+
+                            // Color palettes (legacy)
                             ScaleType::Viridis
                             | ScaleType::Plasma
                             | ScaleType::Magma
                             | ScaleType::Inferno
                             | ScaleType::Cividis
                             | ScaleType::Diverging
-                            | ScaleType::Sequential => "quantitative", // Color scales
+                            | ScaleType::Sequential => "quantitative",
+
                             ScaleType::Identity => {
                                 identity_scale = true;
                                 inferred.as_str()
                             }
                         }
                         .to_string()
-                    } else if scale.properties.contains_key("domain") {
-                        // If domain is specified without explicit type:
+                    } else if scale.has_domain() {
+                        // If domain is specified without explicit type (via input_range or properties):
                         // - For size/opacity: keep quantitative (domain sets range, not categories)
                         // - For color/x/y: treat as ordinal (discrete categories)
                         if aesthetic == "size" || aesthetic == "opacity" {
@@ -330,7 +345,7 @@ impl VegaLiteWriter {
                 });
 
                 // Apply title only once per aesthetic family
-                let primary = GeomAesthetics::primary_aesthetic(aesthetic);
+                // (primary was already computed above for scale lookup)
                 if !titled_families.contains(primary) {
                     if let Some(ref labels) = spec.labels {
                         if let Some(label) = labels.labels.get(primary) {
@@ -342,14 +357,27 @@ impl VegaLiteWriter {
 
                 let mut scale_obj = serde_json::Map::new();
 
-                if let Some(scale) = spec.find_scale(aesthetic) {
+                // Use scale properties from the primary aesthetic's scale
+                // (same scale lookup as used above for field_type)
+                if let Some(scale) = spec.find_scale(primary) {
                     // Apply scale properties from SCALE if specified
-                    use crate::plot::{ArrayElement, ParameterValue};
+                    use crate::plot::{ArrayElement, OutputRange, ParameterValue};
 
-                    // Apply domain
-                    if let Some(ParameterValue::Array(domain_values)) =
+                    // Apply domain from input_range (new FROM clause) or legacy properties.domain
+                    if let Some(ref domain_values) = scale.input_range {
+                        let domain_json: Vec<Value> = domain_values
+                            .iter()
+                            .map(|elem| match elem {
+                                ArrayElement::String(s) => json!(s),
+                                ArrayElement::Number(n) => json!(n),
+                                ArrayElement::Boolean(b) => json!(b),
+                            })
+                            .collect();
+                        scale_obj.insert("domain".to_string(), json!(domain_json));
+                    } else if let Some(ParameterValue::Array(domain_values)) =
                         scale.properties.get("domain")
                     {
+                        // Legacy: domain in properties
                         let domain_json: Vec<Value> = domain_values
                             .iter()
                             .map(|elem| match elem {
@@ -361,8 +389,30 @@ impl VegaLiteWriter {
                         scale_obj.insert("domain".to_string(), json!(domain_json));
                     }
 
-                    // Apply range (explicit range property takes precedence over palette)
-                    if let Some(range_prop) = scale.properties.get("range") {
+                    // Apply range from output_range (new TO clause) or legacy properties
+                    if let Some(ref output_range) = scale.output_range {
+                        match output_range {
+                            OutputRange::Array(range_values) => {
+                                let range_json: Vec<Value> = range_values
+                                    .iter()
+                                    .map(|elem| match elem {
+                                        ArrayElement::String(s) => json!(s),
+                                        ArrayElement::Number(n) => json!(n),
+                                        ArrayElement::Boolean(b) => json!(b),
+                                    })
+                                    .collect();
+                                scale_obj.insert("range".to_string(), json!(range_json));
+                            }
+                            OutputRange::Palette(palette_name) => {
+                                // Named palette - expand to color scheme
+                                scale_obj.insert(
+                                    "scheme".to_string(),
+                                    json!(palette_name.to_lowercase()),
+                                );
+                            }
+                        }
+                    } else if let Some(range_prop) = scale.properties.get("range") {
+                        // Legacy: range in properties
                         if let ParameterValue::Array(range_values) = range_prop {
                             let range_json: Vec<Value> = range_values
                                 .iter()
@@ -377,7 +427,7 @@ impl VegaLiteWriter {
                     } else if let Some(ParameterValue::Array(palette_values)) =
                         scale.properties.get("palette")
                     {
-                        // Apply palette as range (fallback for color scales)
+                        // Legacy: palette as range (fallback for color scales)
                         let range_json: Vec<Value> = palette_values
                             .iter()
                             .map(|elem| match elem {

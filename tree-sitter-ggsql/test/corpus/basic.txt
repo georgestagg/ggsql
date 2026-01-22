@@ -443,8 +443,8 @@ Plot with scales and theme
 
 VISUALISE x, y, group AS color
 DRAW point
-SCALE x SETTING type => 'linear', limits => [0, 100]
-SCALE color SETTING palette => 'viridis'
+SCALE CONTINUOUS x FROM [0, 100]
+SCALE color TO viridis
 THEME minimal
 
 --------------------------------------------------------------------------------
@@ -474,26 +474,20 @@ THEME minimal
         (geom_type)))
     (viz_clause
       (scale_clause
+        (scale_type_identifier)
         (aesthetic_name)
-        (scale_property
-          (scale_property_name)
-          (scale_property_value
-            (string)))
-        (scale_property
-          (scale_property_name)
-          (scale_property_value
-            (array
-              (array_element
-                (number))
-              (array_element
-                (number)))))))
+        (scale_from_clause
+          (array
+            (array_element
+              (number))
+            (array_element
+              (number))))))
     (viz_clause
       (scale_clause
         (aesthetic_name)
-        (scale_property
-          (scale_property_name)
-          (scale_property_value
-            (string)))))
+        (scale_to_clause
+          (identifier
+            (bare_identifier)))))
     (viz_clause
       (theme_clause
         (theme_name)))))

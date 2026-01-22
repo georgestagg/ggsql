@@ -4,8 +4,12 @@
 //! handling both global SQL and layer-specific data sources.
 
 use crate::naming;
-use crate::plot::{AestheticValue, ColumnInfo, Layer, LiteralValue, Schema, StatResult};
+use crate::plot::layer::geom::{GeomAesthetics, AESTHETIC_FAMILIES};
+use crate::plot::{
+    AestheticValue, ArrayElement, ColumnInfo, Layer, LiteralValue, ScaleType, Schema, StatResult,
+};
 use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Plot, Result};
+use polars::prelude::{ChunkAgg, DataType, Series};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
@@ -1091,10 +1095,319 @@ where
         spec.compute_aesthetic_labels();
     }
 
+    // Resolve scale types from data for scales without explicit types
+    for spec in &mut specs {
+        resolve_scales(spec, &data_map)?;
+    }
+
     Ok(PreparedData {
         data: data_map,
         specs,
     })
+}
+
+// =============================================================================
+// Scale Resolution
+// =============================================================================
+
+/// Resolve scale properties from data after materialization.
+///
+/// For each scale, this function:
+/// 1. Infers scale_type from column data types if not explicitly set
+/// 2. Infers input_range (domain) from data values if not explicitly set
+///
+/// The function inspects columns mapped to the aesthetic (including family
+/// members like xmin/xmax for "x") and computes appropriate domains.
+fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Result<()> {
+    // Collect inferred properties for scales that need them
+    // This avoids borrow conflicts between spec.scales iteration and spec access
+    let inferred_props: Vec<(usize, Option<ScaleType>, Option<Vec<ArrayElement>>)> = spec
+        .scales
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, scale)| {
+            // Find Series references directly for this aesthetic (including family members)
+            let series_refs = find_series_for_aesthetic(
+                &spec.global_mappings,
+                &spec.layers,
+                &scale.aesthetic,
+                data_map,
+            );
+
+            if series_refs.is_empty() {
+                return None;
+            }
+
+            // Infer scale_type if not already set
+            let inferred_type = if scale.scale_type.is_none() {
+                Some(infer_scale_type(series_refs[0].dtype()))
+            } else {
+                None
+            };
+
+            // Use either the inferred type or the existing type for domain computation
+            let effective_type = inferred_type
+                .as_ref()
+                .or(scale.scale_type.as_ref())
+                .cloned();
+
+            // Infer input_range if not already set and no domain in properties
+            let inferred_domain = if scale.input_range.is_none() && !scale.has_domain() {
+                effective_type
+                    .as_ref()
+                    .and_then(|st| compute_domain_from_series(&series_refs, st))
+            } else {
+                None
+            };
+
+            // Only return if we inferred something
+            if inferred_type.is_some() || inferred_domain.is_some() {
+                Some((idx, inferred_type, inferred_domain))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Apply the inferred properties
+    for (idx, scale_type, domain) in inferred_props {
+        if let Some(st) = scale_type {
+            spec.scales[idx].scale_type = Some(st);
+        }
+        if let Some(d) = domain {
+            spec.scales[idx].input_range = Some(d);
+        }
+    }
+
+    Ok(())
+}
+
+/// Find all Series for an aesthetic (including family members like xmin/xmax for "x").
+/// Each mapping is looked up in its corresponding data source.
+/// Returns references to the Series found.
+fn find_series_for_aesthetic<'a>(
+    global_mappings: &crate::plot::Mappings,
+    layers: &[Layer],
+    aesthetic: &str,
+    data_map: &'a HashMap<String, DataFrame>,
+) -> Vec<&'a Series> {
+    let mut series_refs = Vec::new();
+    let aesthetics_to_check = get_aesthetic_family(aesthetic);
+    let global_df = data_map.get(naming::GLOBAL_DATA_KEY);
+
+    // Check global mapping → look up in global data
+    if let Some(df) = global_df {
+        for aes_name in &aesthetics_to_check {
+            if let Some(AestheticValue::Column { name, .. }) = global_mappings.get(aes_name) {
+                if let Ok(series) = df.column(name) {
+                    series_refs.push(series);
+                }
+            }
+        }
+    }
+
+    // Check each layer's mapping → look up in layer data OR global data
+    for (i, layer) in layers.iter().enumerate() {
+        // Use layer-specific data if available, otherwise fall back to global
+        let df = data_map.get(&naming::layer_key(i)).or(global_df);
+        if let Some(df) = df {
+            for aes_name in &aesthetics_to_check {
+                if let Some(AestheticValue::Column { name, .. }) = layer.mappings.get(aes_name) {
+                    if let Ok(series) = df.column(name) {
+                        series_refs.push(series);
+                    }
+                }
+            }
+        }
+    }
+
+    series_refs
+}
+
+/// Get all aesthetics in the same family as the given aesthetic.
+/// For primary aesthetics like "x", returns ["x", "xmin", "xmax", "x2", "xend"].
+/// For non-family aesthetics like "color", returns just ["color"].
+fn get_aesthetic_family(aesthetic: &str) -> Vec<&str> {
+    // First, determine the primary aesthetic
+    let primary = GeomAesthetics::primary_aesthetic(aesthetic);
+
+    // If aesthetic is not a primary (it's a variant), just return the aesthetic itself
+    // since scales should be defined for primary aesthetics
+    if primary != aesthetic {
+        return vec![aesthetic];
+    }
+
+    // Collect primary + all variants that map to this primary
+    let mut family = vec![primary];
+    for (variant, prim) in AESTHETIC_FAMILIES {
+        if *prim == primary {
+            family.push(*variant);
+        }
+    }
+
+    family
+}
+
+/// Infer scale type from Polars data type.
+fn infer_scale_type(dtype: &DataType) -> ScaleType {
+    match dtype {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64 => ScaleType::Continuous,
+        DataType::Date => ScaleType::Date,
+        DataType::Datetime(_, _) => ScaleType::DateTime,
+        DataType::Time => ScaleType::Time,
+        DataType::Boolean | DataType::String | _ => ScaleType::Discrete,
+    }
+}
+
+// =============================================================================
+// Domain Inference Helpers
+// =============================================================================
+
+/// Compute domain (min/max or unique values) from pre-collected Series references.
+fn compute_domain_from_series(
+    series_refs: &[&Series],
+    scale_type: &ScaleType,
+) -> Option<Vec<ArrayElement>> {
+    match scale_type {
+        ScaleType::Continuous
+        | ScaleType::Linear
+        | ScaleType::Log
+        | ScaleType::Log10
+        | ScaleType::Log2
+        | ScaleType::Sqrt => compute_numeric_domain(series_refs),
+        ScaleType::Date => compute_date_domain(series_refs),
+        ScaleType::DateTime => compute_datetime_domain(series_refs),
+        ScaleType::Discrete | ScaleType::Ordinal | ScaleType::Categorical => {
+            compute_discrete_domain(series_refs)
+        }
+        // Skip for other scale types (Identity, color palettes, Time, etc.)
+        _ => None,
+    }
+}
+
+/// Compute numeric domain as [min, max] from Series.
+fn compute_numeric_domain(series_refs: &[&Series]) -> Option<Vec<ArrayElement>> {
+    let mut global_min: Option<f64> = None;
+    let mut global_max: Option<f64> = None;
+
+    for series in series_refs {
+        if let Ok(ca) = series.cast(&DataType::Float64) {
+            if let Ok(f64_series) = ca.f64() {
+                if let Some(min) = f64_series.min() {
+                    global_min = Some(global_min.map_or(min, |m| m.min(min)));
+                }
+                if let Some(max) = f64_series.max() {
+                    global_max = Some(global_max.map_or(max, |m| m.max(max)));
+                }
+            }
+        }
+    }
+
+    match (global_min, global_max) {
+        (Some(min), Some(max)) => Some(vec![ArrayElement::Number(min), ArrayElement::Number(max)]),
+        _ => None,
+    }
+}
+
+/// Compute date domain as [min_date, max_date] ISO strings from Series.
+fn compute_date_domain(series_refs: &[&Series]) -> Option<Vec<ArrayElement>> {
+    let mut global_min: Option<i32> = None;
+    let mut global_max: Option<i32> = None;
+
+    for series in series_refs {
+        if let Ok(ca) = series.date() {
+            if let Some(min) = ca.min() {
+                global_min = Some(global_min.map_or(min, |m| m.min(min)));
+            }
+            if let Some(max) = ca.max() {
+                global_max = Some(global_max.map_or(max, |m| m.max(max)));
+            }
+        }
+    }
+
+    match (global_min, global_max) {
+        (Some(min_days), Some(max_days)) => {
+            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
+            let min_date = epoch + chrono::Duration::days(min_days as i64);
+            let max_date = epoch + chrono::Duration::days(max_days as i64);
+            Some(vec![
+                ArrayElement::String(min_date.format("%Y-%m-%d").to_string()),
+                ArrayElement::String(max_date.format("%Y-%m-%d").to_string()),
+            ])
+        }
+        _ => None,
+    }
+}
+
+/// Compute datetime domain as [min, max] ISO datetime strings from Series.
+fn compute_datetime_domain(series_refs: &[&Series]) -> Option<Vec<ArrayElement>> {
+    let mut global_min: Option<i64> = None;
+    let mut global_max: Option<i64> = None;
+
+    for series in series_refs {
+        if let Ok(ca) = series.datetime() {
+            if let Some(min) = ca.min() {
+                global_min = Some(global_min.map_or(min, |m| m.min(min)));
+            }
+            if let Some(max) = ca.max() {
+                global_max = Some(global_max.map_or(max, |m| m.max(max)));
+            }
+        }
+    }
+
+    match (global_min, global_max) {
+        (Some(min_ts), Some(max_ts)) => {
+            let to_iso = |ts: i64| -> Option<String> {
+                // Polars Datetime is microseconds since epoch
+                let secs = ts / 1_000_000;
+                let nsecs = ((ts % 1_000_000) * 1000) as u32;
+                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nsecs)?;
+                Some(dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+            };
+            Some(vec![
+                ArrayElement::String(to_iso(min_ts)?),
+                ArrayElement::String(to_iso(max_ts)?),
+            ])
+        }
+        _ => None,
+    }
+}
+
+/// Compute discrete domain as unique sorted values from Series.
+fn compute_discrete_domain(series_refs: &[&Series]) -> Option<Vec<ArrayElement>> {
+    let mut unique_values: Vec<String> = Vec::new();
+
+    for series in series_refs {
+        if let Ok(unique) = series.unique() {
+            for i in 0..unique.len() {
+                if let Ok(val) = unique.get(i) {
+                    let s = val.to_string();
+                    if s != "null" {
+                        let clean = s.trim_matches('"').to_string();
+                        if !unique_values.contains(&clean) {
+                            unique_values.push(clean);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if unique_values.is_empty() {
+        None
+    } else {
+        unique_values.sort();
+        Some(unique_values.into_iter().map(ArrayElement::String).collect())
+    }
 }
 
 /// Build data map from a query using DuckDB reader
@@ -2681,5 +2994,457 @@ mod tests {
             .collect();
 
         assert!(y_values.contains(&30.0), "Should have sum values");
+    }
+
+    // =============================================================================
+    // Scale Resolution Tests
+    // =============================================================================
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_resolve_scales_numeric_to_continuous() {
+        // Test that numeric columns infer Continuous scale type
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let query = r#"
+            SELECT 1.0 as x, 2.0 as y FROM (VALUES (1))
+            VISUALISE x, y
+            DRAW point
+            SCALE x FROM [0, 100]
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+        let spec = &result.specs[0];
+
+        // Find the x scale
+        let x_scale = spec.find_scale("x").expect("x scale should exist");
+
+        // Should be inferred as Continuous from numeric column
+        assert_eq!(
+            x_scale.scale_type,
+            Some(ScaleType::Continuous),
+            "Numeric column should infer Continuous scale type"
+        );
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_resolve_scales_date_to_temporal() {
+        // Test that date columns infer Date scale type
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let query = r#"
+            SELECT '2024-01-01'::DATE as date, 100 as value
+            VISUALISE date AS x, value AS y
+            DRAW line
+            SCALE x
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+        let spec = &result.specs[0];
+
+        // Find the x scale
+        let x_scale = spec.find_scale("x").expect("x scale should exist");
+
+        // Should be inferred as Date from Date column
+        assert_eq!(
+            x_scale.scale_type,
+            Some(ScaleType::Date),
+            "Date column should infer Date scale type"
+        );
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_resolve_scales_string_to_discrete() {
+        // Test that string columns infer Discrete scale type
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let query = r#"
+            SELECT 'A' as category, 100 as value FROM (VALUES (1))
+            VISUALISE category AS x, value AS y
+            DRAW bar
+            SCALE x FROM ['A', 'B', 'C']
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+        let spec = &result.specs[0];
+
+        // Find the x scale
+        let x_scale = spec.find_scale("x").expect("x scale should exist");
+
+        // Should be inferred as Discrete from String column
+        assert_eq!(
+            x_scale.scale_type,
+            Some(ScaleType::Discrete),
+            "String column should infer Discrete scale type"
+        );
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_resolve_scales_explicit_type_preserved() {
+        // Test that explicit scale types are not overwritten
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let query = r#"
+            SELECT 'A' as category, 100 as value FROM (VALUES (1))
+            VISUALISE category AS x, value AS y
+            DRAW bar
+            SCALE CONTINUOUS x
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+        let spec = &result.specs[0];
+
+        // Find the x scale
+        let x_scale = spec.find_scale("x").expect("x scale should exist");
+
+        // Should preserve explicit Continuous type even though column is string
+        assert_eq!(
+            x_scale.scale_type,
+            Some(ScaleType::Continuous),
+            "Explicit scale type should be preserved"
+        );
+    }
+
+    #[cfg(feature = "duckdb")]
+    #[test]
+    fn test_resolve_scales_from_aesthetic_family() {
+        // Test that scales can infer type from aesthetic family members (ymin, ymax -> y)
+        // Ribbon requires x, ymin, ymax - we test that SCALE y infers type from ymin/ymax columns
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let query = r#"
+            SELECT 1.0 as date, 0.0 as ymin, 10.0 as ymax FROM (VALUES (1))
+            VISUALISE
+            DRAW ribbon MAPPING date AS x, ymin AS ymin, ymax AS ymax
+            SCALE y FROM [0, 20]
+        "#;
+
+        let result = prepare_data(query, &reader).unwrap();
+        let spec = &result.specs[0];
+
+        // Find the y scale
+        let y_scale = spec.find_scale("y").expect("y scale should exist");
+
+        // Should infer Continuous from ymin/ymax columns (family members of y)
+        assert_eq!(
+            y_scale.scale_type,
+            Some(ScaleType::Continuous),
+            "Scale should infer type from aesthetic family members (ymin/ymax -> y)"
+        );
+    }
+
+    #[test]
+    fn test_get_aesthetic_family() {
+        // Test primary aesthetics include all family members
+        let x_family = get_aesthetic_family("x");
+        assert!(x_family.contains(&"x"));
+        assert!(x_family.contains(&"xmin"));
+        assert!(x_family.contains(&"xmax"));
+        assert!(x_family.contains(&"x2"));
+        assert!(x_family.contains(&"xend"));
+
+        let y_family = get_aesthetic_family("y");
+        assert!(y_family.contains(&"y"));
+        assert!(y_family.contains(&"ymin"));
+        assert!(y_family.contains(&"ymax"));
+        assert!(y_family.contains(&"y2"));
+        assert!(y_family.contains(&"yend"));
+
+        // Test non-family aesthetics return just themselves
+        let color_family = get_aesthetic_family("color");
+        assert_eq!(color_family, vec!["color"]);
+
+        // Test variant aesthetics return just themselves
+        let xmin_family = get_aesthetic_family("xmin");
+        assert_eq!(xmin_family, vec!["xmin"]);
+    }
+
+    #[test]
+    fn test_infer_scale_type() {
+        // Test numeric types -> Continuous
+        assert_eq!(infer_scale_type(&DataType::Int32), ScaleType::Continuous);
+        assert_eq!(infer_scale_type(&DataType::Int64), ScaleType::Continuous);
+        assert_eq!(infer_scale_type(&DataType::Float64), ScaleType::Continuous);
+        assert_eq!(infer_scale_type(&DataType::UInt16), ScaleType::Continuous);
+
+        // Test temporal types
+        assert_eq!(infer_scale_type(&DataType::Date), ScaleType::Date);
+        assert_eq!(
+            infer_scale_type(&DataType::Datetime(
+                polars::prelude::TimeUnit::Microseconds,
+                None
+            )),
+            ScaleType::DateTime
+        );
+        assert_eq!(infer_scale_type(&DataType::Time), ScaleType::Time);
+
+        // Test discrete types
+        assert_eq!(infer_scale_type(&DataType::String), ScaleType::Discrete);
+        assert_eq!(infer_scale_type(&DataType::Boolean), ScaleType::Discrete);
+    }
+
+    // =========================================================================
+    // Domain Inference Tests
+    // =========================================================================
+
+    #[test]
+    fn test_infer_domain_numeric() {
+        use polars::prelude::*;
+
+        // Create numeric series
+        let series = Series::new("x".into(), &[1.0f64, 5.0, 10.0, 3.0]);
+        let series_refs = vec![&series];
+
+        let domain = compute_numeric_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+        assert_eq!(domain.len(), 2);
+
+        // Should be [min, max] = [1.0, 10.0]
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                assert_eq!(*min, 1.0);
+                assert_eq!(*max, 10.0);
+            }
+            _ => panic!("Expected Number elements"),
+        }
+    }
+
+    #[test]
+    fn test_infer_domain_numeric_integer() {
+        use polars::prelude::*;
+
+        // Create integer series (should cast to f64)
+        let series = Series::new("y".into(), &[10i32, 20, 30, 5]);
+        let series_refs = vec![&series];
+
+        let domain = compute_numeric_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                assert_eq!(*min, 5.0);
+                assert_eq!(*max, 30.0);
+            }
+            _ => panic!("Expected Number elements"),
+        }
+    }
+
+    #[test]
+    fn test_infer_domain_numeric_multiple_series() {
+        use polars::prelude::*;
+
+        // Two series with different ranges - should combine
+        let series1 = Series::new("x".into(), &[1.0f64, 5.0]);
+        let series2 = Series::new("xmax".into(), &[10.0f64, 20.0]);
+        let series_refs = vec![&series1, &series2];
+
+        let domain = compute_numeric_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+
+        // Should combine: min=1.0 (from series1), max=20.0 (from series2)
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                assert_eq!(*min, 1.0);
+                assert_eq!(*max, 20.0);
+            }
+            _ => panic!("Expected Number elements"),
+        }
+    }
+
+    #[test]
+    fn test_infer_domain_date() {
+        use polars::prelude::*;
+
+        // Create date series: 2024-01-15, 2024-03-20, 2024-02-01
+        // Days since epoch (1970-01-01):
+        // 2024-01-15 = 19737 days
+        // 2024-02-01 = 19754 days
+        // 2024-03-20 = 19802 days
+        let series = Series::new("date".into(), &[19737i32, 19802, 19754])
+            .cast(&DataType::Date)
+            .unwrap();
+        let series_refs = vec![&series];
+
+        let domain = compute_date_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+        assert_eq!(domain.len(), 2);
+
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::String(min), ArrayElement::String(max)) => {
+                assert_eq!(min, "2024-01-15");
+                assert_eq!(max, "2024-03-20");
+            }
+            _ => panic!("Expected String elements"),
+        }
+    }
+
+    #[test]
+    fn test_infer_domain_discrete() {
+        use polars::prelude::*;
+
+        // Create string series with duplicates
+        let series = Series::new("category".into(), &["B", "A", "C", "A", "B"]);
+        let series_refs = vec![&series];
+
+        let domain = compute_discrete_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+
+        // Should be sorted unique values: ["A", "B", "C"]
+        assert_eq!(domain.len(), 3);
+        match (&domain[0], &domain[1], &domain[2]) {
+            (
+                ArrayElement::String(a),
+                ArrayElement::String(b),
+                ArrayElement::String(c),
+            ) => {
+                assert_eq!(a, "A");
+                assert_eq!(b, "B");
+                assert_eq!(c, "C");
+            }
+            _ => panic!("Expected String elements"),
+        }
+    }
+
+    #[test]
+    fn test_infer_domain_discrete_with_nulls() {
+        use polars::prelude::*;
+
+        // Create string series with null values
+        let series: Series = Series::new("category".into(), &[Some("B"), None, Some("A"), Some("B")]);
+        let series_refs = vec![&series];
+
+        let domain = compute_discrete_domain(&series_refs);
+        assert!(domain.is_some());
+        let domain = domain.unwrap();
+
+        // Nulls should be excluded, result should be ["A", "B"]
+        assert_eq!(domain.len(), 2);
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::String(a), ArrayElement::String(b)) => {
+                assert_eq!(a, "A");
+                assert_eq!(b, "B");
+            }
+            _ => panic!("Expected String elements"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_scales_infers_domain() {
+        use polars::prelude::*;
+
+        // Create a Plot with a scale that needs domain inference
+        let mut spec = Plot::new();
+        spec.global_mappings.insert("x", AestheticValue::standard_column("value"));
+        spec.scales.push(crate::plot::Scale::new("x"));
+        spec.layers.push(Layer::new(Geom::point()));
+
+        // Create data with numeric values
+        let df = df! {
+            "value" => &[1.0f64, 5.0, 10.0]
+        }
+        .unwrap();
+
+        let mut data_map = HashMap::new();
+        data_map.insert(naming::GLOBAL_DATA_KEY.to_string(), df);
+
+        // Resolve scales
+        resolve_scales(&mut spec, &data_map).unwrap();
+
+        // Check that both scale_type and input_range were inferred
+        let scale = &spec.scales[0];
+        assert_eq!(scale.scale_type, Some(ScaleType::Continuous));
+        assert!(scale.input_range.is_some());
+
+        let domain = scale.input_range.as_ref().unwrap();
+        assert_eq!(domain.len(), 2);
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                assert_eq!(*min, 1.0);
+                assert_eq!(*max, 10.0);
+            }
+            _ => panic!("Expected Number elements"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_scales_preserves_explicit_domain() {
+        use polars::prelude::*;
+
+        // Create a Plot with a scale that already has a domain
+        let mut spec = Plot::new();
+        spec.global_mappings.insert("x", AestheticValue::standard_column("value"));
+
+        let mut scale = crate::plot::Scale::new("x");
+        scale.input_range = Some(vec![
+            ArrayElement::Number(0.0),
+            ArrayElement::Number(100.0),
+        ]);
+        spec.scales.push(scale);
+        spec.layers.push(Layer::new(Geom::point()));
+
+        // Create data with different values
+        let df = df! {
+            "value" => &[1.0f64, 5.0, 10.0]
+        }
+        .unwrap();
+
+        let mut data_map = HashMap::new();
+        data_map.insert(naming::GLOBAL_DATA_KEY.to_string(), df);
+
+        // Resolve scales
+        resolve_scales(&mut spec, &data_map).unwrap();
+
+        // Check that explicit domain was preserved (not overwritten with [1, 10])
+        let scale = &spec.scales[0];
+        let domain = scale.input_range.as_ref().unwrap();
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                assert_eq!(*min, 0.0);  // Original explicit value
+                assert_eq!(*max, 100.0);  // Original explicit value
+            }
+            _ => panic!("Expected Number elements"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_scales_from_aesthetic_family_domain() {
+        use polars::prelude::*;
+
+        // Create a Plot where "y" scale should get domain from ymin and ymax columns
+        let mut spec = Plot::new();
+        spec.global_mappings.insert("ymin", AestheticValue::standard_column("low"));
+        spec.global_mappings.insert("ymax", AestheticValue::standard_column("high"));
+        spec.scales.push(crate::plot::Scale::new("y"));
+        spec.layers.push(Layer::new(Geom::errorbar()));
+
+        // Create data where ymin/ymax columns have different ranges
+        let df = df! {
+            "low" => &[5.0f64, 10.0, 15.0],
+            "high" => &[20.0f64, 25.0, 30.0]
+        }
+        .unwrap();
+
+        let mut data_map = HashMap::new();
+        data_map.insert(naming::GLOBAL_DATA_KEY.to_string(), df);
+
+        // Resolve scales
+        resolve_scales(&mut spec, &data_map).unwrap();
+
+        // Check that domain was inferred from both ymin and ymax columns
+        let scale = &spec.scales[0];
+        assert!(scale.input_range.is_some());
+
+        let domain = scale.input_range.as_ref().unwrap();
+        match (&domain[0], &domain[1]) {
+            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
+                // min should be 5.0 (from low column), max should be 30.0 (from high column)
+                assert_eq!(*min, 5.0);
+                assert_eq!(*max, 30.0);
+            }
+            _ => panic!("Expected Number elements"),
+        }
     }
 }

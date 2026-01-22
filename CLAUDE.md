@@ -10,7 +10,7 @@
 SELECT date, revenue, region FROM sales WHERE year = 2024
 VISUALISE date AS x, revenue AS y, region AS color
 DRAW line
-SCALE x SETTING type => 'date'
+SCALE DATE x
 COORD cartesian SETTING ylim => [0, 100000]
 LABEL title => 'Sales by Region', x => 'Date', y => 'Revenue'
 THEME minimal
@@ -709,7 +709,7 @@ SELECT * FROM (VALUES
 SELECT * FROM sales
 VISUALISE
 DRAW line MAPPING date AS x, revenue AS y, region AS color
-SCALE x SETTING type => 'date'
+SCALE DATE x
 LABEL title => 'Sales Trends'
 ```
 
@@ -873,7 +873,7 @@ Where `<global_mapping>` can be:
 | -------------- | ---------- | ------------------ | ------------------------------------ |
 | `VISUALISE`    | ✅ Yes     | Entry point        | `VISUALISE date AS x, revenue AS y`  |
 | `DRAW`         | ✅ Yes     | Define layers      | `DRAW line MAPPING date AS x, value AS y` |
-| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE x SETTING type => 'date'`          |
+| `SCALE`        | ✅ Yes     | Configure scales   | `SCALE DATE x`                            |
 | `FACET`        | ❌ No      | Small multiples    | `FACET WRAP region`                  |
 | `COORD`        | ❌ No      | Coordinate system  | `COORD cartesian SETTING xlim => [0,100]` |
 | `LABEL`        | ❌ No      | Text labels        | `LABEL title => 'My Chart', x => 'Date'`   |
@@ -990,49 +990,79 @@ DRAW line
 **Syntax**:
 
 ```sql
-SCALE <aesthetic> SETTING
-  [type => <scale_type>]
-  [limits => [min, max]]
-  [breaks => <array | interval>]
-  [palette => <name>]
-  [domain => [values...]]
+SCALE [TYPE] <aesthetic> [FROM <domain>] [TO <range>] [VIA <transform>] [SETTING <properties>]
 ```
 
-**Scale Types**:
+**Type Modifiers** (optional, placed before aesthetic):
 
-- **Continuous**: `linear`, `log10`, `log`, `log2`, `sqrt`, `reverse`
-- **Discrete**: `categorical`, `ordinal`
-- **Temporal**: `date`, `datetime`, `time`
-- **Color Palettes**: `viridis`, `plasma`, `magma`, `inferno`, `cividis`, `diverging`, `sequential`
+- **`CONTINUOUS`** - Continuous numeric data
+- **`DISCRETE`** - Categorical/discrete data
+- **`BINNED`** - Binned/bucketed data
+- **`DATE`** - Date data (maps to Vega-Lite temporal type)
+- **`DATETIME`** - Datetime data (maps to Vega-Lite temporal type)
+
+**Subclauses**:
+
+- **`FROM [...]`** - Input domain specification (maps to Vega-Lite `scale.domain`)
+- **`TO [...]`** or **`TO palette`** - Output range as array or named palette (maps to Vega-Lite `scale.range` or `scale.scheme`)
+- **`VIA transform`** - Transformation method (reserved for future use)
+- **`SETTING ...`** - Additional properties (e.g., `breaks`)
+
+**Named Palettes** (used with `TO`):
+
+- `viridis`, `plasma`, `magma`, `inferno`, `cividis`, `diverging`, `sequential`
 
 **Critical for Date Formatting**:
 
 ```sql
-SCALE x SETTING type => 'date'
+SCALE DATE x
 -- Maps to Vega-Lite field type = "temporal"
 -- Enables proper date axis formatting
 ```
 
-**Domain Property**:
+**Domain Specification** (FROM clause):
 
-The `domain` property explicitly sets the input domain for a scale:
+The `FROM` clause explicitly sets the input domain for a scale:
 
 ```sql
 -- Set domain for discrete scale
-SCALE color SETTING domain => ['red', 'green', 'blue']
+SCALE DISCRETE color FROM ['A', 'B', 'C']
 
 -- Set domain for continuous scale
-SCALE x SETTING domain => [0, 100]
+SCALE CONTINUOUS x FROM [0, 100]
+```
+
+**Range Specification** (TO clause):
+
+The `TO` clause sets the output range - either explicit values or a named palette:
+
+```sql
+-- Explicit color values
+SCALE color FROM ['A', 'B'] TO ['red', 'blue']
+
+-- Named palette
+SCALE color TO viridis
 ```
 
 **Note**: Cannot specify domain in both SCALE and COORD for the same aesthetic (will error).
 
-**Example**:
+**Examples**:
 
 ```sql
-SCALE x SETTING type => 'date', breaks => '2 months'
-SCALE y SETTING type => 'log10', limits => [1, 1000]
-SCALE color SETTING palette => 'viridis', domain => ['A', 'B', 'C']
+-- Date scale
+SCALE DATE x
+
+-- Continuous scale with domain
+SCALE CONTINUOUS y FROM [0, 100]
+
+-- Discrete color scale with domain and explicit range
+SCALE DISCRETE color FROM ['A', 'B', 'C'] TO ['red', 'green', 'blue']
+
+-- Color scale with named palette
+SCALE color TO viridis
+
+-- Scale with domain and additional settings
+SCALE DATE x FROM ['2024-01-01', '2024-12-31'] SETTING breaks => '1 month'
 ```
 
 ### FACET Clause
@@ -1204,7 +1234,7 @@ DRAW line
     MAPPING sale_date AS x, total AS y, region AS color
 DRAW point
     MAPPING sale_date AS x, total AS y, region AS color
-SCALE x SETTING type => 'date'
+SCALE DATE x
 FACET WRAP region
 LABEL title => 'Sales Trends by Region', x => 'Date', y => 'Total Quantity'
 THEME minimal
