@@ -1,0 +1,85 @@
+//! Discrete scale type implementation
+
+use polars::prelude::{Column, DataType};
+
+use super::{ScaleTypeKind, ScaleTypeTrait};
+use crate::plot::ArrayElement;
+
+/// Discrete scale type - for categorical/discrete data
+#[derive(Debug, Clone, Copy)]
+pub struct Discrete;
+
+impl ScaleTypeTrait for Discrete {
+    fn scale_type_kind(&self) -> ScaleTypeKind {
+        ScaleTypeKind::Discrete
+    }
+
+    fn name(&self) -> &'static str {
+        "discrete"
+    }
+
+    fn is_discrete(&self) -> bool {
+        false
+    }
+
+    fn allows_data_type(&self, dtype: &DataType) -> bool {
+        matches!(
+            dtype,
+            DataType::String | DataType::Boolean | DataType::Categorical(_, _)
+        )
+    }
+
+    fn resolve_input_range(
+        &self,
+        user_range: Option<&[ArrayElement]>,
+        columns: &[&Column],
+    ) -> Result<Option<Vec<ArrayElement>>, String> {
+        match user_range {
+            Some(range) if super::input_range_has_nulls(range) => {
+                Err("Discrete scale input range cannot contain null placeholders".to_string())
+            }
+            Some(range) => Ok(Some(range.to_vec())),
+            None => Ok(compute_unique_values(columns)),
+        }
+    }
+}
+
+/// Compute discrete input range as unique sorted values from Columns.
+fn compute_unique_values(column_refs: &[&Column]) -> Option<Vec<ArrayElement>> {
+    let mut unique_values: Vec<String> = Vec::new();
+
+    for column in column_refs {
+        let series = column.as_materialized_series();
+        if let Ok(unique) = series.unique() {
+            for i in 0..unique.len() {
+                if let Ok(val) = unique.get(i) {
+                    let s = val.to_string();
+                    if s != "null" {
+                        let clean = s.trim_matches('"').to_string();
+                        if !unique_values.contains(&clean) {
+                            unique_values.push(clean);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if unique_values.is_empty() {
+        None
+    } else {
+        unique_values.sort();
+        Some(
+            unique_values
+                .into_iter()
+                .map(ArrayElement::String)
+                .collect(),
+        )
+    }
+}
+
+impl std::fmt::Display for Discrete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}

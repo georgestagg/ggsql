@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::super::types::{ArrayElement, ParameterValue};
+use super::scale_type::ScaleType;
 
 /// Scale configuration (from SCALE clause)
 ///
@@ -57,26 +58,6 @@ pub enum OutputRange {
     Array(Vec<ArrayElement>),
     /// Named palette identifier: TO viridis
     Palette(String),
-}
-
-/// Scale types - describe the nature of the data
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ScaleType {
-    // Data type indicators (new syntax)
-    /// Continuous numeric data
-    Continuous,
-    /// Categorical/discrete data
-    Discrete,
-    /// Binned/bucketed data
-    Binned,
-
-    // Temporal scales
-    Date,
-    DateTime,
-    Time,
-
-    // Special
-    Identity,
 }
 
 /// Guide configuration (from GUIDE clause)

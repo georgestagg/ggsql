@@ -2,6 +2,11 @@
 //!
 //! This module defines scale and guide configuration for aesthetic mappings.
 
+mod scale_type;
 mod types;
 
-pub use types::{Guide, GuideType, OutputRange, Scale, ScaleType};
+pub use scale_type::{
+    Binned, Continuous, Date, DateTime, Discrete, Identity, ScaleType, ScaleTypeKind,
+    ScaleTypeTrait, Time,
+};
+pub use types::{Guide, GuideType, OutputRange, Scale};

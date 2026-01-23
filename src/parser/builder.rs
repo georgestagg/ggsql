@@ -691,11 +691,11 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
 /// Parse scale type identifier (CONTINUOUS, DISCRETE, BINNED, DATE, DATETIME)
 fn parse_scale_type_identifier(text: &str) -> Result<ScaleType> {
     match text.to_lowercase().as_str() {
-        "continuous" => Ok(ScaleType::Continuous),
-        "discrete" => Ok(ScaleType::Discrete),
-        "binned" => Ok(ScaleType::Binned),
-        "date" => Ok(ScaleType::Date),
-        "datetime" => Ok(ScaleType::DateTime),
+        "continuous" => Ok(ScaleType::continuous()),
+        "discrete" => Ok(ScaleType::discrete()),
+        "binned" => Ok(ScaleType::binned()),
+        "date" => Ok(ScaleType::date()),
+        "datetime" => Ok(ScaleType::datetime()),
         _ => Err(GgsqlError::ParseError(format!(
             "Unknown scale type: {}",
             text

@@ -5,11 +5,9 @@
 
 use crate::naming;
 use crate::plot::layer::geom::{GeomAesthetics, AESTHETIC_FAMILIES};
-use crate::plot::{
-    AestheticValue, ArrayElement, ColumnInfo, Layer, LiteralValue, ScaleType, Schema, StatResult,
-};
+use crate::plot::{AestheticValue, ColumnInfo, Layer, LiteralValue, ScaleType, Schema, StatResult};
 use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Plot, Result};
-use polars::prelude::{ChunkAgg, Column, DataType};
+use polars::prelude::Column;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
@@ -1114,88 +1112,40 @@ where
 ///
 /// For each scale, this function:
 /// 1. Infers scale_type from column data types if not explicitly set
-/// 2. Infers input_range (domain) from data values if not explicitly set
+/// 2. Resolves input_range (domain) using the scale type's `resolve_input_range` method
 ///
 /// The function inspects columns mapped to the aesthetic (including family
 /// members like xmin/xmax for "x") and computes appropriate ranges.
 fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Result<()> {
-    // Collect inferred properties for scales that need them
-    // This avoids borrow conflicts between spec.scales iteration and spec access
-    let inferred_props: Vec<(usize, Option<ScaleType>, Option<Vec<ArrayElement>>)> = spec
-        .scales
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, scale)| {
-            // Find column references directly for this aesthetic (including family members)
-            let column_refs = find_columns_for_aesthetic(
-                &spec.global_mappings,
-                &spec.layers,
-                &scale.aesthetic,
-                data_map,
-            );
+    for idx in 0..spec.scales.len() {
+        // Clone aesthetic to avoid borrow issues with find_columns_for_aesthetic
+        let aesthetic = spec.scales[idx].aesthetic.clone();
 
-            if column_refs.is_empty() {
-                return None;
-            }
+        // Find column references for this aesthetic (including family members)
+        let column_refs =
+            find_columns_for_aesthetic(&spec.global_mappings, &spec.layers, &aesthetic, data_map);
 
-            // Infer scale_type if not already set
-            let inferred_type = if scale.scale_type.is_none() {
-                Some(infer_scale_type(column_refs[0].dtype()))
-            } else {
-                None
-            };
-
-            // Use either the inferred type or the existing type for range computation
-            let effective_type = inferred_type
-                .as_ref()
-                .or(scale.scale_type.as_ref())
-                .cloned();
-
-            // Check if we need to infer input range:
-            // 1. No explicit input_range (FROM clause), OR
-            // 2. Explicit range contains Null placeholders that need filling
-            let needs_inference = scale.input_range.is_none()
-                || scale
-                    .input_range
-                    .as_ref()
-                    .is_some_and(|r| input_range_has_nulls(r));
-
-            let inferred_input_range = if needs_inference {
-                effective_type
-                    .as_ref()
-                    .and_then(|st| compute_input_range_from_columns(&column_refs, st))
-            } else {
-                None
-            };
-
-            // Only return if we inferred something
-            if inferred_type.is_some() || inferred_input_range.is_some() {
-                Some((idx, inferred_type, inferred_input_range))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Apply the inferred properties
-    for (idx, scale_type, range) in inferred_props {
-        if let Some(st) = scale_type {
-            spec.scales[idx].scale_type = Some(st);
+        if column_refs.is_empty() {
+            continue;
         }
-        if let Some(inferred) = range {
-            match &spec.scales[idx].input_range {
-                Some(explicit) if input_range_has_nulls(explicit) => {
-                    // Merge: replace nulls with inferred values
-                    spec.scales[idx].input_range =
-                        Some(merge_input_range_with_inferred(explicit, &inferred));
-                }
-                None => {
-                    // No explicit range, use fully inferred range
-                    spec.scales[idx].input_range = Some(inferred);
-                }
-                _ => {
-                    // Explicit range without nulls - keep as-is
-                }
+
+        // Infer scale_type if not already set
+        if spec.scales[idx].scale_type.is_none() {
+            spec.scales[idx].scale_type = Some(ScaleType::infer(column_refs[0].dtype()));
+        }
+
+        // Resolve input range using the scale type's method
+        // Clone scale_type (cheap Arc clone) to avoid borrow conflict with input_range mutation
+        let scale_type = spec.scales[idx].scale_type.clone();
+        if let Some(st) = scale_type {
+            let resolved_range = st
+                .resolve_input_range(spec.scales[idx].input_range.as_deref(), &column_refs)
+                .map_err(|e| {
+                    GgsqlError::ValidationError(format!("Scale '{}': {}", aesthetic, e))
+                })?;
+
+            if let Some(range) = resolved_range {
+                spec.scales[idx].input_range = Some(range);
             }
         }
     }
@@ -1269,199 +1219,6 @@ fn get_aesthetic_family(aesthetic: &str) -> Vec<&str> {
     family
 }
 
-/// Infer scale type from Polars data type.
-fn infer_scale_type(dtype: &DataType) -> ScaleType {
-    match dtype {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => ScaleType::Continuous,
-        DataType::Date => ScaleType::Date,
-        DataType::Datetime(_, _) => ScaleType::DateTime,
-        DataType::Time => ScaleType::Time,
-        DataType::Boolean | DataType::String | _ => ScaleType::Discrete,
-    }
-}
-
-// =============================================================================
-// Input Range Inference Helpers
-// =============================================================================
-
-/// Check if an input range array contains any Null placeholders
-fn input_range_has_nulls(range: &[ArrayElement]) -> bool {
-    range.iter().any(|e| matches!(e, ArrayElement::Null))
-}
-
-/// Merge an explicit input range containing Null placeholders with inferred values.
-/// Null positions are replaced with corresponding inferred values.
-fn merge_input_range_with_inferred(
-    explicit: &[ArrayElement],
-    inferred: &[ArrayElement],
-) -> Vec<ArrayElement> {
-    explicit
-        .iter()
-        .enumerate()
-        .map(|(i, exp)| {
-            if matches!(exp, ArrayElement::Null) {
-                // Use inferred value if available, otherwise keep Null
-                inferred.get(i).cloned().unwrap_or(ArrayElement::Null)
-            } else {
-                exp.clone()
-            }
-        })
-        .collect()
-}
-
-/// Compute input range (min/max or unique values) from pre-collected Column references.
-fn compute_input_range_from_columns(
-    column_refs: &[&Column],
-    scale_type: &ScaleType,
-) -> Option<Vec<ArrayElement>> {
-    match scale_type {
-        ScaleType::Continuous => compute_numeric_input_range(column_refs),
-        ScaleType::Date => compute_date_input_range(column_refs),
-        ScaleType::DateTime => compute_datetime_input_range(column_refs),
-        ScaleType::Discrete => compute_discrete_input_range(column_refs),
-        // Skip for other scale types (Identity, color palettes, Time, etc.)
-        _ => None,
-    }
-}
-
-/// Compute numeric input range as [min, max] from Columns.
-fn compute_numeric_input_range(column_refs: &[&Column]) -> Option<Vec<ArrayElement>> {
-    let mut global_min: Option<f64> = None;
-    let mut global_max: Option<f64> = None;
-
-    for column in column_refs {
-        let series = column.as_materialized_series();
-        if let Ok(ca) = series.cast(&DataType::Float64) {
-            if let Ok(f64_series) = ca.f64() {
-                if let Some(min) = f64_series.min() {
-                    global_min = Some(global_min.map_or(min, |m| m.min(min)));
-                }
-                if let Some(max) = f64_series.max() {
-                    global_max = Some(global_max.map_or(max, |m| m.max(max)));
-                }
-            }
-        }
-    }
-
-    match (global_min, global_max) {
-        (Some(min), Some(max)) => Some(vec![ArrayElement::Number(min), ArrayElement::Number(max)]),
-        _ => None,
-    }
-}
-
-/// Compute date input range as [min_date, max_date] ISO strings from Columns.
-fn compute_date_input_range(column_refs: &[&Column]) -> Option<Vec<ArrayElement>> {
-    let mut global_min: Option<i32> = None;
-    let mut global_max: Option<i32> = None;
-
-    for column in column_refs {
-        let series = column.as_materialized_series();
-        if let Ok(date_ca) = series.date() {
-            // Get the underlying physical representation (Int32) for min/max
-            let physical = &date_ca.phys;
-            if let Some(min) = physical.min() {
-                global_min = Some(global_min.map_or(min, |m| m.min(min)));
-            }
-            if let Some(max) = physical.max() {
-                global_max = Some(global_max.map_or(max, |m| m.max(max)));
-            }
-        }
-    }
-
-    match (global_min, global_max) {
-        (Some(min_days), Some(max_days)) => {
-            let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?;
-            let min_date = epoch + chrono::Duration::days(min_days as i64);
-            let max_date = epoch + chrono::Duration::days(max_days as i64);
-            Some(vec![
-                ArrayElement::String(min_date.format("%Y-%m-%d").to_string()),
-                ArrayElement::String(max_date.format("%Y-%m-%d").to_string()),
-            ])
-        }
-        _ => None,
-    }
-}
-
-/// Compute datetime input range as [min, max] ISO datetime strings from Columns.
-fn compute_datetime_input_range(column_refs: &[&Column]) -> Option<Vec<ArrayElement>> {
-    let mut global_min: Option<i64> = None;
-    let mut global_max: Option<i64> = None;
-
-    for column in column_refs {
-        let series = column.as_materialized_series();
-        if let Ok(dt_ca) = series.datetime() {
-            // Get the underlying physical representation (Int64) for min/max
-            let physical = &dt_ca.phys;
-            if let Some(min) = physical.min() {
-                global_min = Some(global_min.map_or(min, |m| m.min(min)));
-            }
-            if let Some(max) = physical.max() {
-                global_max = Some(global_max.map_or(max, |m| m.max(max)));
-            }
-        }
-    }
-
-    match (global_min, global_max) {
-        (Some(min_ts), Some(max_ts)) => {
-            let to_iso = |ts: i64| -> Option<String> {
-                // Polars Datetime is microseconds since epoch
-                let secs = ts / 1_000_000;
-                let nsecs = ((ts % 1_000_000) * 1000) as u32;
-                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nsecs)?;
-                Some(dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
-            };
-            Some(vec![
-                ArrayElement::String(to_iso(min_ts)?),
-                ArrayElement::String(to_iso(max_ts)?),
-            ])
-        }
-        _ => None,
-    }
-}
-
-/// Compute discrete input range as unique sorted values from Columns.
-fn compute_discrete_input_range(column_refs: &[&Column]) -> Option<Vec<ArrayElement>> {
-    let mut unique_values: Vec<String> = Vec::new();
-
-    for column in column_refs {
-        let series = column.as_materialized_series();
-        if let Ok(unique) = series.unique() {
-            for i in 0..unique.len() {
-                if let Ok(val) = unique.get(i) {
-                    let s = val.to_string();
-                    if s != "null" {
-                        let clean = s.trim_matches('"').to_string();
-                        if !unique_values.contains(&clean) {
-                            unique_values.push(clean);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if unique_values.is_empty() {
-        None
-    } else {
-        unique_values.sort();
-        Some(
-            unique_values
-                .into_iter()
-                .map(ArrayElement::String)
-                .collect(),
-        )
-    }
-}
-
 /// Build data map from a query using DuckDB reader
 ///
 /// Convenience wrapper around `prepare_data_with_executor` for direct DuckDB reader usage.
@@ -1474,8 +1231,9 @@ pub fn prepare_data(query: &str, reader: &DuckDBReader) -> Result<PreparedData> 
 mod tests {
     use super::*;
     use crate::naming;
-    use crate::plot::SqlExpression;
+    use crate::plot::{ArrayElement, SqlExpression};
     use crate::Geom;
+    use polars::prelude::DataType;
 
     #[cfg(feature = "duckdb")]
     #[test]
@@ -3073,7 +2831,7 @@ mod tests {
         // Should be inferred as Continuous from numeric column
         assert_eq!(
             x_scale.scale_type,
-            Some(ScaleType::Continuous),
+            Some(ScaleType::continuous()),
             "Numeric column should infer Continuous scale type"
         );
     }
@@ -3099,7 +2857,7 @@ mod tests {
         // Should be inferred as Date from Date column
         assert_eq!(
             x_scale.scale_type,
-            Some(ScaleType::Date),
+            Some(ScaleType::date()),
             "Date column should infer Date scale type"
         );
     }
@@ -3125,7 +2883,7 @@ mod tests {
         // Should be inferred as Discrete from String column
         assert_eq!(
             x_scale.scale_type,
-            Some(ScaleType::Discrete),
+            Some(ScaleType::discrete()),
             "String column should infer Discrete scale type"
         );
     }
@@ -3151,7 +2909,7 @@ mod tests {
         // Should preserve explicit Continuous type even though column is string
         assert_eq!(
             x_scale.scale_type,
-            Some(ScaleType::Continuous),
+            Some(ScaleType::continuous()),
             "Explicit scale type should be preserved"
         );
     }
@@ -3178,7 +2936,7 @@ mod tests {
         // Should infer Continuous from ymin/ymax columns (family members of y)
         assert_eq!(
             y_scale.scale_type,
-            Some(ScaleType::Continuous),
+            Some(ScaleType::continuous()),
             "Scale should infer type from aesthetic family members (ymin/ymax -> y)"
         );
     }
@@ -3210,31 +2968,34 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_scale_type() {
+    fn test_scale_type_infer() {
         // Test numeric types -> Continuous
-        assert_eq!(infer_scale_type(&DataType::Int32), ScaleType::Continuous);
-        assert_eq!(infer_scale_type(&DataType::Int64), ScaleType::Continuous);
-        assert_eq!(infer_scale_type(&DataType::Float64), ScaleType::Continuous);
-        assert_eq!(infer_scale_type(&DataType::UInt16), ScaleType::Continuous);
+        assert_eq!(ScaleType::infer(&DataType::Int32), ScaleType::continuous());
+        assert_eq!(ScaleType::infer(&DataType::Int64), ScaleType::continuous());
+        assert_eq!(
+            ScaleType::infer(&DataType::Float64),
+            ScaleType::continuous()
+        );
+        assert_eq!(ScaleType::infer(&DataType::UInt16), ScaleType::continuous());
 
         // Test temporal types
-        assert_eq!(infer_scale_type(&DataType::Date), ScaleType::Date);
+        assert_eq!(ScaleType::infer(&DataType::Date), ScaleType::date());
         assert_eq!(
-            infer_scale_type(&DataType::Datetime(
+            ScaleType::infer(&DataType::Datetime(
                 polars::prelude::TimeUnit::Microseconds,
                 None
             )),
-            ScaleType::DateTime
+            ScaleType::datetime()
         );
-        assert_eq!(infer_scale_type(&DataType::Time), ScaleType::Time);
+        assert_eq!(ScaleType::infer(&DataType::Time), ScaleType::time());
 
         // Test discrete types
-        assert_eq!(infer_scale_type(&DataType::String), ScaleType::Discrete);
-        assert_eq!(infer_scale_type(&DataType::Boolean), ScaleType::Discrete);
+        assert_eq!(ScaleType::infer(&DataType::String), ScaleType::discrete());
+        assert_eq!(ScaleType::infer(&DataType::Boolean), ScaleType::discrete());
     }
 
     // =========================================================================
-    // Input Range Inference Tests
+    // Input Range Inference Tests (using ScaleType::resolve_input_range)
     // =========================================================================
 
     #[test]
@@ -3243,21 +3004,17 @@ mod tests {
 
         // Create numeric column
         let column: Column = Series::new("x".into(), &[1.0f64, 5.0, 10.0, 3.0]).into();
-        let column_refs = vec![&column];
 
-        let range = compute_numeric_input_range(&column_refs);
+        let range = ScaleType::continuous()
+            .resolve_input_range(None, &[&column])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
         assert_eq!(range.len(), 2);
 
         // Should be [min, max] = [1.0, 10.0]
-        match (&range[0], &range[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 1.0);
-                assert_eq!(*max, 10.0);
-            }
-            _ => panic!("Expected Number elements"),
-        }
+        assert_eq!(range[0], ArrayElement::Number(1.0));
+        assert_eq!(range[1], ArrayElement::Number(10.0));
     }
 
     #[test]
@@ -3266,19 +3023,15 @@ mod tests {
 
         // Create integer column (should cast to f64)
         let column: Column = Series::new("y".into(), &[10i32, 20, 30, 5]).into();
-        let column_refs = vec![&column];
 
-        let range = compute_numeric_input_range(&column_refs);
+        let range = ScaleType::continuous()
+            .resolve_input_range(None, &[&column])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
 
-        match (&range[0], &range[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 5.0);
-                assert_eq!(*max, 30.0);
-            }
-            _ => panic!("Expected Number elements"),
-        }
+        assert_eq!(range[0], ArrayElement::Number(5.0));
+        assert_eq!(range[1], ArrayElement::Number(30.0));
     }
 
     #[test]
@@ -3288,20 +3041,16 @@ mod tests {
         // Two columns with different ranges - should combine
         let column1: Column = Series::new("x".into(), &[1.0f64, 5.0]).into();
         let column2: Column = Series::new("xmax".into(), &[10.0f64, 20.0]).into();
-        let column_refs = vec![&column1, &column2];
 
-        let range = compute_numeric_input_range(&column_refs);
+        let range = ScaleType::continuous()
+            .resolve_input_range(None, &[&column1, &column2])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
 
         // Should combine: min=1.0 (from column1), max=20.0 (from column2)
-        match (&range[0], &range[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 1.0);
-                assert_eq!(*max, 20.0);
-            }
-            _ => panic!("Expected Number elements"),
-        }
+        assert_eq!(range[0], ArrayElement::Number(1.0));
+        assert_eq!(range[1], ArrayElement::Number(20.0));
     }
 
     #[test]
@@ -3317,20 +3066,16 @@ mod tests {
             .cast(&DataType::Date)
             .unwrap()
             .into();
-        let column_refs = vec![&column];
 
-        let range = compute_date_input_range(&column_refs);
+        let range = ScaleType::date()
+            .resolve_input_range(None, &[&column])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
         assert_eq!(range.len(), 2);
 
-        match (&range[0], &range[1]) {
-            (ArrayElement::String(min), ArrayElement::String(max)) => {
-                assert_eq!(min, "2024-01-15");
-                assert_eq!(max, "2024-03-20");
-            }
-            _ => panic!("Expected String elements"),
-        }
+        assert_eq!(range[0], ArrayElement::String("2024-01-15".into()));
+        assert_eq!(range[1], ArrayElement::String("2024-03-20".into()));
     }
 
     #[test]
@@ -3339,22 +3084,18 @@ mod tests {
 
         // Create string column with duplicates
         let column: Column = Series::new("category".into(), &["B", "A", "C", "A", "B"]).into();
-        let column_refs = vec![&column];
 
-        let range = compute_discrete_input_range(&column_refs);
+        let range = ScaleType::discrete()
+            .resolve_input_range(None, &[&column])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
 
         // Should be sorted unique values: ["A", "B", "C"]
         assert_eq!(range.len(), 3);
-        match (&range[0], &range[1], &range[2]) {
-            (ArrayElement::String(a), ArrayElement::String(b), ArrayElement::String(c)) => {
-                assert_eq!(a, "A");
-                assert_eq!(b, "B");
-                assert_eq!(c, "C");
-            }
-            _ => panic!("Expected String elements"),
-        }
+        assert_eq!(range[0], ArrayElement::String("A".into()));
+        assert_eq!(range[1], ArrayElement::String("B".into()));
+        assert_eq!(range[2], ArrayElement::String("C".into()));
     }
 
     #[test]
@@ -3364,21 +3105,17 @@ mod tests {
         // Create string column with null values
         let column: Column =
             Series::new("category".into(), &[Some("B"), None, Some("A"), Some("B")]).into();
-        let column_refs = vec![&column];
 
-        let range = compute_discrete_input_range(&column_refs);
+        let range = ScaleType::discrete()
+            .resolve_input_range(None, &[&column])
+            .unwrap();
         assert!(range.is_some());
         let range = range.unwrap();
 
         // Nulls should be excluded, result should be ["A", "B"]
         assert_eq!(range.len(), 2);
-        match (&range[0], &range[1]) {
-            (ArrayElement::String(a), ArrayElement::String(b)) => {
-                assert_eq!(a, "A");
-                assert_eq!(b, "B");
-            }
-            _ => panic!("Expected String elements"),
-        }
+        assert_eq!(range[0], ArrayElement::String("A".into()));
+        assert_eq!(range[1], ArrayElement::String("B".into()));
     }
 
     #[test]
@@ -3406,7 +3143,7 @@ mod tests {
 
         // Check that both scale_type and input_range were inferred
         let scale = &spec.scales[0];
-        assert_eq!(scale.scale_type, Some(ScaleType::Continuous));
+        assert_eq!(scale.scale_type, Some(ScaleType::continuous()));
         assert!(scale.input_range.is_some());
 
         let range = scale.input_range.as_ref().unwrap();
@@ -3501,72 +3238,61 @@ mod tests {
 
     // =========================================================================
     // Partial Input Range Inference Tests (null placeholders)
+    // These tests now use ScaleType::resolve_input_range which handles the merging internally
     // =========================================================================
 
     #[test]
-    fn test_input_range_has_nulls_with_nulls() {
-        let range = vec![ArrayElement::Number(0.0), ArrayElement::Null];
-        assert!(input_range_has_nulls(&range));
+    fn test_resolve_input_range_merge_min_null() {
+        use polars::prelude::*;
+
+        // FROM [null, 100] with data [1, 10] → [1, 100]
+        let column: Column = Series::new("x".into(), &[1.0f64, 5.0, 10.0]).into();
+        let user_range = vec![ArrayElement::Null, ArrayElement::Number(100.0)];
+
+        let result = ScaleType::continuous()
+            .resolve_input_range(Some(&user_range), &[&column])
+            .unwrap();
+        assert!(result.is_some());
+        let range = result.unwrap();
+
+        assert_eq!(range[0], ArrayElement::Number(1.0)); // From data
+        assert_eq!(range[1], ArrayElement::Number(100.0)); // From explicit
     }
 
     #[test]
-    fn test_input_range_has_nulls_without_nulls() {
-        let range = vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)];
-        assert!(!input_range_has_nulls(&range));
+    fn test_resolve_input_range_merge_max_null() {
+        use polars::prelude::*;
+
+        // FROM [0, null] with data [1, 10] → [0, 10]
+        let column: Column = Series::new("x".into(), &[1.0f64, 5.0, 10.0]).into();
+        let user_range = vec![ArrayElement::Number(0.0), ArrayElement::Null];
+
+        let result = ScaleType::continuous()
+            .resolve_input_range(Some(&user_range), &[&column])
+            .unwrap();
+        assert!(result.is_some());
+        let range = result.unwrap();
+
+        assert_eq!(range[0], ArrayElement::Number(0.0)); // From explicit
+        assert_eq!(range[1], ArrayElement::Number(10.0)); // From data
     }
 
     #[test]
-    fn test_merge_input_range_with_inferred_min_null() {
-        // FROM [null, 100] with inferred [1, 10] → [1, 100]
-        let explicit = vec![ArrayElement::Null, ArrayElement::Number(100.0)];
-        let inferred = vec![ArrayElement::Number(1.0), ArrayElement::Number(10.0)];
+    fn test_resolve_input_range_merge_both_null() {
+        use polars::prelude::*;
 
-        let merged = merge_input_range_with_inferred(&explicit, &inferred);
+        // FROM [null, null] with data [1, 10] → [1, 10]
+        let column: Column = Series::new("x".into(), &[1.0f64, 5.0, 10.0]).into();
+        let user_range = vec![ArrayElement::Null, ArrayElement::Null];
 
-        assert_eq!(merged.len(), 2);
-        match (&merged[0], &merged[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 1.0); // From inferred
-                assert_eq!(*max, 100.0); // From explicit
-            }
-            _ => panic!("Expected Number elements"),
-        }
-    }
+        let result = ScaleType::continuous()
+            .resolve_input_range(Some(&user_range), &[&column])
+            .unwrap();
+        assert!(result.is_some());
+        let range = result.unwrap();
 
-    #[test]
-    fn test_merge_input_range_with_inferred_max_null() {
-        // FROM [0, null] with inferred [1, 10] → [0, 10]
-        let explicit = vec![ArrayElement::Number(0.0), ArrayElement::Null];
-        let inferred = vec![ArrayElement::Number(1.0), ArrayElement::Number(10.0)];
-
-        let merged = merge_input_range_with_inferred(&explicit, &inferred);
-
-        assert_eq!(merged.len(), 2);
-        match (&merged[0], &merged[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 0.0); // From explicit
-                assert_eq!(*max, 10.0); // From inferred
-            }
-            _ => panic!("Expected Number elements"),
-        }
-    }
-
-    #[test]
-    fn test_merge_input_range_with_inferred_both_null() {
-        // FROM [null, null] with inferred [1, 10] → [1, 10]
-        let explicit = vec![ArrayElement::Null, ArrayElement::Null];
-        let inferred = vec![ArrayElement::Number(1.0), ArrayElement::Number(10.0)];
-
-        let merged = merge_input_range_with_inferred(&explicit, &inferred);
-
-        assert_eq!(merged.len(), 2);
-        match (&merged[0], &merged[1]) {
-            (ArrayElement::Number(min), ArrayElement::Number(max)) => {
-                assert_eq!(*min, 1.0); // From inferred
-                assert_eq!(*max, 10.0); // From inferred
-            }
-            _ => panic!("Expected Number elements"),
-        }
+        assert_eq!(range[0], ArrayElement::Number(1.0)); // From data
+        assert_eq!(range[1], ArrayElement::Number(10.0)); // From data
     }
 
     #[test]

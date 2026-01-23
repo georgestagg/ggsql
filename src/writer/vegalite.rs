@@ -283,17 +283,19 @@ impl VegaLiteWriter {
                 let field_type = if let Some(scale) = spec.find_scale(primary) {
                     // Use scale type if explicitly specified
                     if let Some(scale_type) = &scale.scale_type {
-                        use crate::plot::ScaleType;
-                        match scale_type {
+                        use crate::plot::ScaleTypeKind;
+                        match scale_type.scale_type_kind() {
                             // New data type indicators
-                            ScaleType::Continuous => "quantitative",
-                            ScaleType::Discrete => "nominal",
-                            ScaleType::Binned => "quantitative", // Binned data is still quantitative
+                            ScaleTypeKind::Continuous => "quantitative",
+                            ScaleTypeKind::Discrete => "nominal",
+                            ScaleTypeKind::Binned => "quantitative", // Binned data is still quantitative
 
                             // Temporal scales
-                            ScaleType::Date | ScaleType::DateTime | ScaleType::Time => "temporal",
+                            ScaleTypeKind::Date | ScaleTypeKind::DateTime | ScaleTypeKind::Time => {
+                                "temporal"
+                            }
 
-                            ScaleType::Identity => {
+                            ScaleTypeKind::Identity => {
                                 identity_scale = true;
                                 inferred.as_str()
                             }
