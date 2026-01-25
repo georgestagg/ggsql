@@ -50,6 +50,20 @@ impl ScaleTypeTrait for Continuous {
             Some(range) => Ok(Some(range.to_vec())),
         }
     }
+
+    fn default_output_range(
+        &self,
+        aesthetic: &str,
+        _input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        match aesthetic {
+            // TODO: Fill in preferred defaults
+            // "size" => Some(vec![...]),
+            // "opacity" | "alpha" => Some(vec![...]),
+            // "linewidth" => Some(vec![...]),
+            _ => None,
+        }
+    }
 }
 
 /// Compute numeric input range as [min, max] from Columns.

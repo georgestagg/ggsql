@@ -38,6 +38,14 @@ impl ScaleTypeTrait for Date {
             Some(range) => Ok(Some(range.to_vec())),
         }
     }
+
+    fn default_output_range(
+        &self,
+        _aesthetic: &str,
+        _input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        None // Temporal scales don't have output range defaults
+    }
 }
 
 /// Compute date input range as [min_date, max_date] ISO strings from Columns.

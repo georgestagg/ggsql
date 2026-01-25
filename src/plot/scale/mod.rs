@@ -2,6 +2,7 @@
 //!
 //! This module defines scale and guide configuration for aesthetic mappings.
 
+pub mod palettes;
 mod scale_type;
 mod types;
 

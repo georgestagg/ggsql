@@ -5,7 +5,9 @@
 
 use crate::naming;
 use crate::plot::layer::geom::{GeomAesthetics, AESTHETIC_FAMILIES};
-use crate::plot::{AestheticValue, ColumnInfo, Layer, LiteralValue, ScaleType, Schema, StatResult};
+use crate::plot::{
+    AestheticValue, ColumnInfo, Layer, LiteralValue, OutputRange, ScaleType, Schema, StatResult,
+};
 use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Plot, Result};
 use polars::prelude::Column;
 use std::collections::{HashMap, HashSet};
@@ -1134,10 +1136,10 @@ fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Res
             spec.scales[idx].scale_type = Some(ScaleType::infer(column_refs[0].dtype()));
         }
 
-        // Resolve input range using the scale type's method
-        // Clone scale_type (cheap Arc clone) to avoid borrow conflict with input_range mutation
+        // Clone scale_type (cheap Arc clone) to avoid borrow conflict with mutations
         let scale_type = spec.scales[idx].scale_type.clone();
         if let Some(st) = scale_type {
+            // Resolve input range using the scale type's method
             let resolved_range = st
                 .resolve_input_range(spec.scales[idx].input_range.as_deref(), &column_refs)
                 .map_err(|e| {
@@ -1147,6 +1149,38 @@ fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Res
             if let Some(range) = resolved_range {
                 spec.scales[idx].input_range = Some(range);
             }
+
+            // Resolve output range (only if not already set)
+            if spec.scales[idx].output_range.is_none() {
+                if let Some(default_range) =
+                    st.default_output_range(&aesthetic, spec.scales[idx].input_range.as_deref())
+                {
+                    spec.scales[idx].output_range = Some(OutputRange::Array(default_range));
+                }
+            }
+        }
+
+        // Expand named palettes to explicit arrays
+        if let Some(OutputRange::Palette(ref name)) = spec.scales[idx].output_range {
+            use crate::plot::scale::palettes;
+
+            // Determine if this is a color or shape aesthetic
+            let palette_values = match aesthetic.as_str() {
+                "shape" => palettes::get_shape_palette(name),
+                _ => palettes::get_color_palette(name),
+            };
+
+            if let Some(palette) = palette_values {
+                // Size to input_range length, or use full palette
+                let count = spec.scales[idx]
+                    .input_range
+                    .as_ref()
+                    .map(|r| r.len())
+                    .unwrap_or(palette.len());
+                spec.scales[idx].output_range =
+                    Some(OutputRange::Array(palettes::expand_palette(palette, count)));
+            }
+            // If palette not found, leave as Palette variant for Vega-Lite to handle
         }
     }
 

@@ -128,6 +128,25 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
         user_range: Option<&[ArrayElement]>,
         columns: &[&Column],
     ) -> Result<Option<Vec<ArrayElement>>, String>;
+
+    /// Get default output range for an aesthetic.
+    ///
+    /// Returns sensible default ranges based on the aesthetic type and scale type.
+    /// For example:
+    /// - color/fill + discrete → standard categorical color palette (sized to input_range length)
+    /// - size + continuous → [min_size, max_size] range
+    /// - opacity + continuous → [0.2, 1.0] range
+    ///
+    /// The input_range is provided so discrete scales can size the output appropriately.
+    ///
+    /// Returns None if no default is appropriate (e.g., x/y position aesthetics).
+    fn default_output_range(
+        &self,
+        _aesthetic: &str,
+        _input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        None // Default implementation: no default range
+    }
 }
 
 /// Wrapper struct for scale type trait objects
@@ -248,6 +267,17 @@ impl ScaleType {
         columns: &[&Column],
     ) -> Result<Option<Vec<ArrayElement>>, String> {
         self.0.resolve_input_range(user_range, columns)
+    }
+
+    /// Get default output range for an aesthetic.
+    ///
+    /// Delegates to the underlying scale type implementation.
+    pub fn default_output_range(
+        &self,
+        aesthetic: &str,
+        input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        self.0.default_output_range(aesthetic, input_range)
     }
 }
 

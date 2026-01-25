@@ -42,6 +42,27 @@ impl ScaleTypeTrait for Discrete {
             None => Ok(compute_unique_values(columns)),
         }
     }
+
+    fn default_output_range(
+        &self,
+        aesthetic: &str,
+        input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        use super::super::palettes;
+
+        let count = input_range.map(|r| r.len()).unwrap_or(0);
+        if count == 0 {
+            return None;
+        }
+
+        match aesthetic {
+            "color" | "colour" | "fill" | "stroke" => {
+                Some(palettes::expand_palette(palettes::default_color_palette(), count))
+            }
+            "shape" => Some(palettes::expand_palette(palettes::default_shape_palette(), count)),
+            _ => None,
+        }
+    }
 }
 
 /// Compute discrete input range as unique sorted values from Columns.

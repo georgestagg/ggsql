@@ -50,6 +50,15 @@ impl ScaleTypeTrait for Binned {
             Some(range) => Ok(Some(range.to_vec())),
         }
     }
+
+    fn default_output_range(
+        &self,
+        _aesthetic: &str,
+        _input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        // TODO: Decide if binned should have same defaults as continuous
+        None
+    }
 }
 
 /// Compute numeric input range as [min, max] from Columns.

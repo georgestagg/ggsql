@@ -36,6 +36,14 @@ impl ScaleTypeTrait for Identity {
             None => Ok(None),
         }
     }
+
+    fn default_output_range(
+        &self,
+        _aesthetic: &str,
+        _input_range: Option<&[ArrayElement]>,
+    ) -> Option<Vec<ArrayElement>> {
+        None // Identity scales use inferred defaults
+    }
 }
 
 impl std::fmt::Display for Identity {
