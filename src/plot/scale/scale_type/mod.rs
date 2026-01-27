@@ -497,7 +497,11 @@ impl ScaleType {
     }
 
     /// Returns the default transform for this scale type, aesthetic, and column data type.
-    pub fn default_transform(&self, aesthetic: &str, column_dtype: Option<&DataType>) -> TransformKind {
+    pub fn default_transform(
+        &self,
+        aesthetic: &str,
+        column_dtype: Option<&DataType>,
+    ) -> TransformKind {
         self.0.default_transform(aesthetic, column_dtype)
     }
 
@@ -511,7 +515,8 @@ impl ScaleType {
         user_transform: Option<&Transform>,
         column_dtype: Option<&DataType>,
     ) -> Result<Transform, String> {
-        self.0.resolve_transform(aesthetic, user_transform, column_dtype)
+        self.0
+            .resolve_transform(aesthetic, user_transform, column_dtype)
     }
 
     /// Resolve break positions for this scale.
@@ -795,7 +800,8 @@ mod tests {
         assert!(ScaleType::continuous().allows_data_type(&DataType::Int32));
         assert!(ScaleType::continuous().allows_data_type(&DataType::UInt64));
         assert!(ScaleType::continuous().allows_data_type(&DataType::Date));
-        assert!(ScaleType::continuous().allows_data_type(&DataType::Datetime(TimeUnit::Microseconds, None)));
+        assert!(ScaleType::continuous()
+            .allows_data_type(&DataType::Datetime(TimeUnit::Microseconds, None)));
         assert!(ScaleType::continuous().allows_data_type(&DataType::Time));
         assert!(!ScaleType::continuous().allows_data_type(&DataType::String));
 
@@ -1261,7 +1267,9 @@ mod tests {
     #[test]
     fn test_resolve_properties_continuous_supports_expand() {
         let props = HashMap::new();
-        let resolved = ScaleType::continuous().resolve_properties("x", &props).unwrap();
+        let resolved = ScaleType::continuous()
+            .resolve_properties("x", &props)
+            .unwrap();
 
         // Should have default expand
         assert!(resolved.contains_key("expand"));
@@ -1444,10 +1452,7 @@ mod tests {
         // All continuous-like scales should support oob
         let props = HashMap::new();
 
-        for scale_type in &[
-            ScaleType::continuous(),
-            ScaleType::binned(),
-        ] {
+        for scale_type in &[ScaleType::continuous(), ScaleType::binned()] {
             let resolved = scale_type.resolve_properties("color", &props).unwrap();
             assert!(
                 resolved.contains_key("oob"),
@@ -1558,7 +1563,8 @@ mod tests {
 
         // DateTime column -> DateTime transform
         assert_eq!(
-            ScaleType::continuous().default_transform("x", Some(&DataType::Datetime(TimeUnit::Microseconds, None))),
+            ScaleType::continuous()
+                .default_transform("x", Some(&DataType::Datetime(TimeUnit::Microseconds, None))),
             TransformKind::DateTime
         );
 

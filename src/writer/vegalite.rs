@@ -459,9 +459,8 @@ impl VegaLiteWriter {
                             }
                             // Temporal transforms are identity in numeric space;
                             // the field type ("temporal") is set based on the transform kind
-                            TransformKind::Date
-                            | TransformKind::DateTime
-                            | TransformKind::Time => {}
+                            TransformKind::Date | TransformKind::DateTime | TransformKind::Time => {
+                            }
                         }
                     }
 

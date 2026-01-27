@@ -121,12 +121,7 @@ impl TransformTrait for Time {
 }
 
 /// Calculate pretty time breaks aligned to interval boundaries
-fn calculate_pretty_time_breaks(
-    min: f64,
-    max: f64,
-    n: usize,
-    interval: TimeInterval,
-) -> Vec<f64> {
+fn calculate_pretty_time_breaks(min: f64, max: f64, n: usize, interval: TimeInterval) -> Vec<f64> {
     let mut breaks = Vec::new();
 
     match interval {
@@ -169,8 +164,7 @@ fn calculate_pretty_time_breaks(
             let seconds = span / NANOS_PER_SECOND;
             let step_seconds = nice_second_step(seconds / n as f64);
 
-            let start_nanos =
-                (min / NANOS_PER_SECOND).floor() as i64 * NANOS_PER_SECOND as i64;
+            let start_nanos = (min / NANOS_PER_SECOND).floor() as i64 * NANOS_PER_SECOND as i64;
             let step_nanos = (step_seconds * NANOS_PER_SECOND) as i64;
 
             let mut nanos = start_nanos;

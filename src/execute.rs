@@ -6,8 +6,8 @@
 use crate::naming;
 use crate::plot::layer::geom::{GeomAesthetics, AESTHETIC_FAMILIES};
 use crate::plot::{
-    AestheticValue, ColumnInfo, Layer, LiteralValue, OutputRange, Scale, ScaleType,
-    ScaleTypeKind, Schema, StatResult,
+    AestheticValue, ColumnInfo, Layer, LiteralValue, OutputRange, Scale, ScaleType, ScaleTypeKind,
+    Schema, StatResult,
 };
 use crate::{parser, DataFrame, DataSource, Facet, GgsqlError, Plot, Result};
 use polars::prelude::Column;
@@ -543,10 +543,8 @@ fn add_discrete_columns_to_partition_by(
         &["x", "y", "xmin", "xmax", "ymin", "ymax", "xend", "yend"];
 
     // Build a map of aesthetic -> scale for quick lookup
-    let scale_map: HashMap<&str, &Scale> = scales
-        .iter()
-        .map(|s| (s.aesthetic.as_str(), s))
-        .collect();
+    let scale_map: HashMap<&str, &Scale> =
+        scales.iter().map(|s| (s.aesthetic.as_str(), s)).collect();
 
     for (layer, schema) in layers.iter_mut().zip(layer_schemas.iter()) {
         let schema_columns: HashSet<&str> = schema.iter().map(|c| c.name.as_str()).collect();
@@ -1417,11 +1415,8 @@ fn create_missing_scales(spec: &mut Plot) {
     }
 
     // Find aesthetics that already have explicit scales
-    let existing_scales: HashSet<String> = spec
-        .scales
-        .iter()
-        .map(|s| s.aesthetic.clone())
-        .collect();
+    let existing_scales: HashSet<String> =
+        spec.scales.iter().map(|s| s.aesthetic.clone()).collect();
 
     // Create scales for missing aesthetics
     for aesthetic in used_aesthetics {
@@ -1481,7 +1476,11 @@ fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Res
 
             // Resolve transform (fills in default based on column dtype, validates user input)
             let resolved_transform = st
-                .resolve_transform(&aesthetic, spec.scales[idx].transform.as_ref(), column_dtype.as_ref())
+                .resolve_transform(
+                    &aesthetic,
+                    spec.scales[idx].transform.as_ref(),
+                    column_dtype.as_ref(),
+                )
                 .map_err(|e| {
                     GgsqlError::ValidationError(format!("Scale '{}': {}", aesthetic, e))
                 })?;
@@ -4457,8 +4456,14 @@ mod tests {
         // Date is now continuous (not discrete)
         assert!(!col.is_discrete);
         // Date min/max as ISO strings
-        assert_eq!(col.min, Some(ArrayElement::String("2024-01-15".to_string())));
-        assert_eq!(col.max, Some(ArrayElement::String("2024-03-01".to_string())));
+        assert_eq!(
+            col.min,
+            Some(ArrayElement::String("2024-01-15".to_string()))
+        );
+        assert_eq!(
+            col.max,
+            Some(ArrayElement::String("2024-03-01".to_string()))
+        );
     }
 
     #[cfg(feature = "duckdb")]
@@ -4525,8 +4530,14 @@ mod tests {
         let col_date = &schema[3];
         assert_eq!(col_date.name, "date_col");
         assert!(!col_date.is_discrete);
-        assert_eq!(col_date.min, Some(ArrayElement::String("2024-01-01".to_string())));
-        assert_eq!(col_date.max, Some(ArrayElement::String("2024-12-31".to_string())));
+        assert_eq!(
+            col_date.min,
+            Some(ArrayElement::String("2024-01-01".to_string()))
+        );
+        assert_eq!(
+            col_date.max,
+            Some(ArrayElement::String("2024-12-31".to_string()))
+        );
     }
 
     #[cfg(feature = "duckdb")]
@@ -4683,7 +4694,10 @@ mod tests {
         let layer = Layer::new(Geom::text())
             .with_aesthetic("x".to_string(), AestheticValue::standard_column("col_x"))
             .with_aesthetic("y".to_string(), AestheticValue::standard_column("col_y"))
-            .with_aesthetic("label".to_string(), AestheticValue::standard_column("text_col"));
+            .with_aesthetic(
+                "label".to_string(),
+                AestheticValue::standard_column("text_col"),
+            );
         spec.layers.push(layer);
 
         create_missing_scales(&mut spec);
@@ -4728,9 +4742,13 @@ mod tests {
 
         let mut spec = Plot::new();
         let mut layer = Layer::new(Geom::bar());
-        layer.mappings.insert("x", AestheticValue::standard_column("category"));
+        layer
+            .mappings
+            .insert("x", AestheticValue::standard_column("category"));
         // Remapping: stat column "count" maps to "y" aesthetic
-        layer.remappings.insert("y", AestheticValue::standard_column("count"));
+        layer
+            .remappings
+            .insert("y", AestheticValue::standard_column("count"));
         spec.layers.push(layer);
 
         create_missing_scales(&mut spec);
@@ -4848,7 +4866,10 @@ mod tests {
         let layer = Layer::new(Geom::line())
             .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
             .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"))
-            .with_aesthetic("color".to_string(), AestheticValue::standard_column("group_id"));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::standard_column("group_id"),
+            );
         spec.layers.push(layer);
 
         // Create a discrete scale for color (even though group_id might be an integer)
@@ -4885,7 +4906,9 @@ mod tests {
 
         // After: group_id should be added to partition_by because SCALE DISCRETE color
         assert!(
-            spec.layers[0].partition_by.contains(&"group_id".to_string()),
+            spec.layers[0]
+                .partition_by
+                .contains(&"group_id".to_string()),
             "Integer column with explicit SCALE DISCRETE should be added to partition_by"
         );
     }
@@ -4899,7 +4922,10 @@ mod tests {
         let layer = Layer::new(Geom::line())
             .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
             .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"))
-            .with_aesthetic("color".to_string(), AestheticValue::standard_column("category"));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::standard_column("category"),
+            );
         spec.layers.push(layer);
 
         // Create a continuous scale for color (overriding schema's discrete)
@@ -4933,7 +4959,9 @@ mod tests {
 
         // category should NOT be added because SCALE CONTINUOUS overrides schema
         assert!(
-            !spec.layers[0].partition_by.contains(&"category".to_string()),
+            !spec.layers[0]
+                .partition_by
+                .contains(&"category".to_string()),
             "String column with explicit SCALE CONTINUOUS should NOT be added to partition_by"
         );
     }
@@ -4947,7 +4975,10 @@ mod tests {
         let layer = Layer::new(Geom::line())
             .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
             .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"))
-            .with_aesthetic("color".to_string(), AestheticValue::standard_column("category"));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::standard_column("category"),
+            );
         spec.layers.push(layer);
 
         // Create an identity scale for color
@@ -4981,7 +5012,9 @@ mod tests {
 
         // category SHOULD be added because Identity falls back to schema (which says discrete)
         assert!(
-            spec.layers[0].partition_by.contains(&"category".to_string()),
+            spec.layers[0]
+                .partition_by
+                .contains(&"category".to_string()),
             "Discrete column with Identity scale should be added to partition_by"
         );
     }
@@ -4996,7 +5029,10 @@ mod tests {
         let layer = Layer::new(Geom::line())
             .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
             .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"))
-            .with_aesthetic("color".to_string(), AestheticValue::standard_column("temperature"));
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::standard_column("temperature"),
+            );
         spec.layers.push(layer);
 
         // Create a binned scale for color
@@ -5033,7 +5069,9 @@ mod tests {
 
         // After: temperature should be added to partition_by because SCALE BINNED creates categories
         assert!(
-            spec.layers[0].partition_by.contains(&"temperature".to_string()),
+            spec.layers[0]
+                .partition_by
+                .contains(&"temperature".to_string()),
             "Continuous column with SCALE BINNED should be added to partition_by"
         );
     }

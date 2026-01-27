@@ -3252,9 +3252,6 @@ mod tests {
         assert_eq!(scales.len(), 1);
         assert_eq!(scales[0].aesthetic, "x");
         assert!(scales[0].transform.is_some());
-        assert_eq!(
-            scales[0].transform.as_ref().unwrap().name(),
-            "date"
-        );
+        assert_eq!(scales[0].transform.as_ref().unwrap().name(), "date");
     }
 }

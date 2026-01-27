@@ -472,10 +472,22 @@ mod tests {
         assert_eq!(Transform::from_name("ln").unwrap().name(), "ln");
 
         // Verify pseudo_log variants return correct names
-        assert_eq!(Transform::from_name("pseudo_log").unwrap().name(), "pseudo_log");
-        assert_eq!(Transform::from_name("pseudo_log10").unwrap().name(), "pseudo_log");
-        assert_eq!(Transform::from_name("pseudo_log2").unwrap().name(), "pseudo_log2");
-        assert_eq!(Transform::from_name("pseudo_ln").unwrap().name(), "pseudo_ln");
+        assert_eq!(
+            Transform::from_name("pseudo_log").unwrap().name(),
+            "pseudo_log"
+        );
+        assert_eq!(
+            Transform::from_name("pseudo_log10").unwrap().name(),
+            "pseudo_log"
+        );
+        assert_eq!(
+            Transform::from_name("pseudo_log2").unwrap().name(),
+            "pseudo_log2"
+        );
+        assert_eq!(
+            Transform::from_name("pseudo_ln").unwrap().name(),
+            "pseudo_ln"
+        );
     }
 
     #[test]

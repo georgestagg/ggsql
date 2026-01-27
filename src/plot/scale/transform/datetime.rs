@@ -252,8 +252,7 @@ fn calculate_pretty_datetime_breaks(
             let seconds = span / MICROS_PER_SECOND;
             let step_seconds = nice_step(seconds / n as f64);
 
-            let start_micros =
-                (min / MICROS_PER_SECOND).floor() as i64 * MICROS_PER_SECOND as i64;
+            let start_micros = (min / MICROS_PER_SECOND).floor() as i64 * MICROS_PER_SECOND as i64;
             let step_micros = (step_seconds * MICROS_PER_SECOND) as i64;
 
             let mut micros = start_micros;
