@@ -4,7 +4,7 @@
 //! Common bases (10, 2, e) have named constructors for convenience.
 
 use super::{TransformKind, TransformTrait};
-use crate::plot::scale::breaks::log_breaks;
+use crate::plot::scale::breaks::{log_breaks, minor_breaks_log};
 
 /// Log transform - logarithm with configurable base
 ///
@@ -99,6 +99,19 @@ impl TransformTrait for Log {
 
     fn calculate_breaks(&self, min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64> {
         log_breaks(min, max, n, self.base, pretty)
+    }
+
+    fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64> {
+        minor_breaks_log(major_breaks, n, self.base, range)
+    }
+
+    fn default_minor_break_count(&self) -> usize {
+        8 // Similar density to traditional 2-9 pattern on log axes
     }
 
     fn transform(&self, value: f64) -> f64 {
@@ -384,5 +397,53 @@ mod tests {
         assert_eq!(format!("{}", Log::base10()), "log");
         assert_eq!(format!("{}", Log::base2()), "log2");
         assert_eq!(format!("{}", Log::natural()), "ln");
+    }
+
+    // ==================== Minor Breaks Tests ====================
+
+    #[test]
+    fn test_log10_minor_breaks() {
+        let t = Log::base10();
+        let majors = vec![1.0, 10.0, 100.0];
+        let minors = t.calculate_minor_breaks(&majors, 8, None);
+        // 8 minor breaks per decade, 2 decades
+        assert_eq!(minors.len(), 16);
+        assert!(minors.iter().all(|&x| x > 0.0));
+    }
+
+    #[test]
+    fn test_log10_minor_breaks_geometric_mean() {
+        let t = Log::base10();
+        let majors = vec![1.0, 10.0];
+        let minors = t.calculate_minor_breaks(&majors, 1, None);
+        // Single minor break should be at geometric mean: sqrt(1 * 10) ≈ 3.16
+        assert_eq!(minors.len(), 1);
+        assert!((minors[0] - (1.0_f64 * 10.0).sqrt()).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_log10_minor_breaks_with_extension() {
+        let t = Log::base10();
+        let majors = vec![10.0, 100.0];
+        let minors = t.calculate_minor_breaks(&majors, 8, Some((1.0, 1000.0)));
+        // Should extend into [1, 10) and (100, 1000]
+        assert_eq!(minors.len(), 24); // 8 per decade × 3 decades
+    }
+
+    #[test]
+    fn test_log10_default_minor_break_count() {
+        let t = Log::base10();
+        assert_eq!(t.default_minor_break_count(), 8);
+    }
+
+    #[test]
+    fn test_log2_minor_breaks() {
+        let t = Log::base2();
+        let majors = vec![1.0, 2.0, 4.0, 8.0];
+        let minors = t.calculate_minor_breaks(&majors, 1, None);
+        // One midpoint per interval (3 intervals)
+        assert_eq!(minors.len(), 3);
+        // Geometric means: sqrt(1*2)≈1.41, sqrt(2*4)≈2.83, sqrt(4*8)≈5.66
+        assert!((minors[0] - 2.0_f64.sqrt()).abs() < 0.01);
     }
 }

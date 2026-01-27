@@ -1,7 +1,7 @@
 //! Identity transform implementation (no transformation)
 
 use super::{TransformKind, TransformTrait};
-use crate::plot::scale::breaks::{linear_breaks, pretty_breaks};
+use crate::plot::scale::breaks::{linear_breaks, minor_breaks_linear, pretty_breaks};
 
 /// Identity transform - no transformation (linear scale)
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +30,15 @@ impl TransformTrait for Identity {
         } else {
             linear_breaks(min, max, n)
         }
+    }
+
+    fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64> {
+        minor_breaks_linear(major_breaks, n, range)
     }
 
     fn transform(&self, value: f64) -> f64 {
@@ -109,5 +118,30 @@ mod tests {
         let t = Identity;
         let breaks = t.calculate_breaks(0.0, 100.0, 5, false);
         assert_eq!(breaks, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+    }
+
+    #[test]
+    fn test_identity_minor_breaks() {
+        let t = Identity;
+        let majors = vec![0.0, 25.0, 50.0, 75.0, 100.0];
+        let minors = t.calculate_minor_breaks(&majors, 1, None);
+        // One midpoint per interval
+        assert_eq!(minors, vec![12.5, 37.5, 62.5, 87.5]);
+    }
+
+    #[test]
+    fn test_identity_minor_breaks_with_extension() {
+        let t = Identity;
+        let majors = vec![25.0, 50.0, 75.0];
+        let minors = t.calculate_minor_breaks(&majors, 1, Some((0.0, 100.0)));
+        // Should extend before 25 and after 75
+        assert!(minors.contains(&12.5)); // Before first major
+        assert!(minors.contains(&87.5)); // After last major
+    }
+
+    #[test]
+    fn test_identity_default_minor_break_count() {
+        let t = Identity;
+        assert_eq!(t.default_minor_break_count(), 1);
     }
 }

@@ -264,6 +264,691 @@ fn thin_breaks(breaks: Vec<f64>, n: usize) -> Vec<f64> {
     result
 }
 
+// =============================================================================
+// Minor Break Calculations
+// =============================================================================
+
+/// Calculate minor breaks by evenly dividing intervals (linear space)
+///
+/// Between each pair of major breaks, inserts n evenly-spaced minor breaks.
+/// If range extends beyond major breaks, extrapolates minor breaks into those regions.
+///
+/// # Arguments
+/// - `major_breaks`: The major break positions (must be sorted)
+/// - `n`: Number of minor breaks per major interval
+/// - `range`: Optional (min, max) scale input range to extend minor breaks beyond major breaks
+///
+/// # Returns
+/// Minor break positions (excluding major breaks)
+///
+/// # Example
+/// ```ignore
+/// let majors = vec![20.0, 40.0, 60.0];
+/// let minors = minor_breaks_linear(&majors, 1, Some((0.0, 80.0)));
+/// // Returns [10, 30, 50, 70] - extends before 20 and after 60
+/// ```
+pub fn minor_breaks_linear(
+    major_breaks: &[f64],
+    n: usize,
+    range: Option<(f64, f64)>,
+) -> Vec<f64> {
+    if major_breaks.len() < 2 || n == 0 {
+        return vec![];
+    }
+
+    let mut minors = Vec::new();
+
+    // Calculate interval between consecutive major breaks
+    let interval = major_breaks[1] - major_breaks[0];
+    if interval <= 0.0 {
+        return vec![];
+    }
+
+    let step = interval / (n + 1) as f64;
+
+    // If range extends before first major break, extrapolate backwards
+    if let Some((min, _)) = range {
+        let first_major = major_breaks[0];
+        let mut pos = first_major - step;
+        while pos >= min {
+            minors.push(pos);
+            pos -= step;
+        }
+    }
+
+    // Add minor breaks between each pair of major breaks
+    for window in major_breaks.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let local_step = (end - start) / (n + 1) as f64;
+
+        for i in 1..=n {
+            let pos = start + local_step * i as f64;
+            minors.push(pos);
+        }
+    }
+
+    // If range extends beyond last major break, extrapolate forwards
+    if let Some((_, max)) = range {
+        let last_major = *major_breaks.last().unwrap();
+        let mut pos = last_major + step;
+        while pos <= max {
+            minors.push(pos);
+            pos += step;
+        }
+    }
+
+    minors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    minors
+}
+
+/// Calculate minor breaks for log scales (equal ratios in log space)
+///
+/// Transforms major breaks to log space, divides evenly, transforms back.
+/// This produces minor breaks that are evenly spaced in log space (equal ratios).
+///
+/// # Arguments
+/// - `major_breaks`: The major break positions (must be positive and sorted)
+/// - `n`: Number of minor breaks per major interval
+/// - `base`: The logarithm base (e.g., 10.0, 2.0, E)
+/// - `range`: Optional (min, max) scale input range to extend minor breaks beyond major breaks
+///
+/// # Returns
+/// Minor break positions (excluding major breaks)
+pub fn minor_breaks_log(
+    major_breaks: &[f64],
+    n: usize,
+    base: f64,
+    range: Option<(f64, f64)>,
+) -> Vec<f64> {
+    if major_breaks.len() < 2 || n == 0 {
+        return vec![];
+    }
+
+    // Filter to positive values only
+    let positive_majors: Vec<f64> = major_breaks.iter().copied().filter(|&x| x > 0.0).collect();
+
+    if positive_majors.len() < 2 {
+        return vec![];
+    }
+
+    // Transform to log space
+    let log_majors: Vec<f64> = positive_majors.iter().map(|&x| x.log(base)).collect();
+
+    // Calculate minor breaks in log space
+    let log_range = range.map(|(min, max)| {
+        let log_min = if min > 0.0 {
+            min.log(base)
+        } else {
+            log_majors[0] - (log_majors[1] - log_majors[0])
+        };
+        let log_max = max.log(base);
+        (log_min, log_max)
+    });
+
+    let log_minors = minor_breaks_linear(&log_majors, n, log_range);
+
+    // Transform back to data space
+    log_minors.into_iter().map(|x| base.powf(x)).collect()
+}
+
+/// Calculate minor breaks in sqrt space
+///
+/// Transforms to sqrt space, divides evenly, squares back.
+///
+/// # Arguments
+/// - `major_breaks`: The major break positions (must be non-negative and sorted)
+/// - `n`: Number of minor breaks per major interval
+/// - `range`: Optional (min, max) scale input range to extend minor breaks beyond major breaks
+///
+/// # Returns
+/// Minor break positions (excluding major breaks)
+pub fn minor_breaks_sqrt(
+    major_breaks: &[f64],
+    n: usize,
+    range: Option<(f64, f64)>,
+) -> Vec<f64> {
+    if major_breaks.len() < 2 || n == 0 {
+        return vec![];
+    }
+
+    // Filter to non-negative values only
+    let nonneg_majors: Vec<f64> = major_breaks.iter().copied().filter(|&x| x >= 0.0).collect();
+
+    if nonneg_majors.len() < 2 {
+        return vec![];
+    }
+
+    // Transform to sqrt space
+    let sqrt_majors: Vec<f64> = nonneg_majors.iter().map(|&x| x.sqrt()).collect();
+
+    // Calculate minor breaks in sqrt space
+    let sqrt_range = range.map(|(min, max)| (min.max(0.0).sqrt(), max.sqrt()));
+
+    let sqrt_minors = minor_breaks_linear(&sqrt_majors, n, sqrt_range);
+
+    // Transform back to data space (square)
+    sqrt_minors.into_iter().map(|x| x * x).collect()
+}
+
+/// Calculate minor breaks for symlog scales
+///
+/// Uses asinh transform space for even division. Handles negative values.
+///
+/// # Arguments
+/// - `major_breaks`: The major break positions (sorted)
+/// - `n`: Number of minor breaks per major interval
+/// - `range`: Optional (min, max) scale input range to extend minor breaks beyond major breaks
+///
+/// # Returns
+/// Minor break positions (excluding major breaks)
+pub fn minor_breaks_symlog(
+    major_breaks: &[f64],
+    n: usize,
+    range: Option<(f64, f64)>,
+) -> Vec<f64> {
+    if major_breaks.len() < 2 || n == 0 {
+        return vec![];
+    }
+
+    // Transform to asinh space
+    let asinh_majors: Vec<f64> = major_breaks.iter().map(|&x| x.asinh()).collect();
+
+    // Calculate minor breaks in asinh space
+    let asinh_range = range.map(|(min, max)| (min.asinh(), max.asinh()));
+
+    let asinh_minors = minor_breaks_linear(&asinh_majors, n, asinh_range);
+
+    // Transform back to data space
+    asinh_minors.into_iter().map(|x| x.sinh()).collect()
+}
+
+/// Trim breaks to be within the specified range (inclusive)
+///
+/// # Arguments
+/// - `breaks`: The break positions to filter
+/// - `range`: The (min, max) range to keep
+///
+/// # Returns
+/// Break positions that fall within [min, max]
+pub fn trim_breaks(breaks: &[f64], range: (f64, f64)) -> Vec<f64> {
+    breaks
+        .iter()
+        .copied()
+        .filter(|&b| b >= range.0 && b <= range.1)
+        .collect()
+}
+
+/// Trim temporal breaks to be within the specified range (inclusive)
+///
+/// Uses string comparison for ISO-format dates (works for Date, DateTime, Time).
+///
+/// # Arguments
+/// - `breaks`: The break positions as ISO strings
+/// - `range`: The (min, max) range as ISO strings
+///
+/// # Returns
+/// Break positions that fall within the range
+pub fn trim_temporal_breaks(breaks: &[String], range: (&str, &str)) -> Vec<String> {
+    breaks
+        .iter()
+        .filter(|b| b.as_str() >= range.0 && b.as_str() <= range.1)
+        .cloned()
+        .collect()
+}
+
+/// Temporal minor break specification
+#[derive(Debug, Clone, PartialEq)]
+pub enum MinorBreakSpec {
+    /// Derive minor interval from major interval (default)
+    Auto,
+    /// Explicit count per major interval
+    Count(usize),
+    /// Explicit interval string
+    Interval(String),
+}
+
+impl Default for MinorBreakSpec {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// Derive minor interval from major interval (keeps count below 10)
+///
+/// Returns the recommended minor interval string for a given major interval.
+///
+/// | Major Epoch | Minor Epoch  | Approx Count |
+/// |-------------|--------------|--------------|
+/// | year        | 3 months     | 4            |
+/// | quarter     | month        | 3            |
+/// | month       | week         | ~4           |
+/// | week        | day          | 7            |
+/// | day         | 6 hours      | 4            |
+/// | hour        | 15 minutes   | 4            |
+/// | minute      | 15 seconds   | 4            |
+/// | second      | 100 ms       | 10           |
+pub fn derive_minor_interval(major_interval: &str) -> &'static str {
+    let interval = TemporalInterval::from_str(major_interval);
+    match interval {
+        Some(TemporalInterval {
+            unit: TemporalUnit::Year,
+            ..
+        }) => "3 months",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Month,
+            count,
+        }) if count >= 3 => "month", // quarter -> month
+        Some(TemporalInterval {
+            unit: TemporalUnit::Month,
+            ..
+        }) => "week",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Week,
+            ..
+        }) => "day",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Day,
+            ..
+        }) => "6 hours",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Hour,
+            ..
+        }) => "15 minutes",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Minute,
+            ..
+        }) => "15 seconds",
+        Some(TemporalInterval {
+            unit: TemporalUnit::Second,
+            ..
+        }) => "100 ms",
+        None => "day", // fallback
+    }
+}
+
+/// Calculate temporal minor breaks for Date scale
+///
+/// # Arguments
+/// - `major_breaks`: Major break positions as ISO date strings ("YYYY-MM-DD")
+/// - `major_interval`: The major interval string (e.g., "month", "year")
+/// - `spec`: Minor break specification (Auto, Count, or Interval)
+/// - `range`: Optional (min, max) as ISO date strings to extend minor breaks
+///
+/// # Returns
+/// Minor break positions as ISO date strings
+pub fn temporal_minor_breaks_date(
+    major_breaks: &[String],
+    major_interval: &str,
+    spec: MinorBreakSpec,
+    range: Option<(&str, &str)>,
+) -> Vec<String> {
+    use chrono::NaiveDate;
+
+    if major_breaks.len() < 2 {
+        return vec![];
+    }
+
+    // Parse major breaks to dates
+    let major_dates: Vec<NaiveDate> = major_breaks
+        .iter()
+        .filter_map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .collect();
+
+    if major_dates.len() < 2 {
+        return vec![];
+    }
+
+    let minor_interval = match spec {
+        MinorBreakSpec::Auto => derive_minor_interval(major_interval).to_string(),
+        MinorBreakSpec::Count(n) => {
+            // Calculate interval between first two majors and divide by n+1
+            let days = (major_dates[1] - major_dates[0]).num_days();
+            let minor_days = days / (n + 1) as i64;
+            format!("{} days", minor_days.max(1))
+        }
+        MinorBreakSpec::Interval(s) => s,
+    };
+
+    let interval = match TemporalInterval::from_str(&minor_interval) {
+        Some(i) => i,
+        None => return vec![],
+    };
+
+    let mut minors = Vec::new();
+
+    // Parse range bounds
+    let range_dates = range.and_then(|(min, max)| {
+        let min_date = NaiveDate::parse_from_str(min, "%Y-%m-%d").ok()?;
+        let max_date = NaiveDate::parse_from_str(max, "%Y-%m-%d").ok()?;
+        Some((min_date, max_date))
+    });
+
+    // If range extends before first major, extrapolate backwards
+    if let Some((min_date, _)) = range_dates {
+        let first_major = major_dates[0];
+        let mut current = retreat_date_by_interval(first_major, &interval);
+        while current >= min_date {
+            minors.push(current.format("%Y-%m-%d").to_string());
+            current = retreat_date_by_interval(current, &interval);
+        }
+    }
+
+    // Add minors between each pair of major breaks
+    for window in major_dates.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let mut current = advance_date_by_interval(start, &interval);
+        while current < end {
+            minors.push(current.format("%Y-%m-%d").to_string());
+            current = advance_date_by_interval(current, &interval);
+        }
+    }
+
+    // If range extends beyond last major, extrapolate forwards
+    if let Some((_, max_date)) = range_dates {
+        let last_major = *major_dates.last().unwrap();
+        let mut current = advance_date_by_interval(last_major, &interval);
+        while current <= max_date {
+            minors.push(current.format("%Y-%m-%d").to_string());
+            current = advance_date_by_interval(current, &interval);
+        }
+    }
+
+    minors.sort();
+    minors
+}
+
+/// Retreat a date by the given interval (go backwards)
+fn retreat_date_by_interval(
+    date: chrono::NaiveDate,
+    interval: &TemporalInterval,
+) -> chrono::NaiveDate {
+    use chrono::{Datelike, NaiveDate};
+
+    let count = interval.count as i64;
+    match interval.unit {
+        TemporalUnit::Day => date - chrono::Duration::days(count),
+        TemporalUnit::Week => date - chrono::Duration::weeks(count),
+        TemporalUnit::Month => {
+            let total_months = date.year() * 12 + date.month() as i32 - 1 - count as i32;
+            let year = total_months.div_euclid(12);
+            let month = (total_months.rem_euclid(12)) as u32 + 1;
+            NaiveDate::from_ymd_opt(year, month, 1).unwrap_or(date)
+        }
+        TemporalUnit::Year => {
+            NaiveDate::from_ymd_opt(date.year() - count as i32, 1, 1).unwrap_or(date)
+        }
+        _ => date - chrono::Duration::days(count),
+    }
+}
+
+/// Calculate temporal minor breaks for DateTime scale
+///
+/// # Arguments
+/// - `major_breaks`: Major break positions as ISO datetime strings
+/// - `major_interval`: The major interval string
+/// - `spec`: Minor break specification
+/// - `range`: Optional (min, max) as ISO datetime strings
+///
+/// # Returns
+/// Minor break positions as ISO datetime strings
+pub fn temporal_minor_breaks_datetime(
+    major_breaks: &[String],
+    major_interval: &str,
+    spec: MinorBreakSpec,
+    range: Option<(&str, &str)>,
+) -> Vec<String> {
+    use chrono::{DateTime, Utc};
+
+    if major_breaks.len() < 2 {
+        return vec![];
+    }
+
+    // Parse major breaks to datetimes
+    let major_dts: Vec<DateTime<Utc>> = major_breaks
+        .iter()
+        .filter_map(|s| DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&Utc)))
+        .collect();
+
+    if major_dts.len() < 2 {
+        return vec![];
+    }
+
+    let minor_interval = match spec {
+        MinorBreakSpec::Auto => derive_minor_interval(major_interval).to_string(),
+        MinorBreakSpec::Count(n) => {
+            let duration = major_dts[1] - major_dts[0];
+            let minor_secs = duration.num_seconds() / (n + 1) as i64;
+            if minor_secs >= 3600 {
+                format!("{} hours", minor_secs / 3600)
+            } else if minor_secs >= 60 {
+                format!("{} minutes", minor_secs / 60)
+            } else {
+                format!("{} seconds", minor_secs.max(1))
+            }
+        }
+        MinorBreakSpec::Interval(s) => s,
+    };
+
+    let interval = match TemporalInterval::from_str(&minor_interval) {
+        Some(i) => i,
+        None => return vec![],
+    };
+
+    let mut minors = Vec::new();
+
+    // Parse range bounds
+    let range_dts = range.and_then(|(min, max)| {
+        let min_dt = DateTime::parse_from_rfc3339(min)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))?;
+        let max_dt = DateTime::parse_from_rfc3339(max)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc))?;
+        Some((min_dt, max_dt))
+    });
+
+    // If range extends before first major, extrapolate backwards
+    if let Some((min_dt, _)) = range_dts {
+        let first_major = major_dts[0];
+        let mut current = retreat_datetime_by_interval(first_major, &interval);
+        while current >= min_dt {
+            minors.push(current.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+            current = retreat_datetime_by_interval(current, &interval);
+        }
+    }
+
+    // Add minors between each pair of major breaks
+    for window in major_dts.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let mut current = advance_datetime_by_interval(start, &interval);
+        while current < end {
+            minors.push(current.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+            current = advance_datetime_by_interval(current, &interval);
+        }
+    }
+
+    // If range extends beyond last major, extrapolate forwards
+    if let Some((_, max_dt)) = range_dts {
+        let last_major = *major_dts.last().unwrap();
+        let mut current = advance_datetime_by_interval(last_major, &interval);
+        while current <= max_dt {
+            minors.push(current.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+            current = advance_datetime_by_interval(current, &interval);
+        }
+    }
+
+    minors.sort();
+    minors
+}
+
+/// Retreat a datetime by the given interval (go backwards)
+fn retreat_datetime_by_interval(
+    dt: chrono::DateTime<chrono::Utc>,
+    interval: &TemporalInterval,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Datelike, TimeZone, Timelike, Utc};
+
+    let count = interval.count as i64;
+    match interval.unit {
+        TemporalUnit::Second => dt - chrono::Duration::seconds(count),
+        TemporalUnit::Minute => dt - chrono::Duration::minutes(count),
+        TemporalUnit::Hour => dt - chrono::Duration::hours(count),
+        TemporalUnit::Day => dt - chrono::Duration::days(count),
+        TemporalUnit::Week => dt - chrono::Duration::weeks(count),
+        TemporalUnit::Month => {
+            let total_months = dt.year() * 12 + dt.month() as i32 - 1 - count as i32;
+            let year = total_months.div_euclid(12);
+            let month = (total_months.rem_euclid(12)) as u32 + 1;
+            Utc.with_ymd_and_hms(
+                year,
+                month,
+                dt.day().min(28),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+            )
+            .single()
+            .unwrap_or(dt)
+        }
+        TemporalUnit::Year => Utc
+            .with_ymd_and_hms(
+                dt.year() - count as i32,
+                dt.month(),
+                dt.day().min(28),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+            )
+            .single()
+            .unwrap_or(dt),
+    }
+}
+
+/// Calculate temporal minor breaks for Time scale
+///
+/// # Arguments
+/// - `major_breaks`: Major break positions as time strings ("HH:MM:SS.mmm")
+/// - `major_interval`: The major interval string
+/// - `spec`: Minor break specification
+/// - `range`: Optional (min, max) as time strings
+///
+/// # Returns
+/// Minor break positions as time strings
+pub fn temporal_minor_breaks_time(
+    major_breaks: &[String],
+    major_interval: &str,
+    spec: MinorBreakSpec,
+    range: Option<(&str, &str)>,
+) -> Vec<String> {
+    use chrono::NaiveTime;
+
+    if major_breaks.len() < 2 {
+        return vec![];
+    }
+
+    // Parse major breaks to times
+    let major_times: Vec<NaiveTime> = major_breaks
+        .iter()
+        .filter_map(|s| NaiveTime::parse_from_str(s, "%H:%M:%S%.3f").ok())
+        .collect();
+
+    if major_times.len() < 2 {
+        return vec![];
+    }
+
+    let minor_interval = match spec {
+        MinorBreakSpec::Auto => derive_minor_interval(major_interval).to_string(),
+        MinorBreakSpec::Count(n) => {
+            let duration = major_times[1] - major_times[0];
+            let minor_secs = duration.num_seconds() / (n + 1) as i64;
+            if minor_secs >= 60 {
+                format!("{} minutes", minor_secs / 60)
+            } else {
+                format!("{} seconds", minor_secs.max(1))
+            }
+        }
+        MinorBreakSpec::Interval(s) => s,
+    };
+
+    let interval = match TemporalInterval::from_str(&minor_interval) {
+        Some(i) => i,
+        None => return vec![],
+    };
+
+    let mut minors = Vec::new();
+
+    // Parse range bounds
+    let range_times = range.and_then(|(min, max)| {
+        let min_time = NaiveTime::parse_from_str(min, "%H:%M:%S%.3f").ok()?;
+        let max_time = NaiveTime::parse_from_str(max, "%H:%M:%S%.3f").ok()?;
+        Some((min_time, max_time))
+    });
+
+    // If range extends before first major, extrapolate backwards
+    if let Some((min_time, _)) = range_times {
+        let first_major = major_times[0];
+        if let Some(mut current) = retreat_time_by_interval(first_major, &interval) {
+            while current >= min_time && current < first_major {
+                minors.push(current.format("%H:%M:%S%.3f").to_string());
+                match retreat_time_by_interval(current, &interval) {
+                    Some(prev) if prev < current => current = prev,
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    // Add minors between each pair of major breaks
+    for window in major_times.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if let Some(mut current) = advance_time_by_interval(start, &interval) {
+            while current < end {
+                minors.push(current.format("%H:%M:%S%.3f").to_string());
+                match advance_time_by_interval(current, &interval) {
+                    Some(next) if next > current => current = next,
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    // If range extends beyond last major, extrapolate forwards
+    if let Some((_, max_time)) = range_times {
+        let last_major = *major_times.last().unwrap();
+        if let Some(mut current) = advance_time_by_interval(last_major, &interval) {
+            while current <= max_time && current > last_major {
+                minors.push(current.format("%H:%M:%S%.3f").to_string());
+                match advance_time_by_interval(current, &interval) {
+                    Some(next) if next > current => current = next,
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    minors.sort();
+    minors
+}
+
+/// Retreat a time by the given interval (go backwards)
+fn retreat_time_by_interval(
+    time: chrono::NaiveTime,
+    interval: &TemporalInterval,
+) -> Option<chrono::NaiveTime> {
+    let count = interval.count as i64;
+    let duration = match interval.unit {
+        TemporalUnit::Second => chrono::Duration::seconds(count),
+        TemporalUnit::Minute => chrono::Duration::minutes(count),
+        TemporalUnit::Hour => chrono::Duration::hours(count),
+        _ => return Some(time), // Day/week/month/year not applicable
+    };
+    time.overflowing_sub_signed(duration).0.into()
+}
+
 /// Temporal interval unit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemporalUnit {
@@ -1018,5 +1703,321 @@ mod tests {
         assert!(!breaks.is_empty());
         // Should be multiple weeks
         assert!(breaks.len() >= 4);
+    }
+
+    // =========================================================================
+    // Minor Breaks Linear Tests
+    // =========================================================================
+
+    #[test]
+    fn test_minor_breaks_linear_basic() {
+        let majors = vec![0.0, 10.0, 20.0];
+        let minors = minor_breaks_linear(&majors, 1, None);
+        // Expect: one midpoint per interval
+        assert_eq!(minors, vec![5.0, 15.0]);
+    }
+
+    #[test]
+    fn test_minor_breaks_linear_multiple() {
+        let majors = vec![0.0, 10.0, 20.0];
+        let minors = minor_breaks_linear(&majors, 4, None);
+        // Expect: 4 minor breaks per interval
+        assert_eq!(minors.len(), 8); // 4 * 2 intervals
+        assert!(minors.contains(&2.0));
+        assert!(minors.contains(&4.0));
+        assert!(minors.contains(&6.0));
+        assert!(minors.contains(&8.0));
+        assert!(minors.contains(&12.0));
+        assert!(minors.contains(&14.0));
+        assert!(minors.contains(&16.0));
+        assert!(minors.contains(&18.0));
+    }
+
+    #[test]
+    fn test_minor_breaks_linear_with_extension() {
+        let majors = vec![20.0, 40.0, 60.0];
+        let minors = minor_breaks_linear(&majors, 1, Some((0.0, 80.0)));
+        // Expect: extends before 20 and after 60
+        assert!(minors.contains(&10.0)); // Before first major
+        assert!(minors.contains(&30.0)); // Between 20-40
+        assert!(minors.contains(&50.0)); // Between 40-60
+        assert!(minors.contains(&70.0)); // After last major
+    }
+
+    #[test]
+    fn test_minor_breaks_linear_empty_for_single_major() {
+        let majors = vec![10.0];
+        let minors = minor_breaks_linear(&majors, 1, None);
+        assert!(minors.is_empty());
+    }
+
+    #[test]
+    fn test_minor_breaks_linear_empty_for_zero_count() {
+        let majors = vec![0.0, 10.0, 20.0];
+        let minors = minor_breaks_linear(&majors, 0, None);
+        assert!(minors.is_empty());
+    }
+
+    // =========================================================================
+    // Minor Breaks Log Tests
+    // =========================================================================
+
+    #[test]
+    fn test_minor_breaks_log_basic() {
+        let majors = vec![1.0, 10.0, 100.0];
+        let minors = minor_breaks_log(&majors, 8, 10.0, None);
+        // Expect: 8 breaks per decade, evenly spaced in log space
+        assert_eq!(minors.len(), 16); // 8 between 1-10, 8 between 10-100
+    }
+
+    #[test]
+    fn test_minor_breaks_log_single_minor() {
+        let majors = vec![1.0, 10.0, 100.0];
+        let minors = minor_breaks_log(&majors, 1, 10.0, None);
+        // Expect: one midpoint per decade in log space
+        // Between 1 and 10: sqrt(1 * 10) ≈ 3.16
+        // Between 10 and 100: sqrt(10 * 100) ≈ 31.6
+        assert_eq!(minors.len(), 2);
+        // Check geometric mean relationship
+        assert!((minors[0] - (1.0_f64 * 10.0).sqrt()).abs() < 0.01);
+        assert!((minors[1] - (10.0_f64 * 100.0).sqrt()).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_minor_breaks_log_with_extension() {
+        let majors = vec![10.0, 100.0];
+        let minors = minor_breaks_log(&majors, 8, 10.0, Some((1.0, 1000.0)));
+        // Should have minors in [1, 10), (10, 100), and (100, 1000]
+        assert_eq!(minors.len(), 24); // 8 per decade × 3 decades
+    }
+
+    #[test]
+    fn test_minor_breaks_log_filters_negative() {
+        let majors = vec![-10.0, 1.0, 10.0, 100.0];
+        let minors = minor_breaks_log(&majors, 1, 10.0, None);
+        // Should only use positive majors
+        assert!(minors.iter().all(|&x| x > 0.0));
+    }
+
+    // =========================================================================
+    // Minor Breaks Sqrt Tests
+    // =========================================================================
+
+    #[test]
+    fn test_minor_breaks_sqrt_basic() {
+        let majors = vec![0.0, 25.0, 100.0];
+        let minors = minor_breaks_sqrt(&majors, 1, None);
+        // sqrt(0)=0, sqrt(25)=5, sqrt(100)=10
+        // Midpoints in sqrt space: 2.5, 7.5
+        // Squared back: 6.25, 56.25
+        assert_eq!(minors.len(), 2);
+        assert!((minors[0] - 6.25).abs() < 0.01);
+        assert!((minors[1] - 56.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_minor_breaks_sqrt_with_extension() {
+        let majors = vec![25.0, 100.0];
+        let minors = minor_breaks_sqrt(&majors, 1, Some((0.0, 225.0)));
+        // sqrt(0)=0, sqrt(25)=5, sqrt(100)=10, sqrt(225)=15
+        // Should extend before 25 and after 100
+        assert!(minors.len() >= 2);
+    }
+
+    #[test]
+    fn test_minor_breaks_sqrt_filters_negative() {
+        let majors = vec![-10.0, 0.0, 25.0, 100.0];
+        let minors = minor_breaks_sqrt(&majors, 1, None);
+        // Should only use non-negative majors
+        assert!(minors.iter().all(|&x| x >= 0.0));
+    }
+
+    // =========================================================================
+    // Minor Breaks Symlog Tests
+    // =========================================================================
+
+    #[test]
+    fn test_minor_breaks_symlog_basic() {
+        let majors = vec![-100.0, -10.0, 0.0, 10.0, 100.0];
+        let minors = minor_breaks_symlog(&majors, 1, None);
+        // Should have minors between each pair of majors
+        assert_eq!(minors.len(), 4);
+    }
+
+    #[test]
+    fn test_minor_breaks_symlog_crosses_zero() {
+        let majors = vec![-10.0, 10.0];
+        let minors = minor_breaks_symlog(&majors, 1, None);
+        // Midpoint in asinh space should be near 0
+        assert_eq!(minors.len(), 1);
+        assert!(minors[0].abs() < 1.0); // Should be near zero
+    }
+
+    #[test]
+    fn test_minor_breaks_symlog_with_extension() {
+        let majors = vec![0.0, 100.0];
+        let minors = minor_breaks_symlog(&majors, 1, Some((-100.0, 200.0)));
+        // Should extend into negative and beyond 100
+        assert!(minors.len() >= 2);
+    }
+
+    // =========================================================================
+    // Trim Breaks Tests
+    // =========================================================================
+
+    #[test]
+    fn test_trim_breaks() {
+        let breaks = vec![5.0, 10.0, 15.0, 20.0, 25.0, 30.0];
+        let trimmed = trim_breaks(&breaks, (10.0, 25.0));
+        assert_eq!(trimmed, vec![10.0, 15.0, 20.0, 25.0]);
+    }
+
+    #[test]
+    fn test_trim_breaks_empty() {
+        let breaks = vec![5.0, 10.0, 15.0];
+        let trimmed = trim_breaks(&breaks, (20.0, 30.0));
+        assert!(trimmed.is_empty());
+    }
+
+    #[test]
+    fn test_trim_breaks_all_inside() {
+        let breaks = vec![15.0, 20.0, 25.0];
+        let trimmed = trim_breaks(&breaks, (10.0, 30.0));
+        assert_eq!(trimmed, breaks);
+    }
+
+    // =========================================================================
+    // Trim Temporal Breaks Tests
+    // =========================================================================
+
+    #[test]
+    fn test_trim_temporal_breaks() {
+        let breaks = vec![
+            "2024-01-01".to_string(),
+            "2024-02-01".to_string(),
+            "2024-03-01".to_string(),
+        ];
+        let trimmed = trim_temporal_breaks(&breaks, ("2024-01-15", "2024-02-15"));
+        assert_eq!(trimmed, vec!["2024-02-01".to_string()]);
+    }
+
+    #[test]
+    fn test_trim_temporal_breaks_all_inside() {
+        let breaks = vec![
+            "2024-02-01".to_string(),
+            "2024-02-15".to_string(),
+        ];
+        let trimmed = trim_temporal_breaks(&breaks, ("2024-01-01", "2024-03-01"));
+        assert_eq!(trimmed.len(), 2);
+    }
+
+    // =========================================================================
+    // Derive Minor Interval Tests
+    // =========================================================================
+
+    #[test]
+    fn test_derive_minor_interval() {
+        assert_eq!(derive_minor_interval("year"), "3 months");
+        assert_eq!(derive_minor_interval("3 months"), "month"); // quarter
+        assert_eq!(derive_minor_interval("month"), "week");
+        assert_eq!(derive_minor_interval("week"), "day");
+        assert_eq!(derive_minor_interval("day"), "6 hours");
+        assert_eq!(derive_minor_interval("hour"), "15 minutes");
+        assert_eq!(derive_minor_interval("minute"), "15 seconds");
+    }
+
+    #[test]
+    fn test_derive_minor_interval_invalid() {
+        // Invalid interval falls back to "day"
+        assert_eq!(derive_minor_interval("invalid"), "day");
+    }
+
+    // =========================================================================
+    // Temporal Minor Breaks Date Tests
+    // =========================================================================
+
+    #[test]
+    fn test_temporal_minor_breaks_date_auto() {
+        let majors = vec![
+            "2024-01-01".to_string(),
+            "2024-02-01".to_string(),
+            "2024-03-01".to_string(),
+        ];
+        let minors = temporal_minor_breaks_date(&majors, "month", MinorBreakSpec::Auto, None);
+        // Auto should derive "week" from "month"
+        // Should have weekly dates within January and February
+        assert!(!minors.is_empty());
+        assert!(minors.iter().any(|d| d.starts_with("2024-01")));
+        assert!(minors.iter().any(|d| d.starts_with("2024-02")));
+    }
+
+    #[test]
+    fn test_temporal_minor_breaks_date_by_count() {
+        let majors = vec![
+            "2024-01-01".to_string(),
+            "2024-02-01".to_string(),
+        ];
+        let minors = temporal_minor_breaks_date(&majors, "month", MinorBreakSpec::Count(3), None);
+        // Count(3) means 3 minor breaks per month (dividing by 4)
+        // ~7-8 days per minor interval
+        assert!(!minors.is_empty());
+    }
+
+    #[test]
+    fn test_temporal_minor_breaks_date_by_interval() {
+        let majors = vec![
+            "2024-01-01".to_string(),
+            "2024-02-01".to_string(),
+        ];
+        let minors = temporal_minor_breaks_date(&majors, "month", MinorBreakSpec::Interval("week".to_string()), None);
+        // Should have weekly dates within January
+        assert!(!minors.is_empty());
+        // January has about 4 weeks
+        assert!(minors.len() >= 3);
+    }
+
+    #[test]
+    fn test_temporal_minor_breaks_date_with_extension() {
+        let majors = vec![
+            "2024-02-01".to_string(),
+            "2024-03-01".to_string(),
+        ];
+        let minors = temporal_minor_breaks_date(
+            &majors,
+            "month",
+            MinorBreakSpec::Interval("week".to_string()),
+            Some(("2024-01-01", "2024-04-01")),
+        );
+        // Should extend weekly breaks into January and March
+        assert!(minors.iter().any(|d| d.starts_with("2024-01"))); // Before first major
+        assert!(minors.iter().any(|d| d.starts_with("2024-03"))); // After last major
+    }
+
+    #[test]
+    fn test_temporal_minor_breaks_date_empty_for_single() {
+        let majors = vec!["2024-01-01".to_string()];
+        let minors = temporal_minor_breaks_date(&majors, "month", MinorBreakSpec::Auto, None);
+        assert!(minors.is_empty());
+    }
+
+    // =========================================================================
+    // MinorBreakSpec Tests
+    // =========================================================================
+
+    #[test]
+    fn test_minor_break_spec_default() {
+        let spec = MinorBreakSpec::default();
+        assert_eq!(spec, MinorBreakSpec::Auto);
+    }
+
+    #[test]
+    fn test_minor_break_spec_variants() {
+        let auto = MinorBreakSpec::Auto;
+        let count = MinorBreakSpec::Count(4);
+        let interval = MinorBreakSpec::Interval("week".to_string());
+
+        assert_eq!(auto, MinorBreakSpec::Auto);
+        assert_eq!(count, MinorBreakSpec::Count(4));
+        assert_eq!(interval, MinorBreakSpec::Interval("week".to_string()));
     }
 }

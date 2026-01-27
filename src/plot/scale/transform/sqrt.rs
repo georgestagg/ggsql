@@ -1,7 +1,7 @@
 //! Sqrt transform implementation (square root)
 
 use super::{TransformKind, TransformTrait};
-use crate::plot::scale::breaks::sqrt_breaks;
+use crate::plot::scale::breaks::{minor_breaks_sqrt, sqrt_breaks};
 
 /// Sqrt transform - square root
 ///
@@ -28,6 +28,15 @@ impl TransformTrait for Sqrt {
 
     fn calculate_breaks(&self, min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64> {
         sqrt_breaks(min, max, n, pretty)
+    }
+
+    fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64> {
+        minor_breaks_sqrt(major_breaks, n, range)
     }
 
     fn transform(&self, value: f64) -> f64 {

@@ -5,7 +5,7 @@
 //! for large values.
 
 use super::{TransformKind, TransformTrait};
-use crate::plot::scale::breaks::symlog_breaks;
+use crate::plot::scale::breaks::{minor_breaks_symlog, symlog_breaks};
 
 /// PseudoLog transform - symmetric logarithm with configurable base
 ///
@@ -111,6 +111,19 @@ impl TransformTrait for PseudoLog {
 
     fn calculate_breaks(&self, min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64> {
         symlog_breaks(min, max, n, pretty)
+    }
+
+    fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64> {
+        minor_breaks_symlog(major_breaks, n, range)
+    }
+
+    fn default_minor_break_count(&self) -> usize {
+        8 // Similar density to traditional 2-9 pattern on log axes
     }
 
     fn transform(&self, value: f64) -> f64 {

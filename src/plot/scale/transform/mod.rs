@@ -125,6 +125,38 @@ pub trait TransformTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
     /// - `asinh`, `pseudo_log`: Uses symlog algorithm for symmetric ranges
     fn calculate_breaks(&self, min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64>;
 
+    /// Calculate minor breaks between major breaks
+    ///
+    /// Places intermediate tick marks between the major breaks. The algorithm
+    /// varies by transform type to produce evenly-spaced minor breaks in
+    /// the transformed space.
+    ///
+    /// # Arguments
+    /// - `major_breaks`: The major break positions
+    /// - `n`: Number of minor breaks per major interval
+    /// - `range`: Optional (min, max) scale input range to extend minor breaks beyond major breaks
+    ///
+    /// # Returns
+    /// Minor break positions (excluding major breaks)
+    ///
+    /// # Behavior
+    /// - Places n minor breaks between each consecutive pair of major breaks
+    /// - If range is provided and extends beyond major breaks, extrapolates minor breaks into those regions
+    fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64>;
+
+    /// Returns the default number of minor breaks per major interval for this transform
+    ///
+    /// - `identity`, `sqrt`: 1 (one midpoint per interval)
+    /// - `log`, `asinh`, `pseudo_log`: 8 (similar density to traditional 2-9 pattern)
+    fn default_minor_break_count(&self) -> usize {
+        1 // Default for identity/sqrt
+    }
+
     /// Forward transformation: x -> transform(x)
     ///
     /// Maps a value from data space to transformed space.
@@ -254,6 +286,21 @@ impl Transform {
     /// Calculate breaks for this transform
     pub fn calculate_breaks(&self, min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64> {
         self.0.calculate_breaks(min, max, n, pretty)
+    }
+
+    /// Calculate minor breaks between major breaks
+    pub fn calculate_minor_breaks(
+        &self,
+        major_breaks: &[f64],
+        n: usize,
+        range: Option<(f64, f64)>,
+    ) -> Vec<f64> {
+        self.0.calculate_minor_breaks(major_breaks, n, range)
+    }
+
+    /// Returns the default number of minor breaks per major interval for this transform
+    pub fn default_minor_break_count(&self) -> usize {
+        self.0.default_minor_break_count()
     }
 
     /// Forward transformation: x -> transform(x)
