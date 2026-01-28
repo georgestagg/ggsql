@@ -4,6 +4,7 @@
 //! settings, and values. These are the building blocks used in AST types
 //! to capture what the user specified in their query.
 
+use polars::prelude::DataType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -16,6 +17,8 @@ use std::collections::HashMap;
 pub struct ColumnInfo {
     /// Column name
     pub name: String,
+    /// Data type of the column
+    pub dtype: DataType,
     /// Whether this column is discrete (suitable for grouping)
     /// Discrete: String, Boolean, Categorical
     /// Continuous: numeric types, Date, Datetime, Time

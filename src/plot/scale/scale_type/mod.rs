@@ -20,13 +20,13 @@
 //! assert_eq!(continuous.name(), "continuous");
 //! ```
 
-use polars::prelude::{Column, DataType};
+use polars::prelude::{ChunkAgg, Column, DataType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::transform::{Transform, TransformKind};
-use crate::plot::{ArrayElement, ParameterValue};
+use crate::plot::{ArrayElement, ColumnInfo, ParameterValue};
 
 // Scale type implementations
 mod binned;
@@ -39,6 +39,216 @@ pub use binned::Binned;
 pub use continuous::Continuous;
 pub use discrete::Discrete;
 pub use identity::Identity;
+
+// =============================================================================
+// Scale Data Context
+// =============================================================================
+
+/// Input range for scale resolution
+#[derive(Debug, Clone)]
+pub enum InputRange {
+    /// Continuous range: [min, max]
+    Continuous(Vec<ArrayElement>),
+    /// Discrete range: unique values
+    Discrete(Vec<ArrayElement>),
+}
+
+/// Common context for scale resolution.
+///
+/// Aggregates data from multiple columns (across layers and aesthetic family).
+/// Can be created from either schema information (pre-stat) or actual data (post-stat).
+#[derive(Debug, Clone)]
+pub struct ScaleDataContext {
+    /// Input range: continuous [min, max] or discrete unique values
+    pub range: Option<InputRange>,
+    /// Data type of the column(s)
+    pub dtype: Option<DataType>,
+    /// Whether this is discrete data
+    pub is_discrete: bool,
+}
+
+impl ScaleDataContext {
+    /// Create a new empty context.
+    pub fn new() -> Self {
+        Self {
+            range: None,
+            dtype: None,
+            is_discrete: false,
+        }
+    }
+
+    /// Create from multiple schema ColumnInfos.
+    ///
+    /// Aggregates min/max across all columns for continuous data.
+    /// Note: Discrete unique values are not available from schema.
+    pub fn from_schemas(infos: &[ColumnInfo]) -> Self {
+        if infos.is_empty() {
+            return Self::new();
+        }
+
+        // Use first column's dtype and is_discrete (they should match)
+        let dtype = Some(infos[0].dtype.clone());
+        let is_discrete = infos[0].is_discrete;
+
+        // Aggregate min/max across all columns
+        let range = if is_discrete {
+            None // Discrete unique values not available from schema
+        } else {
+            let mut global_min: Option<f64> = None;
+            let mut global_max: Option<f64> = None;
+            for info in infos {
+                if let Some(ArrayElement::Number(min)) = &info.min {
+                    global_min = Some(global_min.map_or(*min, |m| m.min(*min)));
+                }
+                if let Some(ArrayElement::Number(max)) = &info.max {
+                    global_max = Some(global_max.map_or(*max, |m| m.max(*max)));
+                }
+            }
+            match (global_min, global_max) {
+                (Some(min), Some(max)) => Some(InputRange::Continuous(vec![
+                    ArrayElement::Number(min),
+                    ArrayElement::Number(max),
+                ])),
+                _ => None,
+            }
+        };
+
+        Self {
+            range,
+            dtype,
+            is_discrete,
+        }
+    }
+
+    /// Create from multiple Polars Columns.
+    ///
+    /// Aggregates min/max or unique values across all columns.
+    pub fn from_columns(columns: &[&Column], is_discrete: bool) -> Self {
+        if columns.is_empty() {
+            return Self::new();
+        }
+
+        let dtype = Some(columns[0].dtype().clone());
+
+        let range = if is_discrete {
+            // Aggregate unique values across all columns
+            Some(InputRange::Discrete(compute_unique_values_multi(columns)))
+        } else {
+            // Aggregate min/max across all columns
+            compute_column_range_multi(columns).map(InputRange::Continuous)
+        };
+
+        Self {
+            range,
+            dtype,
+            is_discrete,
+        }
+    }
+
+    /// Get the continuous range as [min, max] if available.
+    pub fn continuous_range(&self) -> Option<&[ArrayElement]> {
+        match &self.range {
+            Some(InputRange::Continuous(r)) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// Get the discrete range as unique values if available.
+    pub fn discrete_range(&self) -> Option<&[ArrayElement]> {
+        match &self.range {
+            Some(InputRange::Discrete(r)) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ScaleDataContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Compute numeric min/max from multiple columns.
+fn compute_column_range_multi(columns: &[&Column]) -> Option<Vec<ArrayElement>> {
+    let mut global_min: Option<f64> = None;
+    let mut global_max: Option<f64> = None;
+
+    for column in columns {
+        let series = column.as_materialized_series();
+        if let Ok(ca) = series.cast(&DataType::Float64) {
+            if let Ok(f64_series) = ca.f64() {
+                if let Some(min) = f64_series.min() {
+                    global_min = Some(global_min.map_or(min, |m| m.min(min)));
+                }
+                if let Some(max) = f64_series.max() {
+                    global_max = Some(global_max.map_or(max, |m| m.max(max)));
+                }
+            }
+        }
+    }
+
+    match (global_min, global_max) {
+        (Some(min), Some(max)) => Some(vec![ArrayElement::Number(min), ArrayElement::Number(max)]),
+        _ => None,
+    }
+}
+
+/// Merge user-provided range with context-computed range.
+///
+/// Replaces Null values in user_range with corresponding values from context_range.
+fn merge_with_context(user_range: &[ArrayElement], context_range: &[ArrayElement]) -> Vec<ArrayElement> {
+    user_range
+        .iter()
+        .enumerate()
+        .map(|(i, elem)| {
+            if matches!(elem, ArrayElement::Null) {
+                // Replace Null with context value if available
+                context_range.get(i).cloned().unwrap_or(ArrayElement::Null)
+            } else {
+                elem.clone()
+            }
+        })
+        .collect()
+}
+
+/// Compute unique values from multiple columns, sorted.
+fn compute_unique_values_multi(columns: &[&Column]) -> Vec<ArrayElement> {
+    use polars::prelude::IntoSeries;
+    use std::collections::BTreeSet;
+
+    let mut unique_strings: BTreeSet<String> = BTreeSet::new();
+
+    for column in columns {
+        let series = column.as_materialized_series();
+        // Try to get unique values as strings
+        if let Ok(unique) = series.unique() {
+            let unique_series = unique.into_series();
+            if let Ok(str_series) = unique_series.str() {
+                for opt in str_series.into_iter() {
+                    if let Some(s) = opt {
+                        unique_strings.insert(s.to_string());
+                    }
+                }
+            } else {
+                // Non-string: convert to string representation
+                for i in 0..unique_series.len() {
+                    if let Ok(val) = unique_series.get(i) {
+                        let s = format!("{}", val);
+                        if s != "null" {
+                            unique_strings.insert(s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    unique_strings
+        .into_iter()
+        .map(ArrayElement::String)
+        .collect()
+}
+
 
 /// Enum of all scale types for pattern matching and serialization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -362,6 +572,89 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
             ScaleTypeKind::Continuous | ScaleTypeKind::Binned
         )
     }
+
+    /// Resolve scale properties from data context.
+    ///
+    /// Called ONCE per scale, either:
+    /// - Pre-stat (before build_layer_query): For Binned scales, using schema-derived context
+    /// - Post-stat (after build_layer_query): For all other scales, using data-derived context
+    ///
+    /// Updates: input_range, transform, and properties["breaks"] on the scale.
+    ///
+    /// Default implementation:
+    /// 1. Resolves input_range from context (or merges with existing partial range)
+    /// 2. Resolves transform from context dtype if not set
+    /// 3. If breaks is a scalar Number, calculates break positions and stores as Array
+    fn resolve(
+        &self,
+        scale: &mut super::Scale,
+        context: &ScaleDataContext,
+        aesthetic: &str,
+    ) -> Result<(), String> {
+        // 1. Resolve properties (fills in defaults, validates)
+        scale.properties = self.resolve_properties(aesthetic, &scale.properties)?;
+
+        // 2. Resolve transform from context dtype and aesthetic
+        let resolved_transform =
+            self.resolve_transform(aesthetic, None, context.dtype.as_ref())?;
+        scale.transform = Some(resolved_transform);
+
+        // 3. Resolve input range
+        // If scale already has input_range with Null values, merge with context
+        // If scale has no input_range, use context
+        if let Some(ref range) = context.range {
+            let (mult, add) = get_expand_factors(&scale.properties);
+            let context_range = match range {
+                InputRange::Continuous(r) => expand_numeric_range(r, mult, add),
+                InputRange::Discrete(r) => r.clone(),
+            };
+
+            if let Some(ref user_range) = scale.input_range {
+                // Merge: replace Null values in user_range with values from context_range
+                let merged = merge_with_context(user_range, &context_range);
+                scale.input_range = Some(merged);
+            } else {
+                // No user range, use context range
+                scale.input_range = Some(context_range);
+            }
+        }
+
+        // 4. Calculate breaks if supports_breaks()
+        // If breaks is a scalar Number (count), calculate actual break positions and store as Array
+        // If breaks is already an Array, user provided explicit breaks - leave as-is
+        if self.supports_breaks() {
+            if let Some(ParameterValue::Number(_)) = scale.properties.get("breaks") {
+                // Scalar count → calculate actual breaks and store as Array
+                if let Some(breaks) = self.resolve_breaks(
+                    scale.input_range.as_deref(),
+                    &scale.properties,
+                    scale.transform.as_ref(),
+                ) {
+                    scale.properties.insert(
+                        "breaks".to_string(),
+                        ParameterValue::Array(breaks),
+                    );
+                }
+            }
+            // If breaks is already Array, user provided it - leave as-is
+        }
+
+        // Mark scale as resolved
+        scale.resolved = true;
+
+        Ok(())
+    }
+
+    /// Pre-stat SQL transformation hook.
+    ///
+    /// Called inside build_layer_query to generate SQL that transforms data
+    /// BEFORE stat transforms run. Returns SQL expression to wrap the column.
+    ///
+    /// Only Binned scales implement this (returns binning SQL).
+    /// Default returns None (no transformation).
+    fn pre_stat_transform_sql(&self, _column_name: &str, _scale: &super::Scale) -> Option<String> {
+        None
+    }
 }
 
 /// Wrapper struct for scale type trait objects
@@ -535,6 +828,36 @@ impl ScaleType {
     /// Returns whether this scale type supports the `breaks` property.
     pub fn supports_breaks(&self) -> bool {
         self.0.supports_breaks()
+    }
+
+    /// Resolve scale properties from data context.
+    ///
+    /// Called ONCE per scale, either:
+    /// - Pre-stat (before build_layer_query): For Binned scales, using schema-derived context
+    /// - Post-stat (after build_layer_query): For all other scales, using data-derived context
+    ///
+    /// Updates: input_range, transform, and properties["breaks"] on the scale.
+    pub fn resolve(
+        &self,
+        scale: &mut super::Scale,
+        context: &ScaleDataContext,
+        aesthetic: &str,
+    ) -> Result<(), String> {
+        self.0.resolve(scale, context, aesthetic)
+    }
+
+    /// Pre-stat SQL transformation hook.
+    ///
+    /// Called inside build_layer_query to generate SQL that transforms data
+    /// BEFORE stat transforms run. Returns SQL expression to wrap the column.
+    ///
+    /// Only Binned scales implement this (returns binning SQL).
+    pub fn pre_stat_transform_sql(
+        &self,
+        column_name: &str,
+        scale: &super::Scale,
+    ) -> Option<String> {
+        self.0.pre_stat_transform_sql(column_name, scale)
     }
 }
 

@@ -686,7 +686,7 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
         output_range,
         transform,
         properties,
-        resolved_breaks: None,
+        resolved: false,
     })
 }
 

@@ -471,7 +471,8 @@ impl VegaLiteWriter {
                     }
 
                     // Handle resolved breaks -> axis.values or legend.values
-                    if let Some(ref breaks) = scale.resolved_breaks {
+                    // breaks is stored as Array in properties after resolution
+                    if let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") {
                         use crate::plot::ArrayElement;
                         let values: Vec<Value> = breaks
                             .iter()
@@ -4198,9 +4199,9 @@ mod tests {
 
     #[test]
     fn test_resolved_breaks_positional_axis_values() {
-        // Test that resolved_breaks for positional aesthetics maps to axis.values
+        // Test that breaks (as Array) for positional aesthetics maps to axis.values
         use crate::plot::scale::Scale;
-        use crate::plot::ArrayElement;
+        use crate::plot::{ArrayElement, ParameterValue};
 
         let writer = VegaLiteWriter::new();
 
@@ -4216,15 +4217,18 @@ mod tests {
             );
         spec.layers.push(layer);
 
-        // Add a scale with resolved breaks for x
+        // Add a scale with breaks array for x
         let mut scale = Scale::new("x");
-        scale.resolved_breaks = Some(vec![
-            ArrayElement::Number(0.0),
-            ArrayElement::Number(25.0),
-            ArrayElement::Number(50.0),
-            ArrayElement::Number(75.0),
-            ArrayElement::Number(100.0),
-        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(25.0),
+                ArrayElement::Number(50.0),
+                ArrayElement::Number(75.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
         spec.scales.push(scale);
 
         let df = df! {
@@ -4250,9 +4254,9 @@ mod tests {
 
     #[test]
     fn test_resolved_breaks_color_legend_values() {
-        // Test that resolved_breaks for non-positional aesthetics maps to legend.values
+        // Test that breaks (as Array) for non-positional aesthetics maps to legend.values
         use crate::plot::scale::Scale;
-        use crate::plot::ArrayElement;
+        use crate::plot::{ArrayElement, ParameterValue};
 
         let writer = VegaLiteWriter::new();
 
@@ -4272,13 +4276,16 @@ mod tests {
             );
         spec.layers.push(layer);
 
-        // Add a scale with resolved breaks for color
+        // Add a scale with breaks array for color
         let mut scale = Scale::new("color");
-        scale.resolved_breaks = Some(vec![
-            ArrayElement::Number(10.0),
-            ArrayElement::Number(50.0),
-            ArrayElement::Number(90.0),
-        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(10.0),
+                ArrayElement::Number(50.0),
+                ArrayElement::Number(90.0),
+            ]),
+        );
         spec.scales.push(scale);
 
         let df = df! {
@@ -4305,9 +4312,9 @@ mod tests {
 
     #[test]
     fn test_resolved_breaks_string_values() {
-        // Test that resolved_breaks with string values (e.g., dates) work correctly
+        // Test that breaks (as Array) with string values (e.g., dates) work correctly
         use crate::plot::scale::{Scale, Transform};
-        use crate::plot::ArrayElement;
+        use crate::plot::{ArrayElement, ParameterValue};
 
         let writer = VegaLiteWriter::new();
 
@@ -4323,15 +4330,18 @@ mod tests {
             );
         spec.layers.push(layer);
 
-        // Add a continuous scale with Date transform and resolved breaks as strings
+        // Add a continuous scale with Date transform and breaks as string array
         let mut scale = Scale::new("x");
         scale.scale_type = Some(crate::plot::ScaleType::continuous());
         scale.transform = Some(Transform::date()); // Temporal transform
-        scale.resolved_breaks = Some(vec![
-            ArrayElement::String("2024-01-01".to_string()),
-            ArrayElement::String("2024-02-01".to_string()),
-            ArrayElement::String("2024-03-01".to_string()),
-        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::String("2024-01-01".to_string()),
+                ArrayElement::String("2024-02-01".to_string()),
+                ArrayElement::String("2024-03-01".to_string()),
+            ]),
+        );
         spec.scales.push(scale);
 
         let df = df! {

@@ -34,11 +34,13 @@ pub struct Scale {
     /// Transformation (VIA clause)
     pub transform: Option<Transform>,
     /// Additional scale properties (SETTING clause)
+    /// Note: `breaks` can be either a Number (count) or Array (explicit positions).
+    /// If scalar at parse time, it's converted to Array during resolution.
     pub properties: HashMap<String, ParameterValue>,
-    /// Resolved break positions (computed at execution time)
-    /// Maps to Vega-Lite's axis.values or legend.values
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_breaks: Option<Vec<ArrayElement>>,
+    /// Whether this scale has been resolved (set by resolve() method)
+    /// Used to skip re-resolution of pre-resolved scales (e.g., Binned scales)
+    #[serde(default)]
+    pub resolved: bool,
 }
 
 impl Scale {
@@ -51,7 +53,7 @@ impl Scale {
             output_range: None,
             transform: None,
             properties: HashMap::new(),
-            resolved_breaks: None,
+            resolved: false,
         }
     }
 }

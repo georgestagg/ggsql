@@ -219,11 +219,12 @@ where
     // Step 3: Extract min (row 0) and max (row 1) for each column
     let schema = column_meta
         .iter()
-        .map(|(name, is_discrete, _dtype)| {
+        .map(|(name, is_discrete, dtype)| {
             let min = extract_series_value(&range_df, name, 0);
             let max = extract_series_value(&range_df, name, 1);
             ColumnInfo {
                 name: name.clone(),
+                dtype: dtype.clone(),
                 is_discrete: *is_discrete,
                 min,
                 max,
@@ -776,6 +777,94 @@ fn transform_global_sql(sql: &str, materialized_ctes: &HashSet<String>) -> Optio
 ///
 /// Note: This function takes `&mut Layer` because stat transforms may add new aesthetic mappings
 /// (e.g., mapping y to `__ggsql_stat__count` for histogram or bar count).
+///
+/// Pre-stat transforms are applied (e.g., binning for Binned scales) before stat transforms.
+
+// =============================================================================
+// Pre-Stat Transform
+// =============================================================================
+
+/// Apply pre-stat transformations for scales that require data modification before stats.
+///
+/// Currently handles Binned scales: wraps the query with a SELECT that replaces
+/// columns with bin centers based on resolved breaks.
+///
+/// This must happen BEFORE stat transforms so that data is transformed first.
+fn apply_pre_stat_transform(query: &str, layer: &Layer, scales: &[crate::plot::Scale]) -> String {
+    use crate::plot::scale::ScaleTypeKind;
+
+    let mut transform_exprs: Vec<(String, String)> = vec![];
+
+    // Check layer mappings for aesthetics with Binned scales
+    // Handles both column mappings and literal mappings (which are injected as synthetic columns)
+    for (aesthetic, value) in &layer.mappings.aesthetics {
+        // Get the column name - either the mapped column or the synthetic constant column
+        let col_name = if let Some(col) = value.column_name() {
+            col.to_string()
+        } else if value.is_literal() {
+            // Literals are injected as synthetic columns like __ggsql_const_{aesthetic}__
+            naming::const_column(aesthetic)
+        } else {
+            continue;
+        };
+
+        // Find scale for this aesthetic
+        if let Some(scale) = scales.iter().find(|s| s.aesthetic == *aesthetic) {
+            if let Some(ref scale_type) = scale.scale_type {
+                // Only apply to Binned scales
+                if scale_type.scale_type_kind() != ScaleTypeKind::Binned {
+                    continue;
+                }
+                // Get binning SQL from scale type
+                if let Some(sql) = scale_type.pre_stat_transform_sql(&col_name, scale) {
+                    transform_exprs.push((col_name, sql));
+                }
+            }
+        }
+    }
+
+    if transform_exprs.is_empty() {
+        return query.to_string();
+    }
+
+    // Build wrapper: SELECT {transformed_cols}, other_cols FROM ({query})
+    // For each transformed column, use the SQL expression; for others, keep as-is
+    let transformed_col_names: HashSet<&str> = transform_exprs.iter().map(|(c, _)| c.as_str()).collect();
+
+    // Build column list: all columns, with transformed ones replaced by their expressions
+    let col_exprs: Vec<String> = transform_exprs
+        .iter()
+        .map(|(col, sql)| format!("{} AS {}", sql, col))
+        .collect();
+
+    // Build the excluded columns list for the * expansion
+    // We need to select *, but exclude the columns we're replacing
+    if col_exprs.is_empty() {
+        return query.to_string();
+    }
+
+    // Use EXCLUDE to remove the original columns, then add the transformed versions
+    let exclude_clause = if transformed_col_names.len() == 1 {
+        format!("EXCLUDE ({})", transformed_col_names.iter().next().unwrap())
+    } else {
+        format!(
+            "EXCLUDE ({})",
+            transformed_col_names
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    format!(
+        "SELECT * {}, {} FROM ({})",
+        exclude_clause,
+        col_exprs.join(", "),
+        query
+    )
+}
+
 fn build_layer_query<F>(
     layer: &mut Layer,
     schema: &Schema,
@@ -784,6 +873,7 @@ fn build_layer_query<F>(
     layer_idx: usize,
     facet: Option<&Facet>,
     constants: &[(String, LiteralValue)],
+    scales: &[crate::plot::Scale],
     execute_query: &F,
 ) -> Result<Option<String>>
 where
@@ -860,6 +950,10 @@ where
     if let Some(f) = filter {
         query = format!("{} WHERE {}", query, f);
     }
+
+    // Apply pre-stat transformations (e.g., binning for Binned scales)
+    // This must happen before stat transforms so that data is transformed first
+    query = apply_pre_stat_transform(&query, layer, scales);
 
     // Apply statistical transformation (after filter, uses combined group_by)
     // Returns StatResult::Identity for no transformation, StatResult::Transformed for transformed query
@@ -1273,6 +1367,10 @@ where
     // This ensures temporal transform inference works even without explicit SCALE x
     create_missing_scales(&mut specs[0]);
 
+    // Pre-resolve Binned scales using schema-derived context
+    // This must happen before build_layer_query so pre_stat_transform_sql has resolved breaks
+    apply_pre_stat_resolve(&mut specs[0], &layer_schemas)?;
+
     // Add discrete mapped columns to partition_by for all layers
     // This ensures proper grouping for color, fill, shape, etc. aesthetics
     // Uses scale type (if explicit) to determine discreteness, falling back to schema
@@ -1286,6 +1384,8 @@ where
     // - Layer with filter/order_by but no source → query __ggsql_global__ with filter/order_by and constants
     // - Layer with no source, no filter, no order_by → returns None (use global directly, constants already injected)
     let facet = specs[0].facet.clone();
+    // Clone scales to avoid borrow conflict (layers borrowed mutably, scales immutably)
+    let scales = specs[0].scales.clone();
 
     for (idx, layer) in specs[0].layers.iter_mut().enumerate() {
         // For layers using global data without filter, constants are already in global data
@@ -1305,6 +1405,7 @@ where
             idx,
             facet.as_ref(),
             &constants,
+            &scales,
             &execute_query,
         )? {
             let df = execute_query(&layer_query).map_err(|e| {
@@ -1396,13 +1497,8 @@ fn gets_default_scale(aesthetic: &str) -> bool {
 fn create_missing_scales(spec: &mut Plot) {
     let mut used_aesthetics: HashSet<String> = HashSet::new();
 
-    // Collect from global mappings (both columns and literals)
-    for aesthetic in spec.global_mappings.aesthetics.keys() {
-        let primary = GeomAesthetics::primary_aesthetic(aesthetic);
-        used_aesthetics.insert(primary.to_string());
-    }
-
     // Collect from layer mappings and remappings
+    // (global mappings have already been merged into layers at this point)
     for layer in &spec.layers {
         for aesthetic in layer.mappings.aesthetics.keys() {
             let primary = GeomAesthetics::primary_aesthetic(aesthetic);
@@ -1432,6 +1528,122 @@ fn create_missing_scales(spec: &mut Plot) {
 }
 
 // =============================================================================
+// Pre-Stat Scale Resolution (Binned Scales)
+// =============================================================================
+
+/// Pre-resolve Binned scales using schema-derived context.
+///
+/// This function resolves Binned scales before layer queries are built,
+/// so that `pre_stat_transform_sql` has access to resolved breaks for
+/// generating binning SQL.
+///
+/// Only Binned scales are resolved here; other scales are resolved
+/// post-stat by `resolve_scales`.
+fn apply_pre_stat_resolve(spec: &mut Plot, layer_schemas: &[Schema]) -> Result<()> {
+    use crate::plot::scale::{ScaleDataContext, ScaleTypeKind};
+
+    for scale in &mut spec.scales {
+        // Only pre-resolve Binned scales
+        let scale_type = match &scale.scale_type {
+            Some(st) if st.scale_type_kind() == ScaleTypeKind::Binned => st.clone(),
+            _ => continue,
+        };
+
+        // Find all ColumnInfos for this aesthetic from schemas
+        let column_infos =
+            find_schema_columns_for_aesthetic(&spec.layers, &scale.aesthetic, layer_schemas);
+
+        if column_infos.is_empty() {
+            continue;
+        }
+
+        // Build context from schema information
+        let context = ScaleDataContext::from_schemas(&column_infos);
+
+        // Use unified resolve method
+        scale_type
+            .resolve(scale, &context, &scale.aesthetic.clone())
+            .map_err(|e| GgsqlError::ValidationError(format!("Scale '{}': {}", scale.aesthetic, e)))?;
+    }
+
+    Ok(())
+}
+
+/// Find ColumnInfo for an aesthetic from layer schemas.
+///
+/// Similar to `find_columns_for_aesthetic` but works with schema information
+/// (ColumnInfo) instead of actual data (Column).
+///
+/// Handles both column mappings (looked up in schema) and literal mappings
+/// (synthetic ColumnInfo created from the literal value).
+///
+/// Note: Global mappings have already been merged into layer mappings at this point.
+fn find_schema_columns_for_aesthetic(
+    layers: &[Layer],
+    aesthetic: &str,
+    layer_schemas: &[Schema],
+) -> Vec<ColumnInfo> {
+    let mut infos = Vec::new();
+    let aesthetics_to_check = get_aesthetic_family(aesthetic);
+
+    // Check each layer's mapping (global mappings already merged)
+    for (layer_idx, layer) in layers.iter().enumerate() {
+        if layer_idx >= layer_schemas.len() {
+            continue;
+        }
+        let schema = &layer_schemas[layer_idx];
+
+        for aes_name in &aesthetics_to_check {
+            if let Some(value) = layer.mappings.get(aes_name) {
+                match value {
+                    AestheticValue::Column { name, .. } => {
+                        if let Some(info) = schema.iter().find(|c| c.name == *name) {
+                            infos.push(info.clone());
+                        }
+                    }
+                    AestheticValue::Literal(lit) => {
+                        // Create synthetic ColumnInfo from literal
+                        if let Some(info) = column_info_from_literal(aes_name, lit) {
+                            infos.push(info);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    infos
+}
+
+/// Create a synthetic ColumnInfo from a literal value.
+///
+/// Used to include literal mappings in scale resolution.
+fn column_info_from_literal(aesthetic: &str, lit: &LiteralValue) -> Option<ColumnInfo> {
+    use polars::prelude::DataType;
+
+    match lit {
+        LiteralValue::Number(n) => Some(ColumnInfo {
+            name: naming::const_column(aesthetic),
+            dtype: DataType::Float64,
+            is_discrete: false,
+            min: Some(ArrayElement::Number(*n)),
+            max: Some(ArrayElement::Number(*n)),
+        }),
+        LiteralValue::String(s) => Some(ColumnInfo {
+            name: naming::const_column(aesthetic),
+            dtype: DataType::String,
+            is_discrete: true,
+            min: Some(ArrayElement::String(s.clone())),
+            max: Some(ArrayElement::String(s.clone())),
+        }),
+        LiteralValue::Boolean(_) => {
+            // Boolean literals don't contribute to numeric ranges
+            None
+        }
+    }
+}
+
+// =============================================================================
 // Scale Resolution
 // =============================================================================
 
@@ -1439,18 +1651,30 @@ fn create_missing_scales(spec: &mut Plot) {
 ///
 /// For each scale, this function:
 /// 1. Infers scale_type from column data types if not explicitly set
-/// 2. Resolves input_range (domain) using the scale type's `resolve_input_range` method
+/// 2. Uses the unified `resolve` method to fill in input_range, transform, and breaks
+/// 3. Resolves output_range if not already set
 ///
 /// The function inspects columns mapped to the aesthetic (including family
 /// members like xmin/xmax for "x") and computes appropriate ranges.
+///
+/// Scales that were already resolved pre-stat (Binned scales) are skipped.
 fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Result<()> {
+    use crate::plot::scale::ScaleDataContext;
+
     for idx in 0..spec.scales.len() {
         // Clone aesthetic to avoid borrow issues with find_columns_for_aesthetic
         let aesthetic = spec.scales[idx].aesthetic.clone();
 
+        // Skip scales that were already resolved pre-stat (e.g., Binned scales)
+        if spec.scales[idx].resolved {
+            // Still need to resolve output_range for pre-resolved scales
+            resolve_output_range(&mut spec.scales[idx], &aesthetic)?;
+            continue;
+        }
+
         // Find column references for this aesthetic (including family members)
         let column_refs =
-            find_columns_for_aesthetic(&spec.global_mappings, &spec.layers, &aesthetic, data_map);
+            find_columns_for_aesthetic(&spec.layers, &aesthetic, data_map);
 
         if column_refs.is_empty() {
             continue;
@@ -1464,77 +1688,64 @@ fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Res
         // Clone scale_type (cheap Arc clone) to avoid borrow conflict with mutations
         let scale_type = spec.scales[idx].scale_type.clone();
         if let Some(st) = scale_type {
-            // Resolve and validate properties (fills in defaults, rejects unknown)
-            spec.scales[idx].properties = st
-                .resolve_properties(&aesthetic, &spec.scales[idx].properties)
+            // Determine if this is a discrete scale (for unique values vs min/max range)
+            // Note: is_discrete() returns true for Continuous/Binned (supports breaks)
+            // and false for Discrete/Identity (doesn't support breaks)
+            // So we invert it: discrete range when is_discrete() returns false
+            let use_discrete_range = !st.is_discrete();
+
+            // Build context from actual data columns
+            let context = ScaleDataContext::from_columns(&column_refs, use_discrete_range);
+
+            // Use unified resolve method
+            st.resolve(&mut spec.scales[idx], &context, &aesthetic)
                 .map_err(|e| {
                     GgsqlError::ValidationError(format!("Scale '{}': {}", aesthetic, e))
                 })?;
-
-            // Get column dtype for transform inference (use first column's type)
-            let column_dtype = column_refs.first().map(|c| c.dtype().clone());
-
-            // Resolve transform (fills in default based on column dtype, validates user input)
-            let resolved_transform = st
-                .resolve_transform(
-                    &aesthetic,
-                    spec.scales[idx].transform.as_ref(),
-                    column_dtype.as_ref(),
-                )
-                .map_err(|e| {
-                    GgsqlError::ValidationError(format!("Scale '{}': {}", aesthetic, e))
-                })?;
-            spec.scales[idx].transform = Some(resolved_transform);
-
-            // Resolve input range using the scale type's method
-            let resolved_range = st
-                .resolve_input_range(
-                    spec.scales[idx].input_range.as_deref(),
-                    &column_refs,
-                    &spec.scales[idx].properties,
-                )
-                .map_err(|e| {
-                    GgsqlError::ValidationError(format!("Scale '{}': {}", aesthetic, e))
-                })?;
-
-            if let Some(range) = resolved_range {
-                spec.scales[idx].input_range = Some(range);
-            }
-
-            // Resolve output range (only if not already set)
-            if spec.scales[idx].output_range.is_none() {
-                if let Some(default_range) = st
-                    .default_output_range(&aesthetic, spec.scales[idx].input_range.as_deref())
-                    .map_err(GgsqlError::ValidationError)?
-                {
-                    spec.scales[idx].output_range = Some(OutputRange::Array(default_range));
-                }
-            }
         }
 
-        // Expand named palettes to explicit arrays
-        if let Some(OutputRange::Palette(ref name)) = spec.scales[idx].output_range.clone() {
-            use crate::plot::scale::palettes;
+        // Resolve output range
+        resolve_output_range(&mut spec.scales[idx], &aesthetic)?;
+    }
 
-            // Determine if this is a color or shape aesthetic
-            let palette_values = match aesthetic.as_str() {
-                "shape" => palettes::get_shape_palette(name),
-                _ => palettes::get_color_palette(name),
-            };
+    Ok(())
+}
 
-            if let Some(palette) = palette_values {
-                // Size to input_range length, or use full palette
-                let count = spec.scales[idx]
-                    .input_range
-                    .as_ref()
-                    .map(|r| r.len())
-                    .unwrap_or(palette.len());
-                let expanded = palettes::expand_palette(palette, count, name)
-                    .map_err(GgsqlError::ValidationError)?;
-                spec.scales[idx].output_range = Some(OutputRange::Array(expanded));
+/// Resolve output range for a scale.
+///
+/// 1. If no output_range is set, gets default from scale type
+/// 2. Expands named palettes to explicit arrays
+fn resolve_output_range(scale: &mut crate::plot::Scale, aesthetic: &str) -> Result<()> {
+    use crate::plot::scale::palettes;
+
+    // Resolve output range (only if not already set)
+    if scale.output_range.is_none() {
+        if let Some(ref st) = scale.scale_type {
+            if let Some(default_range) = st
+                .default_output_range(aesthetic, scale.input_range.as_deref())
+                .map_err(GgsqlError::ValidationError)?
+            {
+                scale.output_range = Some(OutputRange::Array(default_range));
             }
-            // If palette not found, leave as Palette variant for Vega-Lite to handle
         }
+    }
+
+    // Expand named palettes to explicit arrays
+    if let Some(OutputRange::Palette(ref name)) = scale.output_range.clone() {
+        // Determine if this is a color or shape aesthetic
+        let palette_values = match aesthetic {
+            "shape" => palettes::get_shape_palette(name),
+            _ => palettes::get_color_palette(name),
+        };
+
+        if let Some(palette) = palette_values {
+            // Size to input_range length, or use full palette
+            let count = scale.input_range.as_ref().map(|r| r.len()).unwrap_or(palette.len());
+            let expanded =
+                palettes::expand_palette(palette, count, name).map_err(GgsqlError::ValidationError)?;
+            scale.output_range = Some(OutputRange::Array(expanded));
+        }
+        // If palette not found, leave as Palette variant for Vega-Lite to handle
     }
 
     Ok(())
@@ -1543,8 +1754,9 @@ fn resolve_scales(spec: &mut Plot, data_map: &HashMap<String, DataFrame>) -> Res
 /// Find all columns for an aesthetic (including family members like xmin/xmax for "x").
 /// Each mapping is looked up in its corresponding data source.
 /// Returns references to the Columns found.
+///
+/// Note: Global mappings have already been merged into layer mappings at this point.
 fn find_columns_for_aesthetic<'a>(
-    global_mappings: &crate::plot::Mappings,
     layers: &[Layer],
     aesthetic: &str,
     data_map: &'a HashMap<String, DataFrame>,
@@ -1553,18 +1765,8 @@ fn find_columns_for_aesthetic<'a>(
     let aesthetics_to_check = get_aesthetic_family(aesthetic);
     let global_df = data_map.get(naming::GLOBAL_DATA_KEY);
 
-    // Check global mapping → look up in global data
-    if let Some(df) = global_df {
-        for aes_name in &aesthetics_to_check {
-            if let Some(AestheticValue::Column { name, .. }) = global_mappings.get(aes_name) {
-                if let Ok(column) = df.column(name) {
-                    column_refs.push(column);
-                }
-            }
-        }
-    }
-
     // Check each layer's mapping → look up in layer data OR global data
+    // (global mappings already merged into layers)
     for (i, layer) in layers.iter().enumerate() {
         // Use layer-specific data if available, otherwise fall back to global
         let df = data_map.get(&naming::layer_key(i)).or(global_df);
@@ -1636,7 +1838,6 @@ fn apply_scale_oob(spec: &Plot, data_map: &mut HashMap<String, DataFrame>) -> Re
 
         // Find all (data_key, column_name) pairs for this aesthetic
         let column_sources = find_columns_for_aesthetic_with_sources(
-            &spec.global_mappings,
             &spec.layers,
             &scale.aesthetic,
         );
@@ -1684,22 +1885,17 @@ fn apply_scale_oob(spec: &Plot, data_map: &mut HashMap<String, DataFrame>) -> Re
 
 /// Find all (data_key, column_name) pairs for an aesthetic (including family members).
 /// Returns tuples of (data source key, column name) for use in transformations.
+///
+/// Note: Global mappings have already been merged into layer mappings at this point.
 fn find_columns_for_aesthetic_with_sources(
-    global_mappings: &crate::plot::Mappings,
     layers: &[Layer],
     aesthetic: &str,
 ) -> Vec<(String, String)> {
     let mut results = Vec::new();
     let aesthetics_to_check = get_aesthetic_family(aesthetic);
 
-    // Check global mapping → uses global data
-    for aes_name in &aesthetics_to_check {
-        if let Some(AestheticValue::Column { name, .. }) = global_mappings.get(aes_name) {
-            results.push((naming::GLOBAL_DATA_KEY.to_string(), name.clone()));
-        }
-    }
-
     // Check each layer's mapping → uses layer data or global data
+    // (global mappings already merged into layers)
     for (i, layer) in layers.iter().enumerate() {
         // Determine which data source this layer uses
         let data_key = if layer.source.is_some() || layer.filter.is_some() {
@@ -2071,6 +2267,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2099,6 +2296,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2124,6 +2322,7 @@ mod tests {
             false,
             0,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2152,6 +2351,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2176,6 +2376,7 @@ mod tests {
             false,
             0,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2204,6 +2405,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2228,6 +2430,7 @@ mod tests {
             true,
             0,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2254,6 +2457,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2276,6 +2480,7 @@ mod tests {
             false,
             2,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2304,6 +2509,7 @@ mod tests {
             0,
             None,
             &[],
+            &[],
             &mock_execute,
         );
 
@@ -2330,6 +2536,7 @@ mod tests {
             false,
             0,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2358,6 +2565,7 @@ mod tests {
             true,
             0,
             None,
+            &[],
             &[],
             &mock_execute,
         );
@@ -2395,6 +2603,7 @@ mod tests {
             0,
             None,
             &constants,
+            &[],
             &mock_execute,
         );
 
@@ -2426,6 +2635,7 @@ mod tests {
             0,
             None,
             &constants,
+            &[],
             &mock_execute,
         );
 
@@ -3765,9 +3975,8 @@ mod tests {
         use polars::prelude::*;
 
         // Create a Plot with a scale that needs range inference
+        // (global mappings are merged into layers before resolve_scales is called)
         let mut spec = Plot::new();
-        spec.global_mappings
-            .insert("x", AestheticValue::standard_column("value"));
 
         // Disable expansion for predictable test values
         let mut scale = crate::plot::Scale::new("x");
@@ -3776,7 +3985,10 @@ mod tests {
             crate::plot::ParameterValue::Number(0.0),
         );
         spec.scales.push(scale);
-        spec.layers.push(Layer::new(Geom::point()));
+        // Simulate post-merge state: mapping is in layer
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // Create data with numeric values
         let df = df! {
@@ -3811,9 +4023,8 @@ mod tests {
         use polars::prelude::*;
 
         // Create a Plot with a scale that already has a range
+        // (global mappings are merged into layers before resolve_scales is called)
         let mut spec = Plot::new();
-        spec.global_mappings
-            .insert("x", AestheticValue::standard_column("value"));
 
         let mut scale = crate::plot::Scale::new("x");
         scale.input_range = Some(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]);
@@ -3823,7 +4034,10 @@ mod tests {
             crate::plot::ParameterValue::Number(0.0),
         );
         spec.scales.push(scale);
-        spec.layers.push(Layer::new(Geom::point()));
+        // Simulate post-merge state: mapping is in layer
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // Create data with different values
         let df = df! {
@@ -3854,11 +4068,8 @@ mod tests {
         use polars::prelude::*;
 
         // Create a Plot where "y" scale should get range from ymin and ymax columns
+        // (global mappings are merged into layers before resolve_scales is called)
         let mut spec = Plot::new();
-        spec.global_mappings
-            .insert("ymin", AestheticValue::standard_column("low"));
-        spec.global_mappings
-            .insert("ymax", AestheticValue::standard_column("high"));
 
         // Disable expansion for predictable test values
         let mut scale = crate::plot::Scale::new("y");
@@ -3867,7 +4078,11 @@ mod tests {
             crate::plot::ParameterValue::Number(0.0),
         );
         spec.scales.push(scale);
-        spec.layers.push(Layer::new(Geom::errorbar()));
+        // Simulate post-merge state: mappings are in layer
+        let layer = Layer::new(Geom::errorbar())
+            .with_aesthetic("ymin".to_string(), AestheticValue::standard_column("low"))
+            .with_aesthetic("ymax".to_string(), AestheticValue::standard_column("high"));
+        spec.layers.push(layer);
 
         // Create data where ymin/ymax columns have different ranges
         let df = df! {
@@ -3985,9 +4200,8 @@ mod tests {
         use polars::prelude::*;
 
         // Create a Plot with a scale that has [0, null] (explicit min, infer max)
+        // (global mappings are merged into layers before resolve_scales is called)
         let mut spec = Plot::new();
-        spec.global_mappings
-            .insert("x", AestheticValue::standard_column("value"));
 
         let mut scale = crate::plot::Scale::new("x");
         scale.input_range = Some(vec![ArrayElement::Number(0.0), ArrayElement::Null]);
@@ -3997,7 +4211,10 @@ mod tests {
             crate::plot::ParameterValue::Number(0.0),
         );
         spec.scales.push(scale);
-        spec.layers.push(Layer::new(Geom::point()));
+        // Simulate post-merge state: mapping is in layer
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // Create data with values 1-10
         let df = df! {
@@ -4028,9 +4245,8 @@ mod tests {
         use polars::prelude::*;
 
         // Create a Plot with a scale that has [null, 100] (infer min, explicit max)
+        // (global mappings are merged into layers before resolve_scales is called)
         let mut spec = Plot::new();
-        spec.global_mappings
-            .insert("x", AestheticValue::standard_column("value"));
 
         let mut scale = crate::plot::Scale::new("x");
         scale.input_range = Some(vec![ArrayElement::Null, ArrayElement::Number(100.0)]);
@@ -4040,7 +4256,10 @@ mod tests {
             crate::plot::ParameterValue::Number(0.0),
         );
         spec.scales.push(scale);
-        spec.layers.push(Layer::new(Geom::point()));
+        // Simulate post-merge state: mapping is in layer
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // Create data with values 1-10
         let df = df! {
@@ -4575,15 +4794,16 @@ mod tests {
 
     #[test]
     fn test_create_missing_scales_from_global_mapping() {
-        // Test that scales are created for aesthetics in global mappings
-        use crate::plot::{AestheticValue, Geom, Layer, Mappings, Plot};
+        // Test that scales are created for aesthetics in layer mappings
+        // (global mappings are merged into layers before create_missing_scales is called)
+        use crate::plot::{AestheticValue, Geom, Layer, Plot};
 
-        let mut global_mappings = Mappings::new();
-        global_mappings.insert("x", AestheticValue::standard_column("date"));
-        global_mappings.insert("y", AestheticValue::standard_column("value"));
-
-        let mut spec = Plot::with_global_mappings(global_mappings);
-        spec.layers.push(Layer::new(Geom::line()));
+        let mut spec = Plot::new();
+        // Simulate post-merge state: mappings are in layer
+        let layer = Layer::new(Geom::line())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
+            .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // No explicit scales defined
         assert!(spec.scales.is_empty());
@@ -4631,14 +4851,15 @@ mod tests {
     #[test]
     fn test_create_missing_scales_preserves_explicit_scales() {
         // Test that explicit scales are not overwritten
-        use crate::plot::{AestheticValue, Geom, Layer, Mappings, Plot, Scale, ScaleType};
+        // (global mappings are merged into layers before create_missing_scales is called)
+        use crate::plot::{AestheticValue, Geom, Layer, Plot, Scale, ScaleType};
 
-        let mut global_mappings = Mappings::new();
-        global_mappings.insert("x", AestheticValue::standard_column("date"));
-        global_mappings.insert("y", AestheticValue::standard_column("value"));
-
-        let mut spec = Plot::with_global_mappings(global_mappings);
-        spec.layers.push(Layer::new(Geom::line()));
+        let mut spec = Plot::new();
+        // Simulate post-merge state: mappings are in layer
+        let layer = Layer::new(Geom::line())
+            .with_aesthetic("x".to_string(), AestheticValue::standard_column("date"))
+            .with_aesthetic("y".to_string(), AestheticValue::standard_column("value"));
+        spec.layers.push(layer);
 
         // Add explicit scale for x with specific type
         let mut x_scale = Scale::new("x");
@@ -4881,18 +5102,21 @@ mod tests {
         let schema = vec![
             ColumnInfo {
                 name: "date".to_string(),
+                dtype: polars::prelude::DataType::Date,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "value".to_string(),
+                dtype: polars::prelude::DataType::Float64,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "group_id".to_string(),
+                dtype: polars::prelude::DataType::Int64,
                 is_discrete: false, // Integer column, NOT discrete by schema
                 min: None,
                 max: None,
@@ -4937,18 +5161,21 @@ mod tests {
         let schema = vec![
             ColumnInfo {
                 name: "date".to_string(),
+                dtype: polars::prelude::DataType::Date,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "value".to_string(),
+                dtype: polars::prelude::DataType::Float64,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "category".to_string(),
+                dtype: polars::prelude::DataType::String,
                 is_discrete: true, // String column, discrete by schema
                 min: None,
                 max: None,
@@ -4990,18 +5217,21 @@ mod tests {
         let schema = vec![
             ColumnInfo {
                 name: "date".to_string(),
+                dtype: polars::prelude::DataType::Date,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "value".to_string(),
+                dtype: polars::prelude::DataType::Float64,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "category".to_string(),
+                dtype: polars::prelude::DataType::String,
                 is_discrete: true,
                 min: None,
                 max: None,
@@ -5044,18 +5274,21 @@ mod tests {
         let schema = vec![
             ColumnInfo {
                 name: "date".to_string(),
+                dtype: polars::prelude::DataType::Date,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "value".to_string(),
+                dtype: polars::prelude::DataType::Float64,
                 is_discrete: false,
                 min: None,
                 max: None,
             },
             ColumnInfo {
                 name: "temperature".to_string(),
+                dtype: polars::prelude::DataType::Float64,
                 is_discrete: false, // Continuous column
                 min: None,
                 max: None,
