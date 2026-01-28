@@ -27,6 +27,9 @@ tree-sitter.workspace = true
 tree-sitter-ggsql = { path = "../tree-sitter-ggsql" }
 csscolorparser.workspace = true
 
+# Color interpolation
+palette.workspace = true
+
 # Data processing
 polars.workspace = true
 

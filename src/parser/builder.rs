@@ -4,6 +4,7 @@
 //! handling all the node types defined in the grammar.
 
 use crate::plot::layer::geom::Geom;
+use crate::plot::scale::{color_to_hex, is_color_aesthetic, Transform};
 use crate::plot::*;
 use crate::{GgsqlError, Result};
 use std::collections::HashMap;
@@ -113,7 +114,7 @@ fn build_visualise_statement(node: &Node, source: &str) -> Result<Plot> {
         }
     }
 
-    // Validate no conflicts between SCALE and COORD domain specifications
+    // Validate no conflicts between SCALE and COORD input range specifications
     validate_scale_coord_conflicts(&spec)?;
 
     Ok(spec)
@@ -203,10 +204,10 @@ fn parse_explicit_mapping(node: &Node, source: &str) -> Result<(String, Aestheti
     }
 }
 
-/// Check for conflicts between SCALE domain and COORD aesthetic domain specifications
+/// Check for conflicts between SCALE input range and COORD aesthetic input range specifications
 fn validate_scale_coord_conflicts(spec: &Plot) -> Result<()> {
     if let Some(ref coord) = spec.coord {
-        // Get all aesthetic names that have domains in COORD
+        // Get all aesthetic names that have input ranges in COORD
         let coord_aesthetics: Vec<String> = coord
             .properties
             .keys()
@@ -214,18 +215,15 @@ fn validate_scale_coord_conflicts(spec: &Plot) -> Result<()> {
             .cloned()
             .collect();
 
-        // Check if any of these also have domain in SCALE
+        // Check if any of these also have input range in SCALE
         for aesthetic in coord_aesthetics {
             for scale in &spec.scales {
-                if scale.aesthetic == aesthetic {
-                    // Check if this scale has a domain property
-                    if scale.properties.contains_key("domain") {
-                        return Err(GgsqlError::ParseError(format!(
-                            "Domain for '{}' specified in both SCALE and COORD clauses. \
-                            Please specify domain in only one location.",
-                            aesthetic
-                        )));
-                    }
+                if scale.aesthetic == aesthetic && scale.input_range.is_some() {
+                    return Err(GgsqlError::ParseError(format!(
+                        "Input range for '{}' specified in both SCALE and COORD clauses. \
+                        Please specify input range in only one location.",
+                        aesthetic
+                    )));
                 }
             }
         }
@@ -410,13 +408,12 @@ fn parse_setting_clause(node: &Node, source: &str) -> Result<HashMap<String, Par
     for child in node.children(&mut cursor) {
         if child.kind() == "parameter_assignment" {
             let (param, mut value) = parse_parameter_assignment(&child, source)?;
-            match param.as_str() {
-                "color" | "col" | "colour" | "fill" | "stroke" => {
-                    if let ParameterValue::String(color) = value {
-                        value = ParameterValue::String(color_to_hex(&color));
-                    }
+            if is_color_aesthetic(&param) {
+                if let ParameterValue::String(color) = value {
+                    value = ParameterValue::String(
+                        color_to_hex(&color).map_err(GgsqlError::ParseError)?,
+                    );
                 }
-                _ => {}
             }
             parameters.insert(param, value);
         }
@@ -481,7 +478,7 @@ fn parse_parameter_assignment(node: &Node, source: &str) -> Result<(String, Para
     Ok((param_name, param_value.unwrap()))
 }
 
-/// Parse a parameter_value (string, number, or boolean)
+/// Parse a parameter_value (string, number, boolean, or null)
 fn parse_parameter_value(node: &Node, source: &str) -> Result<ParameterValue> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -502,6 +499,9 @@ fn parse_parameter_value(node: &Node, source: &str) -> Result<ParameterValue> {
                 let text = get_node_text(&child, source);
                 let bool_val = text == "true";
                 return Ok(ParameterValue::Boolean(bool_val));
+            }
+            "null_literal" => {
+                return Ok(ParameterValue::Null);
             }
             _ => {}
         }
@@ -614,45 +614,42 @@ fn parse_literal_value(node: &Node, source: &str) -> Result<AestheticValue> {
 }
 
 /// Build a Scale from a scale_clause node
+/// New syntax: SCALE [TYPE] aesthetic [FROM ...] [TO ...] [VIA ...] [SETTING ...]
 fn build_scale(node: &Node, source: &str) -> Result<Scale> {
     let mut aesthetic = String::new();
     let mut scale_type: Option<ScaleType> = None;
+    let mut input_range: Option<Vec<ArrayElement>> = None;
+    let mut output_range: Option<OutputRange> = None;
+    let mut transform: Option<Transform> = None;
     let mut properties = HashMap::new();
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "SCALE" | "SETTING" | "=>" | "," => continue, // Skip keywords
-            "aesthetic_name" => {
-                aesthetic = get_node_text(&child, source);
+            "SCALE" | "SETTING" | "=>" | "," | "FROM" | "TO" | "VIA" => continue, // Skip keywords
+            "scale_type_identifier" => {
+                // Parse scale type: CONTINUOUS, DISCRETE, BINNED, DATE, DATETIME
+                let type_text = get_node_text(&child, source);
+                scale_type = Some(parse_scale_type_identifier(&type_text)?);
             }
-            "scale_property" => {
-                // Parse scale property: name = value
-                let mut prop_cursor = child.walk();
-                let mut prop_name = String::new();
-                let mut prop_value: Option<ParameterValue> = None;
-
-                for prop_child in child.children(&mut prop_cursor) {
-                    match prop_child.kind() {
-                        "scale_property_name" => {
-                            prop_name = get_node_text(&prop_child, source);
-                        }
-                        "scale_property_value" => {
-                            prop_value = Some(parse_scale_property_value(&prop_child, source)?);
-                        }
-                        "=>" => continue,
-                        _ => {}
-                    }
-                }
-
-                // If this is a 'type' property, set scale_type
-                if prop_name == "type" {
-                    if let Some(ParameterValue::String(type_str)) = prop_value {
-                        scale_type = Some(parse_scale_type(&type_str)?);
-                    }
-                } else if !prop_name.is_empty() && prop_value.is_some() {
-                    properties.insert(prop_name, prop_value.unwrap());
-                }
+            "aesthetic_name" => {
+                aesthetic = normalise_aes_name(&get_node_text(&child, source));
+            }
+            "scale_from_clause" => {
+                // Parse FROM [array] -> input_range
+                input_range = parse_scale_from_clause(&child, source)?;
+            }
+            "scale_to_clause" => {
+                // Parse TO [array | identifier] -> output_range
+                output_range = parse_scale_to_clause(&child, source)?;
+            }
+            "scale_via_clause" => {
+                // Parse VIA identifier -> transform
+                transform = parse_scale_via_clause(&child, source)?;
+            }
+            "setting_clause" => {
+                // Reuse existing setting_clause parser
+                properties = parse_setting_clause(&child, source)?;
             }
             _ => {}
         }
@@ -664,119 +661,137 @@ fn build_scale(node: &Node, source: &str) -> Result<Scale> {
         ));
     }
 
-    // Replace colour palettes by their hex codes
-    if matches!(
-        aesthetic.as_str(),
-        "stroke" | "colour" | "fill" | "color" | "col"
-    ) {
-        if let Some(ParameterValue::Array(elements)) = properties.get("palette") {
-            let mut hex_codes = Vec::new();
-            for elem in elements {
-                if let ArrayElement::String(color) = elem {
-                    let hex = ArrayElement::String(color_to_hex(color));
-                    hex_codes.push(hex);
-                } else {
-                    hex_codes.push(elem.clone());
-                }
-            }
-            properties.insert("palette".to_string(), ParameterValue::Array(hex_codes));
+    // Replace colour palettes by their hex codes in output_range
+    if is_color_aesthetic(&aesthetic) {
+        if let Some(OutputRange::Array(ref elements)) = output_range {
+            let hex_codes: Vec<ArrayElement> = elements
+                .iter()
+                .map(|elem| {
+                    if let ArrayElement::String(color) = elem {
+                        color_to_hex(color).map(ArrayElement::String)
+                    } else {
+                        Ok(elem.clone())
+                    }
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(GgsqlError::ParseError)?;
+            output_range = Some(OutputRange::Array(hex_codes));
         }
     }
 
     Ok(Scale {
         aesthetic,
         scale_type,
+        input_range,
+        output_range,
+        transform,
         properties,
+        resolved: false,
     })
 }
 
-/// Parse scale type from text
-fn parse_scale_type(text: &str) -> Result<ScaleType> {
+/// Parse scale type identifier (CONTINUOUS, DISCRETE, BINNED)
+///
+/// Note: DATE and DATETIME are no longer scale types - temporal handling is done
+/// via transforms that are automatically inferred from column data types.
+fn parse_scale_type_identifier(text: &str) -> Result<ScaleType> {
     match text.to_lowercase().as_str() {
-        "linear" => Ok(ScaleType::Linear),
-        "log" | "log10" => Ok(ScaleType::Log),
-        "sqrt" => Ok(ScaleType::Sqrt),
-        "reverse" => Ok(ScaleType::Reverse),
-        "categorical" => Ok(ScaleType::Categorical),
-        "ordinal" => Ok(ScaleType::Ordinal),
-        "date" => Ok(ScaleType::Date),
-        "datetime" => Ok(ScaleType::DateTime),
-        "viridis" => Ok(ScaleType::Viridis),
-        "plasma" => Ok(ScaleType::Plasma),
-        "diverging" => Ok(ScaleType::Diverging),
-        "sequential" => Ok(ScaleType::Sequential),
-        "identity" => Ok(ScaleType::Identity),
-        "manual" => Ok(ScaleType::Manual),
+        "continuous" => Ok(ScaleType::continuous()),
+        "discrete" => Ok(ScaleType::discrete()),
+        "binned" => Ok(ScaleType::binned()),
         _ => Err(GgsqlError::ParseError(format!(
-            "Unknown scale type: {}",
+            "Unknown scale type: '{}'. Valid types: continuous, discrete, binned",
             text
         ))),
     }
 }
 
-/// Parse scale property value
-fn parse_scale_property_value(node: &Node, source: &str) -> Result<ParameterValue> {
+/// Parse FROM clause: FROM [array]
+fn parse_scale_from_clause(node: &Node, source: &str) -> Result<Option<Vec<ArrayElement>>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "array" {
+            return Ok(Some(parse_array(&child, source)?));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse TO clause: TO [array | identifier]
+fn parse_scale_to_clause(node: &Node, source: &str) -> Result<Option<OutputRange>> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "string" => {
-                let text = get_node_text(&child, source);
-                let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-                return Ok(ParameterValue::String(unquoted.to_string()));
-            }
-            "number" => {
-                let text = get_node_text(&child, source);
-                let num = text.parse::<f64>().map_err(|e| {
-                    GgsqlError::ParseError(format!("Failed to parse number '{}': {}", text, e))
-                })?;
-                return Ok(ParameterValue::Number(num));
-            }
-            "boolean" => {
-                let text = get_node_text(&child, source);
-                let bool_val = text == "true";
-                return Ok(ParameterValue::Boolean(bool_val));
-            }
             "array" => {
-                // Parse array of values
-                let mut values = Vec::new();
-                let mut array_cursor = child.walk();
-                for array_child in child.children(&mut array_cursor) {
-                    if array_child.kind() == "array_element" {
-                        // Array elements wrap the actual values
-                        let mut elem_cursor = array_child.walk();
-                        for elem_child in array_child.children(&mut elem_cursor) {
-                            match elem_child.kind() {
-                                "string" => {
-                                    let text = get_node_text(&elem_child, source);
-                                    let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
-                                    values.push(ArrayElement::String(unquoted.to_string()));
-                                }
-                                "number" => {
-                                    let text = get_node_text(&elem_child, source);
-                                    if let Ok(num) = text.parse::<f64>() {
-                                        values.push(ArrayElement::Number(num));
-                                    }
-                                }
-                                "boolean" => {
-                                    let text = get_node_text(&elem_child, source);
-                                    let bool_val = text == "true";
-                                    values.push(ArrayElement::Boolean(bool_val));
-                                }
-                                _ => continue,
-                            }
-                        }
-                    }
-                }
-                return Ok(ParameterValue::Array(values));
+                let elements = parse_array(&child, source)?;
+                return Ok(Some(OutputRange::Array(elements)));
             }
-            _ => {}
+            "identifier" | "bare_identifier" | "quoted_identifier" => {
+                let palette_name = get_node_text(&child, source);
+                return Ok(Some(OutputRange::Palette(palette_name)));
+            }
+            _ => continue,
         }
     }
+    Ok(None)
+}
 
-    Err(GgsqlError::ParseError(format!(
-        "Could not parse scale property value from node: {}",
-        node.kind()
-    )))
+/// Parse VIA clause: VIA identifier
+fn parse_scale_via_clause(node: &Node, source: &str) -> Result<Option<Transform>> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "identifier" | "bare_identifier" | "quoted_identifier"
+        ) {
+            let transform_name = get_node_text(&child, source);
+            return match Transform::from_name(&transform_name) {
+                Some(t) => Ok(Some(t)),
+                None => Err(GgsqlError::ParseError(format!(
+                    "Unknown transform: '{}'. Valid transforms are: {}",
+                    transform_name,
+                    crate::plot::scale::ALL_TRANSFORM_NAMES.join(", ")
+                ))),
+            };
+        }
+    }
+    Ok(None)
+}
+
+/// Parse an array node into Vec<ArrayElement>
+fn parse_array(node: &Node, source: &str) -> Result<Vec<ArrayElement>> {
+    let mut values = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "array_element" {
+            let mut elem_cursor = child.walk();
+            for elem_child in child.children(&mut elem_cursor) {
+                match elem_child.kind() {
+                    "string" => {
+                        let text = get_node_text(&elem_child, source);
+                        let unquoted = text.trim_matches(|c| c == '\'' || c == '"');
+                        values.push(ArrayElement::String(unquoted.to_string()));
+                    }
+                    "number" => {
+                        let text = get_node_text(&elem_child, source);
+                        if let Ok(num) = text.parse::<f64>() {
+                            values.push(ArrayElement::Number(num));
+                        }
+                    }
+                    "boolean" => {
+                        let text = get_node_text(&elem_child, source);
+                        let bool_val = text == "true";
+                        values.push(ArrayElement::Boolean(bool_val));
+                    }
+                    "null_literal" => {
+                        values.push(ArrayElement::Null);
+                    }
+                    _ => continue,
+                }
+            }
+        }
+    }
+    Ok(values)
 }
 
 /// Build a Facet from a facet_clause node
@@ -1063,6 +1078,7 @@ fn parse_coord_property_value(node: &Node, source: &str) -> Result<ParameterValu
             let bool_val = text == "true";
             Ok(ParameterValue::Boolean(bool_val))
         }
+        "null_literal" => Ok(ParameterValue::Null),
         "array" => {
             // Parse array of values
             let mut values = Vec::new();
@@ -1366,17 +1382,6 @@ pub fn normalise_aes_name(name: &str) -> String {
         _ => name.to_string(),
     }
 }
-
-fn color_to_hex(value: &str) -> String {
-    match csscolorparser::parse(value) {
-        Ok(value) => value.to_css_hex(),
-        Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1437,7 +1442,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coord_cartesian_valid_aesthetic_domain() {
+    fn test_coord_cartesian_valid_aesthetic_input_range() {
         let query = r#"
             VISUALISE
             DRAW point MAPPING x AS x, y AS y, category AS color
@@ -1469,7 +1474,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coord_flip_valid_aesthetic_domain() {
+    fn test_coord_flip_valid_aesthetic_input_range() {
         let query = r#"
             VISUALISE
             DRAW bar MAPPING category AS x, value AS y, region AS color
@@ -1551,7 +1556,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coord_polar_valid_aesthetic_domain() {
+    fn test_coord_polar_valid_aesthetic_input_range() {
         let query = r#"
             VISUALISE
             DRAW bar MAPPING category AS x, value AS y, region AS color
@@ -1599,15 +1604,15 @@ mod tests {
     }
 
     // ========================================
-    // SCALE/COORD Domain Conflict Tests
+    // SCALE/COORD Input Range Conflict Tests
     // ========================================
 
     #[test]
-    fn test_scale_coord_conflict_x_domain() {
+    fn test_scale_coord_conflict_x_input_range() {
         let query = r#"
             VISUALISE
             DRAW point MAPPING x AS x, y AS y
-            SCALE x SETTING domain => [0, 100]
+            SCALE x FROM [0, 100]
             COORD cartesian SETTING x => [0, 50]
         "#;
 
@@ -1616,15 +1621,15 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err
             .to_string()
-            .contains("Domain for 'x' specified in both SCALE and COORD"));
+            .contains("Input range for 'x' specified in both SCALE and COORD"));
     }
 
     #[test]
-    fn test_scale_coord_conflict_color_domain() {
+    fn test_scale_coord_conflict_color_input_range() {
         let query = r#"
             VISUALISE
             DRAW point MAPPING x AS x, y AS y, category AS color
-            SCALE color SETTING domain => ['A', 'B']
+            SCALE color FROM ['A', 'B']
             COORD cartesian SETTING color => ['A', 'B', 'C']
         "#;
 
@@ -1633,7 +1638,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err
             .to_string()
-            .contains("Domain for 'color' specified in both SCALE and COORD"));
+            .contains("Input range for 'color' specified in both SCALE and COORD"));
     }
 
     #[test]
@@ -1641,7 +1646,7 @@ mod tests {
         let query = r#"
             VISUALISE
             DRAW point MAPPING x AS x, y AS y, category AS color
-            SCALE color SETTING domain => ['A', 'B']
+            SCALE color FROM ['A', 'B']
             COORD cartesian SETTING xlim => [0, 100]
         "#;
 
@@ -1650,11 +1655,11 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_coord_no_conflict_scale_without_domain() {
+    fn test_scale_coord_no_conflict_scale_without_input_range() {
         let query = r#"
             VISUALISE
             DRAW point MAPPING x AS x, y AS y
-            SCALE x SETTING type => 'linear'
+            SCALE CONTINUOUS x
             COORD cartesian SETTING x => [0, 100]
         "#;
 
@@ -3113,25 +3118,140 @@ mod tests {
     fn test_colour_scale_hex_code_conversion() {
         let query = r#"
           VISUALISE foo AS x
-          SCALE color SETTING palette => ['rgb(0, 0, 255)', 'green', '#FF0000']
+          SCALE color TO ['rgb(0, 0, 255)', 'green', '#FF0000']
         "#;
         let specs = parse_test_query(query).unwrap();
 
         let scales = &specs[0].scales;
         assert_eq!(scales.len(), 1);
 
-        let scale_params = &scales[0].properties;
-        let palette = scale_params.get("palette");
-        assert!(palette.is_some());
-        let palette = palette.unwrap();
+        // Check output_range instead of properties.palette
+        let output_range = &scales[0].output_range;
+        assert!(output_range.is_some());
+        let output_range = output_range.as_ref().unwrap();
 
         let mut ok = false;
-        if let ParameterValue::Array(elems) = palette {
+        if let OutputRange::Array(elems) = output_range {
             ok = matches!(&elems[0], ArrayElement::String(color) if color == "#0000ff");
             ok = ok && matches!(&elems[1], ArrayElement::String(color) if color == "#008000");
             ok = ok && matches!(&elems[2], ArrayElement::String(color) if color == "#ff0000");
         }
         assert!(ok);
-        eprintln!("{:?}", palette);
+        eprintln!("{:?}", output_range);
+    }
+
+    // ========================================
+    // Null in Scale Input Range Tests
+    // ========================================
+
+    #[test]
+    fn test_scale_from_with_null_max() {
+        // SCALE x FROM [0, null] - explicit min, infer max
+        let query = r#"
+            VISUALISE x, y
+            DRAW point
+            SCALE x FROM [0, null]
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        assert_eq!(scales.len(), 1);
+        assert_eq!(scales[0].aesthetic, "x");
+
+        let input_range = scales[0].input_range.as_ref().unwrap();
+        assert_eq!(input_range.len(), 2);
+        assert!(matches!(&input_range[0], ArrayElement::Number(n) if *n == 0.0));
+        assert!(matches!(&input_range[1], ArrayElement::Null));
+    }
+
+    #[test]
+    fn test_scale_from_with_null_min() {
+        // SCALE x FROM [null, 100] - infer min, explicit max
+        let query = r#"
+            VISUALISE x, y
+            DRAW point
+            SCALE x FROM [null, 100]
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        assert_eq!(scales.len(), 1);
+
+        let input_range = scales[0].input_range.as_ref().unwrap();
+        assert_eq!(input_range.len(), 2);
+        assert!(matches!(&input_range[0], ArrayElement::Null));
+        assert!(matches!(&input_range[1], ArrayElement::Number(n) if *n == 100.0));
+    }
+
+    #[test]
+    fn test_scale_from_with_both_nulls() {
+        // SCALE x FROM [null, null] - infer both (same as no FROM clause)
+        let query = r#"
+            VISUALISE x, y
+            DRAW point
+            SCALE x FROM [null, null]
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        assert_eq!(scales.len(), 1);
+
+        let input_range = scales[0].input_range.as_ref().unwrap();
+        assert_eq!(input_range.len(), 2);
+        assert!(matches!(&input_range[0], ArrayElement::Null));
+        assert!(matches!(&input_range[1], ArrayElement::Null));
+    }
+
+    #[test]
+    fn test_scale_from_with_null_case_insensitive() {
+        // NULL should be case-insensitive
+        let query = r#"
+            VISUALISE x, y
+            DRAW point
+            SCALE x FROM [0, NULL]
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        let input_range = scales[0].input_range.as_ref().unwrap();
+        assert!(matches!(&input_range[1], ArrayElement::Null));
+    }
+
+    #[test]
+    fn test_scale_from_with_null() {
+        // Scale with partial input range: explicit start, infer end
+        // Note: DATE/DATETIME are no longer scale types - temporal handling is done
+        // via transforms that are automatically inferred from column data types
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line
+            SCALE x FROM ['2024-01-01', null]
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        assert_eq!(scales.len(), 1);
+
+        let input_range = scales[0].input_range.as_ref().unwrap();
+        assert_eq!(input_range.len(), 2);
+        assert!(matches!(&input_range[0], ArrayElement::String(s) if s == "2024-01-01"));
+        assert!(matches!(&input_range[1], ArrayElement::Null));
+    }
+
+    #[test]
+    fn test_scale_via_date_transform() {
+        // Explicit date transform via VIA clause
+        let query = r#"
+            VISUALISE date AS x, value AS y
+            DRAW line
+            SCALE x VIA date
+        "#;
+
+        let specs = parse_test_query(query).unwrap();
+        let scales = &specs[0].scales;
+        assert_eq!(scales.len(), 1);
+        assert_eq!(scales[0].aesthetic, "x");
+        assert!(scales[0].transform.is_some());
+        assert_eq!(scales[0].transform.as_ref().unwrap().name(), "date");
     }
 }

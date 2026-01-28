@@ -572,7 +572,8 @@ mod integration_tests {
         assert_eq!(vl_spec["layer"].as_array().unwrap().len(), 2);
 
         // Verify the color aesthetic is mapped to layer-indexed synthetic columns
-        let layer0_color = &vl_spec["layer"][0]["encoding"]["linetype"];
+        // Note: linetype is mapped to Vega-Lite's strokeDash channel
+        let layer0_color = &vl_spec["layer"][0]["encoding"]["strokeDash"];
         let layer1_color = &vl_spec["layer"][1]["encoding"]["shape"];
 
         // Constants should be field-mapped to layer-indexed columns
@@ -633,7 +634,6 @@ mod integration_tests {
             DRAW point MAPPING revenue AS y, 'value2' AS stroke SETTING size => 30
             DRAW line MAPPING qty_scaled AS y, 'value3' AS stroke
             DRAW point MAPPING qty_scaled AS y, 'value4' AS stroke SETTING size => 30
-            SCALE x SETTING type => 'date'
             FACET region BY category
         "#;
 
@@ -722,7 +722,6 @@ mod integration_tests {
             VISUALISE date AS x, value AS y, 'value' AS stroke
             DRAW line
             DRAW point SETTING size => 50
-            SCALE x SETTING type => 'date'
         "#;
 
         let prepared =
@@ -753,7 +752,7 @@ mod integration_tests {
         let json_str = writer.write(&prepared.specs[0], &prepared.data).unwrap();
         let vl_spec: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        // Both layers should have color field-mapped to their indexed constant columns
+        // Both layers should have stroke field-mapped to their indexed constant columns
         assert_eq!(vl_spec["layer"].as_array().unwrap().len(), 2);
         assert_eq!(
             vl_spec["layer"][0]["encoding"]["stroke"]["field"]

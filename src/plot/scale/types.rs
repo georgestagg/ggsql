@@ -5,51 +5,67 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::super::types::ParameterValue;
+use super::super::types::{ArrayElement, ParameterValue};
+use super::scale_type::ScaleType;
+use super::transform::Transform;
 
 /// Scale configuration (from SCALE clause)
+///
+/// New syntax: `SCALE [TYPE] aesthetic [FROM ...] [TO ...] [VIA ...] [SETTING ...]`
+///
+/// Examples:
+/// - `SCALE DATE x`
+/// - `SCALE CONTINUOUS y FROM [0, 100]`
+/// - `SCALE DISCRETE color FROM ['A', 'B'] TO ['red', 'blue']`
+/// - `SCALE color TO viridis`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scale {
     /// The aesthetic this scale applies to
     pub aesthetic: String,
     /// Scale type (optional, inferred if not specified)
+    /// Now specified as modifier: SCALE DATE x, SCALE CONTINUOUS y
     pub scale_type: Option<ScaleType>,
-    /// Scale properties
+    /// Input range specification (FROM clause)
+    /// Maps to Vega-Lite's scale.domain
+    pub input_range: Option<Vec<ArrayElement>>,
+    /// Output range specification (TO clause)
+    /// Either explicit values or a named palette
+    pub output_range: Option<OutputRange>,
+    /// Transformation (VIA clause)
+    pub transform: Option<Transform>,
+    /// Additional scale properties (SETTING clause)
+    /// Note: `breaks` can be either a Number (count) or Array (explicit positions).
+    /// If scalar at parse time, it's converted to Array during resolution.
     pub properties: HashMap<String, ParameterValue>,
+    /// Whether this scale has been resolved (set by resolve() method)
+    /// Used to skip re-resolution of pre-resolved scales (e.g., Binned scales)
+    #[serde(default)]
+    pub resolved: bool,
 }
 
-/// Scale types
+impl Scale {
+    /// Create a new Scale with just an aesthetic name
+    pub fn new(aesthetic: impl Into<String>) -> Self {
+        Self {
+            aesthetic: aesthetic.into(),
+            scale_type: None,
+            input_range: None,
+            output_range: None,
+            transform: None,
+            properties: HashMap::new(),
+            resolved: false,
+        }
+    }
+}
+
+/// Output range specification (TO clause)
+/// Either explicit values or a named palette identifier
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ScaleType {
-    // Continuous scales
-    Linear,
-    Log10,
-    Log,
-    Log2,
-    Sqrt,
-    Reverse,
-
-    // Discrete scales
-    Ordinal,
-    Categorical,
-    Manual,
-
-    // Temporal scales
-    Date,
-    DateTime,
-    Time,
-
-    // Color palettes
-    Viridis,
-    Plasma,
-    Magma,
-    Inferno,
-    Cividis,
-    Diverging,
-    Sequential,
-
-    // Special
-    Identity,
+pub enum OutputRange {
+    /// Explicit array of values: TO ['red', 'blue']
+    Array(Vec<ArrayElement>),
+    /// Named palette identifier: TO viridis
+    Palette(String),
 }
 
 /// Guide configuration (from GUIDE clause)

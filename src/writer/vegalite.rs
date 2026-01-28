@@ -22,6 +22,7 @@
 
 use crate::naming;
 use crate::plot::layer::geom::{GeomAesthetics, GeomType};
+use crate::plot::scale::{linetype_to_stroke_dash, shape_to_svg_path, ScaleTypeKind};
 use crate::plot::{ArrayElement, Coord, CoordType, LiteralValue, ParameterValue};
 use crate::writer::Writer;
 use crate::{AestheticValue, DataFrame, Geom, GgsqlError, Plot, Result};
@@ -196,6 +197,124 @@ impl VegaLiteWriter {
         }
     }
 
+    /// Given a bin center value and breaks array, return (bin_start, bin_end).
+    ///
+    /// The breaks array contains bin edges [e0, e1, e2, ...]. Each bin center
+    /// is computed as (lower + upper) / 2. This function reverses that to find
+    /// which bin a center value belongs to.
+    fn center_to_bin_edges(center: f64, breaks: &[f64]) -> Option<(f64, f64)> {
+        for i in 0..breaks.len().saturating_sub(1) {
+            let lower = breaks[i];
+            let upper = breaks[i + 1];
+            let expected_center = (lower + upper) / 2.0;
+            if (center - expected_center).abs() < 1e-9 {
+                return Some((lower, upper));
+            }
+        }
+        None
+    }
+
+    /// Convert Polars DataFrame to Vega-Lite data values with bin columns.
+    ///
+    /// For columns with binned scales, this replaces the center value with bin_start
+    /// and adds a corresponding bin_end column.
+    fn dataframe_to_values_with_bins(
+        &self,
+        df: &DataFrame,
+        binned_columns: &HashMap<String, Vec<f64>>,
+    ) -> Result<Vec<Value>> {
+        let mut values = Vec::new();
+        let height = df.height();
+        let column_names = df.get_column_names();
+
+        for row_idx in 0..height {
+            let mut row_obj = Map::new();
+
+            for (col_idx, col_name) in column_names.iter().enumerate() {
+                let column = df.get_columns().get(col_idx).ok_or_else(|| {
+                    GgsqlError::WriterError(format!("Failed to get column {}", col_name))
+                })?;
+
+                // Get value from series and convert to JSON Value
+                let value = self.series_value_at(column.as_materialized_series(), row_idx)?;
+
+                // Check if this column has binned data
+                let col_name_str = col_name.to_string();
+                if let Some(breaks) = binned_columns.get(&col_name_str) {
+                    if let Some(center) = value.as_f64() {
+                        if let Some((start, end)) = Self::center_to_bin_edges(center, breaks) {
+                            // Replace center with bin_start
+                            row_obj.insert(col_name_str.clone(), json!(start));
+                            // Add bin_end column
+                            row_obj.insert(naming::bin_end_column(&col_name_str), json!(end));
+                            continue;
+                        }
+                    }
+                }
+
+                // Not binned or couldn't resolve edges - use original value
+                row_obj.insert(col_name.to_string(), value);
+            }
+
+            values.push(Value::Object(row_obj));
+        }
+
+        Ok(values)
+    }
+
+    /// Collect binned column information from spec.
+    ///
+    /// Returns a map of column name -> breaks array for all columns with binned scales.
+    fn collect_binned_columns(&self, spec: &Plot) -> HashMap<String, Vec<f64>> {
+        let mut binned_columns: HashMap<String, Vec<f64>> = HashMap::new();
+
+        for scale in &spec.scales {
+            // Check if this is a binned scale
+            let is_binned = scale
+                .scale_type
+                .as_ref()
+                .map(|st| st.scale_type_kind() == ScaleTypeKind::Binned)
+                .unwrap_or(false);
+
+            if !is_binned {
+                continue;
+            }
+
+            // Get breaks array from scale properties
+            if let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") {
+                let break_values: Vec<f64> = breaks
+                    .iter()
+                    .filter_map(|e| match e {
+                        ArrayElement::Number(v) => Some(*v),
+                        _ => None,
+                    })
+                    .collect();
+
+                if break_values.len() >= 2 {
+                    // Find column name for this aesthetic from all layers
+                    for layer in &spec.layers {
+                        if let Some(AestheticValue::Column { name: col, .. }) =
+                            layer.mappings.aesthetics.get(&scale.aesthetic)
+                        {
+                            binned_columns.insert(col.clone(), break_values.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        binned_columns
+    }
+
+    /// Check if an aesthetic has a binned scale in the spec.
+    fn is_binned_aesthetic(&self, aesthetic: &str, spec: &Plot) -> bool {
+        let primary = GeomAesthetics::primary_aesthetic(aesthetic);
+        spec.find_scale(primary)
+            .and_then(|s| s.scale_type.as_ref())
+            .map(|st| st.scale_type_kind() == ScaleTypeKind::Binned)
+            .unwrap_or(false)
+    }
+
     /// Map ggsql Geom to Vega-Lite mark type
     fn geom_to_mark(&self, geom: &Geom) -> String {
         match geom.geom_type() {
@@ -256,6 +375,42 @@ impl VegaLiteWriter {
         }
     }
 
+    /// Determine Vega-Lite field type from scale specification
+    fn determine_field_type_from_scale(
+        &self,
+        scale: &crate::plot::Scale,
+        inferred: &str,
+        aesthetic: &str,
+        identity_scale: &mut bool,
+    ) -> String {
+        // Use scale type if explicitly specified
+        if let Some(scale_type) = &scale.scale_type {
+            use crate::plot::ScaleTypeKind;
+            match scale_type.scale_type_kind() {
+                ScaleTypeKind::Continuous => "quantitative",
+                ScaleTypeKind::Discrete => "nominal",
+                ScaleTypeKind::Binned => "quantitative", // Binned data is still quantitative
+                ScaleTypeKind::Identity => {
+                    *identity_scale = true;
+                    inferred
+                }
+            }
+            .to_string()
+        } else if scale.input_range.is_some() {
+            // If domain is specified without explicit type:
+            // - For size/opacity: keep quantitative (domain sets range, not categories)
+            // - For color/x/y: treat as ordinal (discrete categories)
+            if aesthetic == "size" || aesthetic == "opacity" {
+                "quantitative".to_string()
+            } else {
+                "ordinal".to_string()
+            }
+        } else {
+            // Scale exists but no type specified, use inferred
+            inferred.to_string()
+        }
+    }
+
     /// Build encoding channel from aesthetic mapping
     ///
     /// The `titled_families` set tracks which aesthetic families have already received
@@ -274,63 +429,61 @@ impl VegaLiteWriter {
                 is_dummy,
                 ..
             } => {
-                // Check if there's a scale specification for this aesthetic
+                // Check if there's a scale specification for this aesthetic or its primary
+                // E.g., "xmin" should use the "x" scale
+                let primary = GeomAesthetics::primary_aesthetic(aesthetic);
                 let inferred = self.infer_field_type(df, col);
                 let mut identity_scale = false;
 
-                let field_type = if let Some(scale) = spec.find_scale(aesthetic) {
-                    // Use scale type if explicitly specified
-                    if let Some(scale_type) = &scale.scale_type {
-                        use crate::plot::ScaleType;
-                        match scale_type {
-                            ScaleType::Linear
-                            | ScaleType::Log10
-                            | ScaleType::Log
-                            | ScaleType::Log2
-                            | ScaleType::Sqrt
-                            | ScaleType::Reverse => "quantitative",
-                            ScaleType::Ordinal | ScaleType::Categorical | ScaleType::Manual => {
-                                "nominal"
-                            }
-                            ScaleType::Date | ScaleType::DateTime | ScaleType::Time => "temporal",
-                            ScaleType::Viridis
-                            | ScaleType::Plasma
-                            | ScaleType::Magma
-                            | ScaleType::Inferno
-                            | ScaleType::Cividis
-                            | ScaleType::Diverging
-                            | ScaleType::Sequential => "quantitative", // Color scales
-                            ScaleType::Identity => {
-                                identity_scale = true;
-                                inferred.as_str()
-                            }
-                        }
-                        .to_string()
-                    } else if scale.properties.contains_key("domain") {
-                        // If domain is specified without explicit type:
-                        // - For size/opacity: keep quantitative (domain sets range, not categories)
-                        // - For color/x/y: treat as ordinal (discrete categories)
-                        if aesthetic == "size" || aesthetic == "opacity" {
-                            "quantitative".to_string()
+                let field_type = if let Some(scale) = spec.find_scale(primary) {
+                    // Check if the transform indicates temporal data
+                    // (Transform takes precedence since it's resolved from column dtype)
+                    if let Some(ref transform) = scale.transform {
+                        if transform.is_temporal() {
+                            "temporal".to_string()
                         } else {
-                            "ordinal".to_string()
+                            // Non-temporal transform, fall through to scale type check
+                            self.determine_field_type_from_scale(
+                                scale,
+                                &inferred,
+                                aesthetic,
+                                &mut identity_scale,
+                            )
                         }
                     } else {
-                        // Scale exists but no type specified, infer from data
-                        inferred
+                        // No transform, check scale type
+                        self.determine_field_type_from_scale(
+                            scale,
+                            &inferred,
+                            aesthetic,
+                            &mut identity_scale,
+                        )
                     }
                 } else {
                     // No scale specification, infer from data
                     inferred
                 };
 
+                // Check if this aesthetic has a binned scale
+                let is_binned = spec
+                    .find_scale(primary)
+                    .and_then(|s| s.scale_type.as_ref())
+                    .map(|st| st.scale_type_kind() == ScaleTypeKind::Binned)
+                    .unwrap_or(false);
+
                 let mut encoding = json!({
                     "field": col,
                     "type": field_type,
                 });
 
+                // For binned scales, add bin: "binned" to enable Vega-Lite's binned data handling
+                // This allows proper axis tick placement at bin edges and range labels in legends
+                if is_binned {
+                    encoding["bin"] = json!("binned");
+                }
+
                 // Apply title only once per aesthetic family
-                let primary = GeomAesthetics::primary_aesthetic(aesthetic);
+                // (primary was already computed above for scale lookup)
                 if !titled_families.contains(primary) {
                     if let Some(ref labels) = spec.labels {
                         if let Some(label) = labels.labels.get(primary) {
@@ -342,51 +495,154 @@ impl VegaLiteWriter {
 
                 let mut scale_obj = serde_json::Map::new();
 
-                if let Some(scale) = spec.find_scale(aesthetic) {
+                // Use scale properties from the primary aesthetic's scale
+                // (same scale lookup as used above for field_type)
+                if let Some(scale) = spec.find_scale(primary) {
                     // Apply scale properties from SCALE if specified
-                    use crate::plot::{ArrayElement, ParameterValue};
+                    use crate::plot::{ArrayElement, OutputRange};
 
-                    // Apply domain
-                    if let Some(ParameterValue::Array(domain_values)) =
-                        scale.properties.get("domain")
-                    {
+                    // Apply domain from input_range (FROM clause)
+                    if let Some(ref domain_values) = scale.input_range {
                         let domain_json: Vec<Value> = domain_values
                             .iter()
                             .map(|elem| match elem {
                                 ArrayElement::String(s) => json!(s),
                                 ArrayElement::Number(n) => json!(n),
                                 ArrayElement::Boolean(b) => json!(b),
+                                ArrayElement::Null => json!(null),
                             })
                             .collect();
                         scale_obj.insert("domain".to_string(), json!(domain_json));
                     }
 
-                    // Apply range (explicit range property takes precedence over palette)
-                    if let Some(range_prop) = scale.properties.get("range") {
-                        if let ParameterValue::Array(range_values) = range_prop {
-                            let range_json: Vec<Value> = range_values
-                                .iter()
-                                .map(|elem| match elem {
-                                    ArrayElement::String(s) => json!(s),
-                                    ArrayElement::Number(n) => json!(n),
-                                    ArrayElement::Boolean(b) => json!(b),
-                                })
-                                .collect();
-                            scale_obj.insert("range".to_string(), json!(range_json));
+                    // Apply range from output_range (TO clause)
+                    if let Some(ref output_range) = scale.output_range {
+                        match output_range {
+                            OutputRange::Array(range_values) => {
+                                let range_json: Vec<Value> = range_values
+                                    .iter()
+                                    .map(|elem| match elem {
+                                        ArrayElement::String(s) => {
+                                            // For shape aesthetic, convert to SVG path
+                                            if aesthetic == "shape" {
+                                                if let Some(svg_path) = shape_to_svg_path(s) {
+                                                    json!(svg_path)
+                                                } else {
+                                                    // Unknown shape, pass through
+                                                    json!(s)
+                                                }
+                                            // For linetype aesthetic, convert to dash array
+                                            } else if aesthetic == "linetype" {
+                                                if let Some(dash_array) = linetype_to_stroke_dash(s)
+                                                {
+                                                    json!(dash_array)
+                                                } else {
+                                                    // Unknown linetype, pass through
+                                                    json!(s)
+                                                }
+                                            } else {
+                                                json!(s)
+                                            }
+                                        }
+                                        ArrayElement::Number(n) => json!(n),
+                                        ArrayElement::Boolean(b) => json!(b),
+                                        ArrayElement::Null => json!(null),
+                                    })
+                                    .collect();
+                                scale_obj.insert("range".to_string(), json!(range_json));
+                            }
+                            OutputRange::Palette(palette_name) => {
+                                // Named palette - expand to color scheme
+                                scale_obj.insert(
+                                    "scheme".to_string(),
+                                    json!(palette_name.to_lowercase()),
+                                );
+                            }
                         }
-                    } else if let Some(ParameterValue::Array(palette_values)) =
-                        scale.properties.get("palette")
-                    {
-                        // Apply palette as range (fallback for color scales)
-                        let range_json: Vec<Value> = palette_values
+                    }
+
+                    // Handle transform (VIA clause)
+                    if let Some(ref transform) = scale.transform {
+                        use crate::plot::scale::TransformKind;
+                        match transform.transform_kind() {
+                            TransformKind::Identity => {} // Linear (default), no additional scale properties needed
+                            TransformKind::Log10 => {
+                                scale_obj.insert("type".to_string(), json!("log"));
+                                scale_obj.insert("base".to_string(), json!(10));
+                                scale_obj.insert("zero".to_string(), json!(false));
+                            }
+                            TransformKind::Log => {
+                                // Natural logarithm - Vega-Lite uses "log" with base e
+                                scale_obj.insert("type".to_string(), json!("log"));
+                                scale_obj.insert("base".to_string(), json!(std::f64::consts::E));
+                                scale_obj.insert("zero".to_string(), json!(false));
+                            }
+                            TransformKind::Log2 => {
+                                scale_obj.insert("type".to_string(), json!("log"));
+                                scale_obj.insert("base".to_string(), json!(2));
+                                scale_obj.insert("zero".to_string(), json!(false));
+                            }
+                            TransformKind::Sqrt => {
+                                scale_obj.insert("type".to_string(), json!("sqrt"));
+                            }
+                            TransformKind::Asinh | TransformKind::PseudoLog => {
+                                scale_obj.insert("type".to_string(), json!("symlog"));
+                            }
+                            // Temporal transforms are identity in numeric space;
+                            // the field type ("temporal") is set based on the transform kind
+                            TransformKind::Date | TransformKind::DateTime | TransformKind::Time => {
+                            }
+                        }
+                    }
+
+                    // Handle reverse property (SETTING clause)
+                    use crate::plot::ParameterValue;
+                    if let Some(ParameterValue::Boolean(true)) = scale.properties.get("reverse") {
+                        scale_obj.insert("reverse".to_string(), json!(true));
+                    }
+
+                    // Handle resolved breaks -> axis.values or legend.values
+                    // breaks is stored as Array in properties after resolution
+                    // For binned scales, we still need to set axis.values manually because
+                    // Vega-Lite's automatic tick placement with bin:"binned" only works for equal-width bins
+                    if let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") {
+                        use crate::plot::ArrayElement;
+                        let values: Vec<Value> = breaks
                             .iter()
-                            .map(|elem| match elem {
+                            .map(|e| match e {
                                 ArrayElement::String(s) => json!(s),
                                 ArrayElement::Number(n) => json!(n),
                                 ArrayElement::Boolean(b) => json!(b),
+                                ArrayElement::Null => json!(null),
                             })
                             .collect();
-                        scale_obj.insert("range".to_string(), json!(range_json));
+
+                        // Positional aesthetics use axis.values, others use legend.values
+                        if matches!(
+                            aesthetic,
+                            "x" | "y" | "xmin" | "xmax" | "ymin" | "ymax" | "xend" | "yend"
+                        ) {
+                            // Add to axis object
+                            if !encoding.get("axis").is_some_and(|v| v.is_null()) {
+                                let axis = encoding.get_mut("axis").and_then(|v| v.as_object_mut());
+                                if let Some(axis_map) = axis {
+                                    axis_map.insert("values".to_string(), json!(values));
+                                } else {
+                                    encoding["axis"] = json!({"values": values});
+                                }
+                            }
+                        } else {
+                            // Add to legend object for non-positional aesthetics
+                            if !encoding.get("legend").is_some_and(|v| v.is_null()) {
+                                let legend =
+                                    encoding.get_mut("legend").and_then(|v| v.as_object_mut());
+                                if let Some(legend_map) = legend {
+                                    legend_map.insert("values".to_string(), json!(values));
+                                } else {
+                                    encoding["legend"] = json!({"values": values});
+                                }
+                            }
+                        }
                     }
                 }
                 // We don't automatically want to include 0 in our position scales
@@ -424,7 +680,13 @@ impl VegaLiteWriter {
     /// Map ggsql aesthetic name to Vega-Lite encoding channel name
     fn map_aesthetic_name(&self, aesthetic: &str) -> String {
         match aesthetic {
-            "fill" => "color",
+            // Line aesthetics
+            "linetype" => "strokeDash",
+            "linewidth" => "strokeWidth",
+            // Text aesthetics
+            "label" => "text",
+            // All other aesthetics pass through directly
+            // (fill and stroke map to Vega-Lite's separate fill/stroke channels)
             _ => aesthetic,
         }
         .to_string()
@@ -648,8 +910,8 @@ impl VegaLiteWriter {
                 }
                 _ if self.is_aesthetic_name(prop_name) => {
                     // Aesthetic domain specification
-                    if let Some(domain) = self.extract_domain(prop_value)? {
-                        self.apply_aesthetic_domain(vl_spec, prop_name, domain)?;
+                    if let Some(domain) = self.extract_input_range(prop_value)? {
+                        self.apply_aesthetic_input_range(vl_spec, prop_name, domain)?;
                     }
                 }
                 _ => {
@@ -866,7 +1128,7 @@ impl VegaLiteWriter {
         }
     }
 
-    fn extract_domain(&self, value: &ParameterValue) -> Result<Option<Vec<Value>>> {
+    fn extract_input_range(&self, value: &ParameterValue) -> Result<Option<Vec<Value>>> {
         match value {
             ParameterValue::Array(arr) => {
                 let domain: Vec<Value> = arr
@@ -875,6 +1137,7 @@ impl VegaLiteWriter {
                         ArrayElement::String(s) => json!(s),
                         ArrayElement::Number(n) => json!(n),
                         ArrayElement::Boolean(b) => json!(b),
+                        ArrayElement::Null => json!(null),
                     })
                     .collect();
                 Ok(Some(domain))
@@ -909,7 +1172,7 @@ impl VegaLiteWriter {
         Ok(())
     }
 
-    fn apply_aesthetic_domain(
+    fn apply_aesthetic_input_range(
         &self,
         vl_spec: &mut Value,
         aesthetic: &str,
@@ -1051,10 +1314,18 @@ impl Writer for VegaLiteWriter {
             }
         }
 
+        // Collect binned column information from spec
+        let binned_columns = self.collect_binned_columns(spec);
+
         // Build datasets - convert all DataFrames to Vega-Lite format
+        // For binned columns, replace center values with bin_start and add bin_end columns
         let mut datasets = Map::new();
         for (key, df) in data {
-            let values = self.dataframe_to_values(df)?;
+            let values = if binned_columns.is_empty() {
+                self.dataframe_to_values(df)?
+            } else {
+                self.dataframe_to_values_with_bins(df, &binned_columns)?
+            };
             datasets.insert(key.clone(), json!(values));
         }
         vl_spec["datasets"] = Value::Object(datasets);
@@ -1134,6 +1405,18 @@ impl Writer for VegaLiteWriter {
                 let channel_encoding =
                     self.build_encoding_channel(aesthetic, value, df, spec, &mut titled_families)?;
                 encoding.insert(channel_name, channel_encoding);
+
+                // For binned positional aesthetics (x, y), add x2/y2 channel with bin_end column
+                // This enables proper bin width rendering in Vega-Lite
+                if matches!(aesthetic.as_str(), "x" | "y")
+                    && self.is_binned_aesthetic(aesthetic, spec)
+                {
+                    if let AestheticValue::Column { name: col, .. } = value {
+                        let end_col = naming::bin_end_column(col);
+                        let end_channel = format!("{}2", aesthetic); // "x2" or "y2"
+                        encoding.insert(end_channel, json!({"field": end_col}));
+                    }
+                }
             }
 
             // Also add aesthetic parameters from SETTING as literal encodings
@@ -1298,7 +1581,7 @@ impl Writer for VegaLiteWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plot::{Labels, Layer, LiteralValue, ParameterValue};
+    use crate::plot::{Labels, Layer, LiteralValue, ParameterValue, Scale};
     use std::collections::HashMap;
 
     /// Helper to wrap a DataFrame in a data map for testing
@@ -1321,8 +1604,19 @@ mod tests {
     #[test]
     fn test_aesthetic_name_mapping() {
         let writer = VegaLiteWriter::new();
+        // Pass-through aesthetics (including fill and stroke for separate color control)
         assert_eq!(writer.map_aesthetic_name("x"), "x");
-        assert_eq!(writer.map_aesthetic_name("fill"), "color");
+        assert_eq!(writer.map_aesthetic_name("y"), "y");
+        assert_eq!(writer.map_aesthetic_name("color"), "color");
+        assert_eq!(writer.map_aesthetic_name("fill"), "fill");
+        assert_eq!(writer.map_aesthetic_name("stroke"), "stroke");
+        assert_eq!(writer.map_aesthetic_name("opacity"), "opacity");
+        assert_eq!(writer.map_aesthetic_name("size"), "size");
+        assert_eq!(writer.map_aesthetic_name("shape"), "shape");
+        // Mapped aesthetics
+        assert_eq!(writer.map_aesthetic_name("linetype"), "strokeDash");
+        assert_eq!(writer.map_aesthetic_name("linewidth"), "strokeWidth");
+        assert_eq!(writer.map_aesthetic_name("label"), "text");
     }
 
     #[test]
@@ -1751,8 +2045,8 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        // 'fill' should be mapped to 'color' in Vega-Lite
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "region");
+        // 'fill' maps directly to Vega-Lite's 'fill' channel
+        assert_eq!(vl_spec["layer"][0]["encoding"]["fill"]["field"], "region");
     }
 
     #[test]
@@ -1866,7 +2160,8 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(vl_spec["layer"][0]["encoding"]["linetype"]["value"], true);
+        // linetype is mapped to strokeDash in Vega-Lite
+        assert_eq!(vl_spec["layer"][0]["encoding"]["strokeDash"]["value"], true);
     }
 
     #[test]
@@ -2653,7 +2948,7 @@ mod tests {
     }
 
     #[test]
-    fn test_guide_fill_maps_to_color() {
+    fn test_guide_fill_applies_to_fill_channel() {
         use crate::plot::{Guide, GuideType, ParameterValue};
 
         let writer = VegaLiteWriter::new();
@@ -2674,7 +2969,7 @@ mod tests {
             );
         spec.layers.push(layer);
 
-        // Add guide for fill (should map to color)
+        // Add guide for fill
         let mut properties = HashMap::new();
         properties.insert(
             "title".to_string(),
@@ -2696,10 +2991,10 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        // fill should be mapped to color channel
-        assert_eq!(vl_spec["layer"][0]["encoding"]["color"]["field"], "region");
+        // fill maps to Vega-Lite fill channel
+        assert_eq!(vl_spec["layer"][0]["encoding"]["fill"]["field"], "region");
         assert_eq!(
-            vl_spec["layer"][0]["encoding"]["color"]["legend"]["title"],
+            vl_spec["layer"][0]["encoding"]["fill"]["legend"]["title"],
             "Region"
         );
     }
@@ -2900,7 +3195,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coord_cartesian_aesthetic_domain() {
+    fn test_coord_cartesian_aesthetic_input_range() {
         use crate::plot::Coord;
 
         let writer = VegaLiteWriter::new();
@@ -3747,7 +4042,7 @@ mod tests {
 
     #[test]
     fn test_aesthetic_in_setting_literal_encoding() {
-        // Test that aesthetics in SETTING (e.g., SETTING color => 'red') are encoded as literals
+        // Test that aesthetics in SETTING (e.g., SETTING stroke => 'red') are encoded as literals
         let writer = VegaLiteWriter::new();
 
         let mut spec = Plot::new();
@@ -3761,7 +4056,7 @@ mod tests {
                 AestheticValue::standard_column("value".to_string()),
             )
             .with_parameter(
-                "color".to_string(),
+                "stroke".to_string(),
                 ParameterValue::String("red".to_string()),
             );
         spec.layers.push(layer);
@@ -3775,10 +4070,10 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        // Color should be encoded as a literal value
+        // Stroke should be encoded as a literal value in the stroke channel
         assert_eq!(
-            vl_spec["layer"][0]["encoding"]["color"]["value"], "red",
-            "SETTING color => 'red' should produce {{\"value\": \"red\"}}"
+            vl_spec["layer"][0]["encoding"]["stroke"]["value"], "red",
+            "SETTING stroke => 'red' should produce {{\"value\": \"red\"}} in stroke channel"
         );
     }
 
@@ -3837,11 +4132,11 @@ mod tests {
                 AestheticValue::standard_column("y".to_string()),
             )
             .with_aesthetic(
-                "color".to_string(),
+                "fill".to_string(),
                 AestheticValue::standard_column("category".to_string()),
             )
             .with_parameter(
-                "color".to_string(),
+                "fill".to_string(),
                 ParameterValue::String("red".to_string()),
             );
         spec.layers.push(layer);
@@ -3856,13 +4151,13 @@ mod tests {
         let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
         let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
 
-        // Color should be field-mapped (from MAPPING), not value (from SETTING)
+        // Fill should be field-mapped (from MAPPING), not value (from SETTING)
         assert_eq!(
-            vl_spec["layer"][0]["encoding"]["color"]["field"], "category",
+            vl_spec["layer"][0]["encoding"]["fill"]["field"], "category",
             "MAPPING should take precedence over SETTING"
         );
         assert!(
-            vl_spec["layer"][0]["encoding"]["color"]["value"].is_null(),
+            vl_spec["layer"][0]["encoding"]["fill"]["value"].is_null(),
             "Should not have value encoding when MAPPING is present"
         );
     }
@@ -4052,5 +4347,433 @@ mod tests {
             !(ymin_has_title && ymax_has_title),
             "Only one of ymin/ymax should get the title (first wins per family)"
         );
+    }
+
+    #[test]
+    fn test_resolved_breaks_positional_axis_values() {
+        // Test that breaks (as Array) for positional aesthetics maps to axis.values
+        use crate::plot::scale::Scale;
+        use crate::plot::{ArrayElement, ParameterValue};
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("x".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a scale with breaks array for x
+        let mut scale = Scale::new("x");
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(25.0),
+                ArrayElement::Number(50.0),
+                ArrayElement::Number(75.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        let df = df! {
+            "x" => &[10, 50, 90],
+            "y" => &[1, 2, 3],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // The x encoding should have axis.values
+        let axis_values = &vl_spec["layer"][0]["encoding"]["x"]["axis"]["values"];
+        assert!(axis_values.is_array(), "axis.values should be an array");
+        assert_eq!(
+            axis_values.as_array().unwrap().len(),
+            5,
+            "axis.values should have 5 elements"
+        );
+        assert_eq!(axis_values[0], 0.0);
+        assert_eq!(axis_values[4], 100.0);
+    }
+
+    #[test]
+    fn test_resolved_breaks_color_legend_values() {
+        // Test that breaks (as Array) for non-positional aesthetics maps to legend.values
+        use crate::plot::scale::Scale;
+        use crate::plot::{ArrayElement, ParameterValue};
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("x".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            )
+            .with_aesthetic(
+                "color".to_string(),
+                AestheticValue::standard_column("z".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a scale with breaks array for color
+        let mut scale = Scale::new("color");
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(10.0),
+                ArrayElement::Number(50.0),
+                ArrayElement::Number(90.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        let df = df! {
+            "x" => &[1, 2, 3],
+            "y" => &[4, 5, 6],
+            "z" => &[10.0, 50.0, 90.0],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // The color encoding should have legend.values
+        let legend_values = &vl_spec["layer"][0]["encoding"]["color"]["legend"]["values"];
+        assert!(legend_values.is_array(), "legend.values should be an array");
+        assert_eq!(
+            legend_values.as_array().unwrap().len(),
+            3,
+            "legend.values should have 3 elements"
+        );
+        assert_eq!(legend_values[0], 10.0);
+        assert_eq!(legend_values[2], 90.0);
+    }
+
+    #[test]
+    fn test_resolved_breaks_string_values() {
+        // Test that breaks (as Array) with string values (e.g., dates) work correctly
+        use crate::plot::scale::{Scale, Transform};
+        use crate::plot::{ArrayElement, ParameterValue};
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("date".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a continuous scale with Date transform and breaks as string array
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(crate::plot::ScaleType::continuous());
+        scale.transform = Some(Transform::date()); // Temporal transform
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::String("2024-01-01".to_string()),
+                ArrayElement::String("2024-02-01".to_string()),
+                ArrayElement::String("2024-03-01".to_string()),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        let df = df! {
+            "date" => &["2024-01-15", "2024-02-15", "2024-03-15"],
+            "y" => &[1, 2, 3],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // The x encoding should have axis.values with date strings
+        let axis_values = &vl_spec["layer"][0]["encoding"]["x"]["axis"]["values"];
+        assert!(axis_values.is_array(), "axis.values should be an array");
+        assert_eq!(axis_values[0], "2024-01-01");
+        assert_eq!(axis_values[1], "2024-02-01");
+        assert_eq!(axis_values[2], "2024-03-01");
+    }
+
+    #[test]
+    fn test_center_to_bin_edges() {
+        // Test basic bin edge lookup
+        let breaks = vec![0.0, 10.0, 20.0, 30.0];
+
+        // Center of first bin (0+10)/2 = 5
+        let result = VegaLiteWriter::center_to_bin_edges(5.0, &breaks);
+        assert_eq!(result, Some((0.0, 10.0)));
+
+        // Center of second bin (10+20)/2 = 15
+        let result = VegaLiteWriter::center_to_bin_edges(15.0, &breaks);
+        assert_eq!(result, Some((10.0, 20.0)));
+
+        // Center of last bin (20+30)/2 = 25
+        let result = VegaLiteWriter::center_to_bin_edges(25.0, &breaks);
+        assert_eq!(result, Some((20.0, 30.0)));
+
+        // Value not matching any bin center
+        let result = VegaLiteWriter::center_to_bin_edges(7.0, &breaks);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_center_to_bin_edges_uneven_breaks() {
+        // Non-evenly-spaced breaks
+        let breaks = vec![0.0, 10.0, 25.0, 100.0];
+
+        // Center of [0, 10] = 5
+        assert_eq!(
+            VegaLiteWriter::center_to_bin_edges(5.0, &breaks),
+            Some((0.0, 10.0))
+        );
+
+        // Center of [10, 25] = 17.5
+        assert_eq!(
+            VegaLiteWriter::center_to_bin_edges(17.5, &breaks),
+            Some((10.0, 25.0))
+        );
+
+        // Center of [25, 100] = 62.5
+        assert_eq!(
+            VegaLiteWriter::center_to_bin_edges(62.5, &breaks),
+            Some((25.0, 100.0))
+        );
+    }
+
+    #[test]
+    fn test_binned_scale_adds_bin_encoding() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::bar())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("temperature".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("count".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a binned scale for x
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(10.0),
+                ArrayElement::Number(20.0),
+                ArrayElement::Number(30.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        // Data with bin center values (5, 15, 25)
+        let df = df! {
+            "temperature" => &[5.0, 15.0, 25.0],
+            "count" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // The x encoding should have bin: "binned"
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x"]["bin"],
+            json!("binned"),
+            "Binned scale should add bin: \"binned\" to encoding"
+        );
+
+        // Should also have x2 channel for bin end
+        assert!(
+            vl_spec["layer"][0]["encoding"]["x2"].is_object(),
+            "Binned x scale should add x2 channel"
+        );
+        assert_eq!(
+            vl_spec["layer"][0]["encoding"]["x2"]["field"],
+            naming::bin_end_column("temperature")
+        );
+    }
+
+    #[test]
+    fn test_binned_scale_transforms_data() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::bar())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("value".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("count".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a binned scale
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(10.0),
+                ArrayElement::Number(20.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        // Data with bin center values: 5 (center of [0, 10]), 15 (center of [10, 20])
+        let df = df! {
+            "value" => &[5.0, 15.0],
+            "count" => &[100, 200],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // Check that data was transformed: center values replaced with bin_start
+        let data = &vl_spec["datasets"][naming::GLOBAL_DATA_KEY];
+
+        // First row: center 5 -> bin_start 0
+        assert_eq!(
+            data[0]["value"], 0.0,
+            "Bin center should be replaced with bin_start"
+        );
+        // First row should have bin_end column
+        assert_eq!(
+            data[0][naming::bin_end_column("value")],
+            10.0,
+            "Should have bin_end column"
+        );
+
+        // Second row: center 15 -> bin_start 10
+        assert_eq!(data[1]["value"], 10.0);
+        assert_eq!(data[1][naming::bin_end_column("value")], 20.0);
+    }
+
+    #[test]
+    fn test_binned_scale_sets_axis_values_from_breaks() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::bar())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("temp".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("count".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a binned scale with breaks (including uneven spacing)
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(10.0),
+                ArrayElement::Number(25.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        let df = df! {
+            "temp" => &[5.0, 17.5, 62.5],
+            "count" => &[10, 20, 30],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // For binned scales with arbitrary breaks, axis.values should be set
+        // to the breaks array for proper tick placement at bin edges
+        let axis_values = &vl_spec["layer"][0]["encoding"]["x"]["axis"]["values"];
+        assert!(
+            axis_values.is_array(),
+            "Binned scale should set axis.values"
+        );
+        assert_eq!(axis_values[0], 0.0);
+        assert_eq!(axis_values[1], 10.0);
+        assert_eq!(axis_values[2], 25.0);
+        assert_eq!(axis_values[3], 100.0);
+    }
+
+    #[test]
+    fn test_non_binned_scale_still_sets_axis_values() {
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        let layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "x".to_string(),
+                AestheticValue::standard_column("x".to_string()),
+            )
+            .with_aesthetic(
+                "y".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            );
+        spec.layers.push(layer);
+
+        // Add a continuous (non-binned) scale with breaks
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(crate::plot::ScaleType::continuous());
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(0.0),
+                ArrayElement::Number(50.0),
+                ArrayElement::Number(100.0),
+            ]),
+        );
+        spec.scales.push(scale);
+
+        let df = df! {
+            "x" => &[10, 60, 90],
+            "y" => &[1, 2, 3],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+
+        // For non-binned scales, axis.values should still be set
+        let axis_values = &vl_spec["layer"][0]["encoding"]["x"]["axis"]["values"];
+        assert!(
+            axis_values.is_array(),
+            "Non-binned scale should set axis.values"
+        );
+        assert_eq!(axis_values[0], 0.0);
+        assert_eq!(axis_values[1], 50.0);
+        assert_eq!(axis_values[2], 100.0);
     }
 }

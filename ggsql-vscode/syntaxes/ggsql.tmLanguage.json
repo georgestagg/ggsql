@@ -304,6 +304,14 @@
       "end": "(?i)(?=\\b(DRAW|SCALE|COORD|FACET|LABEL|GUIDE|THEME|VISUALISE|VISUALIZE|SELECT|WHERE|WITH)\\b)",
       "patterns": [
         {
+          "name": "keyword.control.scale-modifier.ggsql",
+          "match": "\\b(?i:CONTINUOUS|DISCRETE|BINNED)\\b"
+        },
+        {
+          "name": "keyword.other.ggsql",
+          "match": "\\b(?i:TO|VIA)\\b"
+        },
+        {
           "name": "constant.language.scale-type.ggsql",
           "match": "\\b(linear|log|log10|log2|sqrt|reverse|categorical|ordinal|date|datetime|time|viridis|plasma|magma|inferno|cividis|diverging|sequential|identity|manual)\\b"
         },

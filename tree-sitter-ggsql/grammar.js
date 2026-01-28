@@ -371,7 +371,7 @@ module.exports = grammar({
 
     // VISUALISE keyword as explicit high-precedence token
     visualise_keyword: $ => token(prec(10, choice(
-      caseInsensitive("VISUALISE"), 
+      caseInsensitive("VISUALISE"),
       caseInsensitive("VISUALIZE")
     ))),
 
@@ -491,7 +491,8 @@ module.exports = grammar({
     parameter_value: $ => choice(
       $.string,
       $.number,
-      $.boolean
+      $.boolean,
+      $.null_literal
     ),
 
     // PARTITION BY clause for grouping: PARTITION BY category, region
@@ -623,33 +624,51 @@ module.exports = grammar({
       $.boolean
     ),
 
-    // SCALE clause - SCALE aesthetic SETTING prop => value, ...
+    // SCALE clause - SCALE [TYPE] aesthetic [FROM ...] [TO ...] [VIA ...] [SETTING ...]
+    // Examples:
+    //   SCALE DATE x
+    //   SCALE CONTINUOUS y FROM [0, 100]
+    //   SCALE DISCRETE color FROM ['A', 'B'] TO ['red', 'blue']
+    //   SCALE color TO viridis
+    //   SCALE x FROM [0, 100] SETTING breaks => '1 month'
     scale_clause: $ => seq(
       caseInsensitive('SCALE'),
+      optional($.scale_type_identifier),  // optional type before aesthetic
       $.aesthetic_name,
-      caseInsensitive('SETTING'),
-      optional(seq(
-        $.scale_property,
-        repeat(seq(',', $.scale_property))
-      ))
+      optional($.scale_from_clause),
+      optional($.scale_to_clause),
+      optional($.scale_via_clause),
+      optional($.setting_clause)  // reuse existing setting_clause from DRAW
     ),
 
-    scale_property: $ => seq(
-      $.scale_property_name,
-      '=>',
-      $.scale_property_value
+    // Scale types - describe the nature of the data
+    // Note: DATE/DATETIME are no longer scale types - temporal handling is done
+    // via transforms that are automatically inferred from column data types
+    scale_type_identifier: $ => choice(
+      caseInsensitive('CONTINUOUS'),  // continuous numeric data
+      caseInsensitive('DISCRETE'),    // categorical/discrete data
+      caseInsensitive('BINNED')       // binned/bucketed data
     ),
 
-    scale_property_name: $ => choice(
-      'type', 'limits', 'breaks', 'labels', 'expand',
-      'direction', 'na_value', 'palette', 'domain', 'range'
-    ),
-
-    scale_property_value: $ => choice(
-      $.string,
-      $.number,
-      $.boolean,
+    // FROM clause - input range specification
+    scale_from_clause: $ => seq(
+      caseInsensitive('FROM'),
       $.array
+    ),
+
+    // TO clause - output range (explicit array or named palette)
+    scale_to_clause: $ => seq(
+      caseInsensitive('TO'),
+      choice(
+        $.array,      // ['red', 'blue'] - explicit values
+        $.identifier  // viridis - named palette
+      )
+    ),
+
+    // VIA clause - transformation method (reserved for future use)
+    scale_via_clause: $ => seq(
+      caseInsensitive('VIA'),
+      $.identifier
     ),
 
     // FACET clause - FACET ... SETTING scales => ...
@@ -711,7 +730,7 @@ module.exports = grammar({
 
     coord_property_name: $ => choice(
       'xlim', 'ylim', 'ratio', 'theta', 'clip',
-      // Also allow aesthetic names as properties (for domain specification)
+      // Also allow aesthetic names as properties (for range specification)
       $.aesthetic_name
     ),
 
@@ -839,8 +858,11 @@ module.exports = grammar({
     array_element: $ => choice(
       $.string,
       $.number,
-      $.boolean
+      $.boolean,
+      $.null_literal
     ),
+
+    null_literal: $ => caseInsensitive('NULL'),
 
     // Comments
     comment: $ => choice(

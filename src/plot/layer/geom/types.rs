@@ -38,7 +38,7 @@ impl GeomAesthetics {
     /// Get the primary aesthetic for a given aesthetic name.
     ///
     /// Returns the primary family aesthetic if the input is a variant (e.g., "xmin" -> "x"),
-    /// or returns the aesthetic itself if it's already primary (e.g., "x" -> "x", "color" -> "color").
+    /// or returns the aesthetic itself if it's already primary (e.g., "x" -> "x", "fill" -> "fill").
     pub fn primary_aesthetic(aesthetic: &str) -> &str {
         AESTHETIC_FAMILIES
             .iter()
