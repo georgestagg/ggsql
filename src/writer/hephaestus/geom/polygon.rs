@@ -1,4 +1,5 @@
-//! `point` geom: one marker per row.
+//! `polygon` geom → hephaestus `PolygonGeom`. Rows are grouped into separate
+//! closed polygons by the layer's partition columns.
 
 use hephaestus::color::rgb8;
 
@@ -21,7 +22,6 @@ pub fn spec(_ctx: &Ctx) -> GeomSpec {
             MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("stroke", "stroke", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("size", "size", RangeKind::Number, MatDefault::Number(3.0)),
             MaterialSpec::new(
                 "opacity",
                 "fill_opacity",
@@ -34,10 +34,15 @@ pub fn spec(_ctx: &Ctx) -> GeomSpec {
                 RangeKind::Number,
                 MatDefault::None,
             ),
-            MaterialSpec::new("shape", "shape", RangeKind::Shape, MatDefault::None),
+            MaterialSpec::new(
+                "linetype",
+                "linetype",
+                RangeKind::Linetype,
+                MatDefault::None,
+            ),
         ],
         raw_strings: &[],
         raw_numbers: vec![],
-        grouped: false,
+        grouped: true,
     }
 }

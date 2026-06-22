@@ -1,4 +1,5 @@
-//! `point` geom: one marker per row.
+//! `text` geom → hephaestus `TextGeom`. The `label` aesthetic carries the
+//! string (set raw, unscaled); position + color/size map as usual.
 
 use hephaestus::color::rgb8;
 
@@ -20,23 +21,15 @@ pub fn spec(_ctx: &Ctx) -> GeomSpec {
             ),
             MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("stroke", "stroke", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("size", "size", RangeKind::Number, MatDefault::Number(3.0)),
+            MaterialSpec::new("fontsize", "size", RangeKind::Number, MatDefault::None),
             MaterialSpec::new(
                 "opacity",
                 "fill_opacity",
                 RangeKind::Number,
-                MatDefault::Number(0.8),
-            ),
-            MaterialSpec::new(
-                "linewidth",
-                "linewidth",
-                RangeKind::Number,
                 MatDefault::None,
             ),
-            MaterialSpec::new("shape", "shape", RangeKind::Shape, MatDefault::None),
         ],
-        raw_strings: &[],
+        raw_strings: &[("text", "label")],
         raw_numbers: vec![],
         grouped: false,
     }

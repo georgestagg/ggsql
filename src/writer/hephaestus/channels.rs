@@ -1,14 +1,14 @@
 //! Bridging ggsql aesthetic mappings and DataFrame columns to the typed data
 //! hephaestus geoms consume.
 
-use arrow::array::{Array, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::datatypes::DataType;
 
 use hephaestus::color::Color;
 use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
 
 use super::scales::parse_color;
-use crate::array_util::{as_f64, as_str, cast_array};
+use crate::array_util::{as_f64, as_str, cast_array, value_to_string};
 use crate::{AestheticValue, DataFrame, Layer, Result};
 
 /// A column extracted in the type hephaestus expects for a channel: numeric
@@ -96,6 +96,30 @@ pub fn column_to_strings(df: &DataFrame, name: &str) -> Result<Vec<String>> {
             }
         })
         .collect())
+}
+
+/// Build a per-row group key from the layer's partition columns (concatenated
+/// values), used as the hephaestus `keys` for multi-vertex geoms. Returns
+/// `None` when there are no partition columns (single group).
+pub fn build_group_keys(df: &DataFrame, partition_by: &[String]) -> Result<Option<Vec<String>>> {
+    if partition_by.is_empty() {
+        return Ok(None);
+    }
+    let arrays: Vec<&ArrayRef> = partition_by
+        .iter()
+        .map(|c| df.column(c))
+        .collect::<Result<_>>()?;
+    let keys = (0..df.height())
+        .map(|i| {
+            let mut key = String::new();
+            for arr in &arrays {
+                key.push_str(&value_to_string(arr, i));
+                key.push('\u{1f}'); // unit separator avoids cross-column collisions
+            }
+            key
+        })
+        .collect();
+    Ok(Some(keys))
 }
 
 /// Read a color column (visual-space literal values) as parsed colors,

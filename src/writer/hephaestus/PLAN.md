@@ -287,6 +287,41 @@ axes (continuous + ggsql formatted breaks used for now); `linetype` material
 aesthetic (line geoms, Phase 3); ggsql's degenerate inferred log domain is
 worked around here but is worth fixing upstream in ggsql too.
 
+## Phase 3 — status: implemented
+
+All non-composite geoms render through a per-geom dispatch:
+point/line/path/smooth, bar/histogram/tile, area/ribbon/density, polygon,
+segment/range/rule, text. Single panel, Cartesian.
+
+- **Architecture.** `mod.rs` dispatches on `GeomType` to per-geom modules under
+  `geom/` that each declare a `GeomSpec` (position channels + material table +
+  raw string/number channels + grouping). `wiring.rs` holds the shared,
+  builder-generic helpers (`build_and_add`, `wire_positions`, `wire_material`,
+  scale/axis/legend/group-key logic) lifted out of the Phase-2 `mod.rs`.
+- **Grouping.** multi-vertex geoms (line/path/area/ribbon/polygon) derive
+  hephaestus `keys` from `layer.partition_by` via `channels::build_group_keys`
+  (concatenated partition-column values) — so e.g. a line colored by category
+  renders as one line per category.
+- **Orientation.** bar/histogram/area/ribbon/range consult
+  `is_transposed(layer)` and swap the value axis to the pos1-family when
+  transposed.
+- **Positions** bind to one `pos1`/`pos2` scale per axis (domain = union extent
+  of the family columns used); `RangeKind::Linetype` restored for line dashes.
+- Verified: 13 render tests (point/grouped-line/bar/histogram/area/ribbon/
+  segment/text/polygon/color/size/log + composite-reject); output eyeballed for
+  line/bar/area/segment/text; default + 1.86 builds, fmt, clippy clean.
+
+Known limitations (refinements, not blockers):
+- No domain expansion → data points/labels on the domain edge clip at the panel
+  boundary (same hephaestus gap noted in Phase 2).
+- Bars fill the full category band (no inter-bar gap); ggsql's `width` setting
+  isn't read yet.
+- Legend keys are always point glyphs; line/area legends could use line/rect
+  keys. (hephaestus supports `LegendKeySpec::line()`/`rect()`.)
+- Discrete-tile uses band edges best-effort; continuous/binned tile is exact.
+
+Deferred to Phase 3b: boxplot, violin (composite decomposition).
+
 ## 8. Key source references
 
 ggsql:

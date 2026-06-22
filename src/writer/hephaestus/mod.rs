@@ -3,11 +3,13 @@
 //! Renders a resolved ggsql `Spec` to PNG bytes via the [`hephaestus`] 2D scene
 //! renderer.
 //!
-//! **Scope** (see `src/writer/hephaestus/PLAN.md`): single-panel, single `point`
-//! layer in Cartesian coordinates. All scale types, transforms, and material
-//! aesthetics (fill/stroke/size/shape/opacity/linewidth) are supported, with
-//! axis titles and legends. Faceting, projections, and other geoms arrive in
-//! later phases; unsupported specs are rejected by [`HephaestusWriter::validate`].
+//! **Scope** (see `src/writer/hephaestus/PLAN.md`): single-panel, single-layer,
+//! Cartesian plots. All non-composite geoms (point/line/path/area/ribbon/bar/
+//! histogram/tile/polygon/segment/rule/range/text/density/smooth), all scale
+//! types/transforms, material aesthetics, axis titles, and legends are
+//! supported. Faceting, projections, and composite geoms (boxplot/violin)
+//! arrive in later phases; unsupported specs are rejected by
+//! [`HephaestusWriter::validate`].
 //!
 //! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
 //! (hardware or software, e.g. lavapipe) is required at render time.
@@ -15,39 +17,27 @@
 mod channels;
 mod geom;
 mod scales;
+mod wiring;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use hephaestus::backend::vello::VelloRenderer;
 use hephaestus::color::{rgb8, Color};
 use hephaestus::composition::{Composition, Patch, Span};
 use hephaestus::geometry::Size;
-use hephaestus::plot::chrome::axis::{Axis, AxisPlacement};
-use hephaestus::plot::chrome::legend::{Legend, LegendKeySpec};
-use hephaestus::plot::geom::Raw;
-use hephaestus::plot::scale::Scale as HScale;
-use hephaestus::plot::{Plot as HPlot, PlotComposition, PointGeom};
-use hephaestus::scales::chrome::{AxisSide, LegendSide};
+use hephaestus::plot::{Plot as HPlot, PlotComposition};
 use hephaestus::shape::ShapeRegistry;
 use hephaestus::Renderer;
 
-use crate::plot::layer::geom::GeomType;
+use crate::plot::layer::is_transposed;
 use crate::plot::projection::coord::CoordKind;
-use crate::plot::ScaleTypeKind;
 use crate::writer::Writer;
-use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Plot, Result};
+use crate::{DataFrame, GgsqlError, Layer, Plot, Result};
 
-use channels::{
-    aesthetic_column_name, column_to_channel, column_to_colors, column_to_f64, column_to_strings,
-};
-use scales::{build_scale, RangeKind};
+use wiring::{Ctx, Wiring};
 
 /// Internal patch id for the single panel.
 const PANEL_ID: &str = "ggsql_panel";
-/// ggsql point geom defaults (mirrors `plot/layer/geom/point.rs`), applied when
-/// a channel isn't otherwise set so output matches ggsql.
-const DEFAULT_SIZE: f64 = 3.0;
-const DEFAULT_OPACITY: f64 = 0.8;
 
 /// Writer that renders a ggsql plot to a PNG image via hephaestus.
 ///
@@ -101,9 +91,9 @@ impl Writer for HephaestusWriter {
             )));
         }
         let geom_type = spec.layers[0].geom.geom_type();
-        if geom_type != GeomType::Point {
+        if !geom::is_supported(geom_type) {
             return Err(GgsqlError::WriterError(format!(
-                "hephaestus writer supports only the 'point' geom, got '{geom_type}'"
+                "hephaestus writer does not support the '{geom_type}' geom yet"
             )));
         }
         Ok(())
@@ -114,122 +104,31 @@ impl Writer for HephaestusWriter {
 
         let layer = &spec.layers[0];
         let df = layer_dataframe(layer, data)?;
+        let ctx = Ctx {
+            spec,
+            layer,
+            df,
+            transposed: is_transposed(layer),
+        };
 
-        let mut builder = PointGeom::builder();
-        let mut registered: Vec<(String, HScale)> = Vec::new();
-        let mut bindings: Vec<(&'static str, String)> = Vec::new();
-        let mut axes: Vec<Axis> = Vec::new();
-        let mut legends: Vec<Legend> = Vec::new();
-
-        // ── Positions ────────────────────────────────────────────────────
-        for (aesthetic, channel, side) in [
-            ("pos1", "x", AxisSide::Bottom),
-            ("pos2", "y", AxisSide::Left),
-        ] {
-            let col = aesthetic_column_name(layer, aesthetic).ok_or_else(|| {
-                GgsqlError::WriterError(format!("point layer has no {aesthetic} mapping"))
-            })?;
-            let data = column_to_channel(df, col)?;
-            let extent = data.extent();
-            let scale = build_scale(spec.find_scale(aesthetic), extent, RangeKind::Position);
-            data.apply(&mut builder, channel);
-            registered.push((aesthetic.to_string(), scale));
-            bindings.push((channel, aesthetic.to_string()));
-
-            let mut axis = Axis::rail(aesthetic, AxisPlacement::Cartesian(side));
-            if let Some(title) = aesthetic_label(spec, layer, aesthetic) {
-                axis = axis.title(title);
-            }
-            axes.push(axis);
-        }
-
-        // ── Material aesthetics ──────────────────────────────────────────
-        let mut handled: HashSet<&str> = HashSet::new();
-        // Channels driven by the same data source and output kind share one
-        // scale (e.g. ggsql's `color` → fill + stroke); their legends then
-        // share a `domain_scale` and hephaestus collapses them.
-        let mut shared_scales: HashMap<(String, RangeKind), String> = HashMap::new();
-        for material in geom::point::MATERIAL {
-            if handled.contains(material.channel) {
-                continue;
-            }
-            let Some(col) = aesthetic_column_name(layer, material.aesthetic) else {
-                continue;
-            };
-            handled.insert(material.channel);
-
-            let scale = spec.find_scale(material.aesthetic);
-            let type_kind = scale
-                .and_then(|s| s.scale_type.as_ref())
-                .map(|st| st.scale_type_kind());
-            let data_mapped = scale.is_some() && type_kind != Some(ScaleTypeKind::Identity);
-
-            if data_mapped {
-                let channel_data = column_to_channel(df, col)?;
-                let extent = channel_data.extent();
-
-                let source = aesthetic_source(layer, material.aesthetic);
-                let scale_name = shared_scales
-                    .entry((source, material.kind))
-                    .or_insert_with(|| {
-                        let hs = build_scale(scale, extent, material.kind);
-                        registered.push((material.aesthetic.to_string(), hs));
-                        material.aesthetic.to_string()
-                    })
-                    .clone();
-
-                channel_data.apply(&mut builder, material.channel);
-                bindings.push((material.channel, scale_name.clone()));
-                legends.push(material_legend(
-                    &scale_name,
-                    material.channel,
-                    material.kind,
-                    type_kind,
-                    aesthetic_label(spec, layer, material.aesthetic),
-                ));
-            } else {
-                // Identity / literal: the column holds visual-space values.
-                match material.kind {
-                    RangeKind::Color => {
-                        builder.set(material.channel, Raw(column_to_colors(df, col)?));
-                    }
-                    RangeKind::Shape => {
-                        builder.set(material.channel, Raw(column_to_strings(df, col)?));
-                    }
-                    _ => {
-                        builder.set(material.channel, Raw(column_to_f64(df, col)?));
-                    }
-                }
-            }
-        }
-
-        // ── ggsql defaults for unset channels ────────────────────────────
-        if !handled.contains("fill") {
-            builder.set("fill", rgb8(0, 0, 0));
-        }
-        if !handled.contains("size") {
-            builder.set("size", DEFAULT_SIZE);
-        }
-        if !handled.contains("fill_opacity") {
-            builder.set("fill_opacity", DEFAULT_OPACITY);
-        }
-
-        // ── Assemble plot + composition ──────────────────────────────────
+        // Build the geom (+ its scales/axes/legends) through the shared wiring.
         let mut plot =
             HPlot::new(&single_panel(), PANEL_ID).shape_registry(ShapeRegistry::with_builtins());
-        for (channel, scale_name) in &bindings {
+        let mut w = Wiring::default();
+        geom::build_into_plot(&mut plot, &ctx, &mut w)?;
+
+        for (channel, scale_name) in &w.bindings {
             plot.set_binding(*channel, scale_name.clone());
         }
-        plot.add_geom(builder.build());
-        for axis in axes {
+        for axis in w.axes {
             plot.add_axis(axis);
         }
-        for legend in legends {
+        for legend in w.legends {
             plot.add_legend(legend);
         }
 
         let mut view = PlotComposition::new(single_panel());
-        for (name, scale) in registered {
+        for (name, scale) in w.registered {
             view.insert_scale(name, scale);
         }
         view.attach_plot(plot);
@@ -264,65 +163,6 @@ fn layer_dataframe<'a>(
     let key = layer.data_key.as_deref().unwrap_or("__ggsql_layer_0__");
     data.get(key)
         .ok_or_else(|| GgsqlError::WriterError(format!("no data found for layer key '{key}'")))
-}
-
-/// Resolve a label for an aesthetic: an explicit `LABEL` wins (`None`
-/// suppresses), otherwise the original mapped column name is the default.
-fn aesthetic_label(spec: &Plot, layer: &Layer, aesthetic: &str) -> Option<String> {
-    if let Some(labels) = &spec.labels {
-        if let Some(entry) = labels.labels.get(aesthetic) {
-            return entry.clone();
-        }
-    }
-    match layer.mappings.get(aesthetic) {
-        Some(AestheticValue::Column {
-            original_name: Some(name),
-            ..
-        }) => Some(name.clone()),
-        _ => None,
-    }
-}
-
-/// Identify a mapping's underlying data source — the original column name when
-/// known, else the internal column name. Lets color-family channels that share
-/// a source (ggsql's `color` → fill + stroke) collapse to one scale + legend.
-fn aesthetic_source(layer: &Layer, aesthetic: &str) -> String {
-    match layer.mappings.get(aesthetic) {
-        Some(AestheticValue::Column {
-            original_name: Some(name),
-            ..
-        }) => name.clone(),
-        Some(AestheticValue::Column { name, .. }) => name.clone(),
-        Some(AestheticValue::AnnotationColumn { name }) => name.clone(),
-        _ => aesthetic.to_string(),
-    }
-}
-
-/// Build a legend for a data-mapped material scale. Continuous color uses a
-/// colorbar; everything else a keyed point legend at the scale's breaks.
-fn material_legend(
-    scale_name: &str,
-    channel: &str,
-    kind: RangeKind,
-    type_kind: Option<ScaleTypeKind>,
-    title: Option<String>,
-) -> Legend {
-    let continuous_color = kind == RangeKind::Color
-        && matches!(
-            type_kind,
-            Some(ScaleTypeKind::Continuous) | Some(ScaleTypeKind::Binned)
-        );
-    let mut legend = if continuous_color {
-        Legend::colorbar(scale_name).side(LegendSide::Right)
-    } else {
-        Legend::new(scale_name)
-            .side(LegendSide::Right)
-            .key(LegendKeySpec::point().scaled(channel, scale_name))
-    };
-    if let Some(title) = title {
-        legend = legend.title(title);
-    }
-    legend
 }
 
 /// Render the composition to an RGBA8 buffer and encode it as PNG bytes.
@@ -426,12 +266,78 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_geom() {
+    fn renders_grouped_line() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS g UNION ALL SELECT 2, 3, 'a' \
+             UNION ALL SELECT 1, 1, 'b' UNION ALL SELECT 2, 2, 'b' \
+             VISUALISE x AS x, y AS y, g AS color DRAW line",
+        ));
+    }
+
+    #[test]
+    fn renders_bar() {
+        assert_png_or_skip(render(
+            "SELECT 'a' AS cat, 3 AS v UNION ALL SELECT 'b', 5 UNION ALL SELECT 'c', 2 \
+             VISUALISE cat AS x, v AS y DRAW bar",
+        ));
+    }
+
+    #[test]
+    fn renders_histogram() {
+        assert_png_or_skip(render(
+            "SELECT x FROM (VALUES (1),(2),(2),(3),(3),(3),(4),(4),(5)) t(x) \
+             VISUALISE x AS x DRAW histogram",
+        ));
+    }
+
+    #[test]
+    fn renders_area() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 4 UNION ALL SELECT 3, 3 \
+             VISUALISE x AS x, y AS y DRAW area",
+        ));
+    }
+
+    #[test]
+    fn renders_ribbon() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS lo, 3 AS hi UNION ALL SELECT 2, 2, 5 \
+             UNION ALL SELECT 3, 1, 4 \
+             VISUALISE x AS x, lo AS ymin, hi AS ymax DRAW ribbon",
+        ));
+    }
+
+    #[test]
+    fn renders_segment() {
+        assert_png_or_skip(render(
+            "SELECT 0 AS x, 0 AS y, 1 AS xend, 2 AS yend UNION ALL SELECT 1, 1, 2, 0 \
+             VISUALISE x AS x, y AS y, xend AS xend, yend AS yend DRAW segment",
+        ));
+    }
+
+    #[test]
+    fn renders_text() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'hi' AS lab UNION ALL SELECT 2, 3, 'there' \
+             VISUALISE x AS x, y AS y, lab AS label DRAW text",
+        ));
+    }
+
+    #[test]
+    fn renders_polygon() {
+        assert_png_or_skip(render(
+            "SELECT x, y FROM (VALUES (0,0),(2,0),(1,2)) t(x, y) \
+             VISUALISE x AS x, y AS y DRAW polygon",
+        ));
+    }
+
+    #[test]
+    fn rejects_composite_geom() {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
         let spec = reader
             .execute(
-                "SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 3 \
-                 VISUALISE x AS x, y AS y DRAW line",
+                "SELECT 1 AS g, 2 AS y UNION ALL SELECT 1, 5 UNION ALL SELECT 1, 3 \
+                 VISUALISE g AS x, y AS y DRAW boxplot",
             )
             .unwrap();
         let writer = HephaestusWriter::new(320, 240, 96.0);

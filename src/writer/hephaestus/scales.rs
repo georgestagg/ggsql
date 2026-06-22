@@ -9,8 +9,9 @@
 use std::sync::Arc;
 
 use hephaestus::color::{rgba, Color};
+use hephaestus::plot::geom::linetype::{dashdot, dashed, dotted, solid};
 use hephaestus::plot::scale::{self, Scale as HScale, TransformKind as HTransform};
-use hephaestus::scales::value::Value as HValue;
+use hephaestus::scales::value::{LinetypeStep, Value as HValue};
 
 use crate::plot::scale::TransformKind as GTransform;
 use crate::plot::{ArrayElement, OutputRange, Scale as GScale, ScaleTypeKind};
@@ -27,6 +28,8 @@ pub enum RangeKind {
     Number,
     /// Marker shape: names resolved against the plot's `ShapeRegistry`.
     Shape,
+    /// Line dash pattern: names → builtin linetype patterns.
+    Linetype,
 }
 
 /// Build a hephaestus scale from a resolved ggsql scale.
@@ -107,7 +110,20 @@ fn apply_output_range(hs: HScale, kind: RangeKind, values: &[ArrayElement]) -> H
         RangeKind::Shape => {
             hs.range_strings(values.iter().map(|e| Arc::from(e.to_key_string().as_str())))
         }
+        RangeKind::Linetype => {
+            hs.range_linetypes(values.iter().map(|e| map_linetype(&e.to_key_string())))
+        }
         RangeKind::Position => hs,
+    }
+}
+
+/// Map a ggsql linetype name to a hephaestus dash pattern; unknown → solid.
+fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
+    match name {
+        "dashed" | "longdash" => dashed(),
+        "dotted" => dotted(),
+        "dotdash" | "dashdot" | "twodash" => dashdot(),
+        _ => solid(),
     }
 }
 
