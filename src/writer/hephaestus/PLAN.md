@@ -1,0 +1,275 @@
+# Plan: a Hephaestus writer for ggsql
+
+A second `Writer` implementation that renders a resolved ggsql `Spec` to raster
+output via [`hephaestus`](https://github.com/posit-dev/hephaestus) — a
+backend-agnostic 2D scene renderer with a high-level grammar-of-graphics plot
+API. Intended as the eventual default writer, replacing the Vega-Lite JSON
+writer.
+
+Status: **planning**. No code written yet. This document is the design of
+record; update it as decisions land.
+
+## 1. Why this is a good fit
+
+ggsql and hephaestus are architecturally complementary and the seam is clean:
+
+| ggsql produces (resolved `Spec`) | hephaestus consumes |
+| --- | --- |
+| Per-layer `DataFrame`s with **raw values** in internal columns (`__ggsql_aes_pos1__`, …) | Geoms hold **raw columnar `Value` data** and map through scales at draw time |
+| Fully-resolved `Scale`s (type, domain, transform, breaks, formatted labels, palette) | `Scale` with `domain_*`, `with_transform`, `with_breaks_labeled`, `with_format`, `range_colors` |
+| Scale-type enum: Continuous/Discrete/Binned/Ordinal/Identity | **Identical** enum: Continuous/Discrete/Binned/Ordinal/Identity |
+| Transforms: log/log2/sqrt/square/asinh/pseudo_log/… | **Identical** `TransformKind` set (`PseudoLog` doc'd as "matching ggsql's pseudo_log") |
+| Coords: Cartesian / Polar / Map (pre-projected in SQL) | `Projection::Cartesian` / `Polar(PolarProjection)` / `Custom(CustomProjection)` |
+| Facets: Wrap / Grid | `composition::{grid, beside, stack}` + `PlotComposition` orchestrator |
+
+Decisive point: **ggsql resolves scale config but does not apply scales** — the
+DataFrame still holds raw values, and value→pixel mapping was always the
+renderer's job (Vega-Lite did it; hephaestus does it too). We feed hephaestus
+the raw columns plus `Scale` objects built from ggsql's resolved config. No
+data is recomputed.
+
+Confirmed during investigation:
+- hephaestus already implements the **full transform set** ggsql needs
+  (`src/scales/transform.rs`: `Log10/Log2/Log/Sqrt/Square/Exp*/Asinh/PseudoLog*`).
+  The "Identity-only in v1" note in its scales doc is stale.
+- ggsql resolves palettes → colors **in the writer**, not earlier
+  (`src/writer/vegalite/encoding.rs:501` via `lookup_palette` in
+  `src/plot/scale/palettes.rs`). The hephaestus writer reuses the same helper.
+- hephaestus `Scale::with_breaks_labeled(Vec<(Value, String)>)` and
+  `with_format(closure)` accept ggsql's resolved breaks + formatted labels
+  directly (`src/plot/scale/mod.rs`).
+- hephaestus has every geom ggsql needs (Point/Line/Rect/Ribbon/Polygon/
+  Segment/Wedge/Ellipse/Geometry/Text + composites).
+
+## 2. Constraints & risks (settle before / during Phase 1)
+
+In priority order:
+
+1. **MSRV conflict — the big one.** ggsql MSRV is **Rust 1.86** (CRAN-locked,
+   enforced in CI per root `CLAUDE.md`). hephaestus declares
+   `rust-version = "1.88"` and pulls `wgpu`/`vello`. This is the same situation
+   the repo already handles for the `adbc` test path and `ggsql-wasm`: the
+   feature must be **gated and excluded from the MSRV-enforced build** and out
+   of the path the R bindings compile.
+
+2. **GPU + heavy deps.** The only working hephaestus backend today is `vello`
+   (wgpu/GPU); `svg`/`pdf`/`blend2d` are declared placeholders with no code.
+   Implications:
+   - Output is **raster** (RGBA8 → PNG) for the foreseeable future. No SVG/PDF.
+   - Needs a GPU adapter at render time; headless CI/containers need a software
+     adapter (e.g. `llvmpipe`). Document this operational footgun.
+   - Not viable for the R/CRAN target; not the default for `ggsql-wasm` (wasm
+     can run wgpu but it is a separate, heavy build).
+
+3. **hephaestus maturity.** `version = "0.0.1"`, `publish = false`. Consume as a
+   **git rev or path dependency**; API is pre-1.0 and will churn. Pin a commit.
+
+4. **`text` feature required.** All chrome (axes, legends, titles) and text
+   geoms are gated on hephaestus's `text` feature (parley shaper). Turn it on.
+   The shaper is "scaffolding, meant to be replaced by the host" — acceptable
+   for v1; flag as future work.
+
+**Recommendation:** ship behind a non-default `hephaestus` cargo feature in
+`src/Cargo.toml`; mirror the `adbc` CI exemption (build/test with `cargo
++stable`, keep out of the 1.86 job); depend on hephaestus with
+`features = ["vello", "png", "text"]`.
+
+**Answers from author**
+
+follow recommendations
+
+## 3. Architecture
+
+The Vega-Lite writer flattens everything into one declarative JSON document and
+lets the Vega-Lite runtime do layout + scale application. hephaestus **is** the
+runtime, so this writer's job is to build a `PlotComposition` and render it, not
+emit a spec.
+
+```
+HephaestusWriter::render(&Spec)
+  ├─ build_scale_registry(plot.scales)        → one hephaestus Scale per aesthetic ("pos1","pos2","color"…)
+  ├─ build_composition(plot.facet, data)      → Composition (Patches) — "our own faceting"
+  ├─ for each panel (facet cell):
+  │     Plot::new(patch_id)
+  │       .bind("x","pos1").bind("y","pos2")…  ← channel→scale-name bindings (projection-aware)
+  │     for each ggsql Layer:
+  │         GeomRenderer::build(layer, panel_df) → Vec<Box<dyn Geom>> + channel bindings
+  │     set projection (Cartesian/Polar/Custom)
+  │     add axes / legend / titles from Labels + scales
+  ├─ PlotComposition::render(scene, size, dpi)
+  └─ VelloRenderer → RGBA8 → PNG bytes
+```
+
+### Core trait — analog of the VL `GeomRenderer`
+
+```rust
+/// Translates one ggsql Layer (for one facet panel's data slice) into
+/// hephaestus geoms plus the channel→scale-name bindings they need.
+trait GeomRenderer {
+    /// Channel bindings this geom contributes, e.g. [("x","pos1"),("y","pos2"),("fill","color")].
+    fn bindings(&self, layer: &Layer, ctx: &RenderCtx) -> Vec<(String, String)>;
+    /// Build the concrete geom(s) from the panel DataFrame.
+    fn build(&self, layer: &Layer, df: &DataFrame, ctx: &RenderCtx) -> Result<Vec<Box<dyn Geom>>>;
+}
+```
+
+`RenderCtx` carries the `AestheticContext` (user↔internal name map), the
+projection kind, and the theme. One impl per `GeomType`, dispatched from a
+factory — mirrors the VL `GeomRenderer` registry.
+
+### Channel-name translation
+
+Scales live in the hephaestus `ScaleRegistry` keyed by the **ggsql aesthetic**
+(`pos1`, `color`, …); each `Plot` binds its channel (`x`) to that scale name
+(`pos1`). Two panels binding `x→pos1` share one scale — hephaestus's fixed-scale
+faceting model.
+
+| ggsql internal | hephaestus channel (Cartesian) | (Polar) |
+| --- | --- | --- |
+| `pos1` | `x` | `theta` |
+| `pos2` | `y` | `radius` |
+| `pos1min/max`, `pos2min/max` | `x`/`x2`, `y`/`y2` (ribbon/range) | … |
+| `pos1end`, `pos2end` | `x1`/`y1` (segment) | … |
+| `color`/`fill`/`stroke`/`size`/`shape`/`linetype` | same | same |
+
+## 4. Component mapping
+
+**Geoms** (`GeomType` → hephaestus geom):
+
+| ggsql | hephaestus | notes |
+| --- | --- | --- |
+| point | `PointGeom` | direct |
+| line, path | `LineGeom` | path ordered by `__ggsql_order__` |
+| bar, histogram, tile | `RectGeom` | x/x2/y/y2 from pos extents |
+| area, ribbon | `RibbonGeom` | orientation from which of x2/y2 present |
+| polygon | `PolygonGeom` | |
+| segment, rule | `SegmentGeom` | |
+| arrow | `SegmentGeom` + endpoint marker (`ShapeRegistry`) | |
+| range | `SegmentGeom` or `RibbonGeom` | |
+| boxplot | composite: `RectGeom`+`SegmentGeom`(+`PointGeom` outliers) | multiple geoms, like VL `PreparedData::Composite` |
+| violin | `PolygonGeom`/`RibbonGeom` | |
+| density, smooth | `LineGeom` (+ `RibbonGeom` for CI) | |
+| text | `TextGeom` | needs `text` feature |
+| spatial | `GeometryGeom` | WKB/WKT via `geom-*` features |
+| (polar bar / pie) | `WedgeGeom` | when projection is Polar |
+
+**Scales:** map `ScaleTypeKind` 1:1; `scale.numeric_domain()`→`domain_continuous`,
+discrete categories→`domain_discrete`; `scale.break_labels()`→`with_breaks_labeled`
+(bake ggsql's formatted strings in directly — simplest way to preserve ggsql's
+label semantics exactly); `OutputRange::Palette` → reuse `lookup_palette()` →
+`range_colors`; transforms map by name to `TransformKind`.
+
+**Coords:** Cartesian→`Projection::Cartesian`; Polar→`Projection::Polar`
+(`full_circle`/`gauge`/`radar` from properties); Map→`Projection::Custom` fed
+the pre-projected `panel_boundary`/`bbox` from `Projection.computed` (same data
+the VL `MapProjection` reads — coordinates already projected in SQL).
+
+**Faceting (the "roll our own" piece):** read `FacetLayout`. Group panel rows by
+`__ggsql_aes_facet1__`/`facet2__`. Build the `Composition`: `Wrap` →
+`grid(nrow, ncol, patches)` (ncol from properties); `Grid` → nested `grid`
+indexed by (row-var, col-var). Strip labels via `Slot::StripTop`/`StripLeft`.
+`scales: fixed|free_x|free_y|free` decides whether panels share one scale per
+aesthetic (fixed) or get per-panel scales (free) in the registry.
+
+**Labels/titles/theme:** `plot.labels` → `Plot::set_title/subtitle`, axis titles
+via `Axis::title`, legend titles. ggsql has **no theme concept**, so v1 picks a
+hephaestus default theme; expose theme selection later.
+
+## 5. New module layout
+
+```
+src/writer/hephaestus/
+├── mod.rs           HephaestusWriter (config: size, dpi, bg, theme), Writer impl, render orchestration
+├── CLAUDE.md        architecture doc (mirror the vegalite one)
+├── scales.rs        ggsql Scale → hephaestus Scale; palette/transform/break mapping
+├── composition.rs   FacetLayout → Composition; panel data splitting (our faceting)
+├── channels.rs      aesthetic↔channel translation (projection-aware)
+├── layer.rs         GeomRenderer trait + factory + RenderCtx
+├── geom/            one renderer per GeomType (point.rs, line.rs, rect.rs, ribbon.rs, boxplot.rs, …)
+└── projection.rs    Coord → hephaestus Projection (cartesian/polar/custom-map)
+```
+
+`HephaestusWriter` is a *configured* writer (width/height/dpi/background/theme) —
+hephaestus rendering needs a target size, unlike the resolution-independent VL
+JSON. Output type: see Decision 2.
+
+Wire-up: feature `hephaestus` in `src/Cargo.toml`; `pub mod hephaestus` +
+`pub use HephaestusWriter` under that gate in `src/writer/mod.rs`; CLI
+`--format`/output-extension routing in `ggsql-cli`; CI exemption matching
+`adbc`.
+
+## 6. Phased implementation
+
+1. **Spike / skeleton.** Gated dependency + feature. `HephaestusWriter` that
+   renders a single-panel, single-`point`-layer, Cartesian, fixed-scale plot to
+   PNG. Proves the dep/MSRV/GPU path end-to-end. (`scales.rs` continuous-only,
+   `channels.rs`, `geom/point.rs`.)
+2. **Scales & axes.** All scale types + transforms + palettes + breaks/labels;
+   Cartesian axes, gridlines, axis titles; discrete/binned/ordinal; legends for
+   color/size/shape.
+3. **Geom coverage.** line/path, rect family (bar/histogram/tile), ribbon/area,
+   polygon, segment/rule/arrow/range, text; composite boxplot/violin;
+   density/smooth.
+4. **Faceting.** Wrap + Grid via `composition`; fixed vs free scales; strip
+   labels; composition-level title.
+5. **Projections.** Polar (pie/rose/radar), then Map via `Custom` projection +
+   pre-projected geometry + clip boundary.
+6. **Polish.** Theme defaults, title/subtitle/caption, snapshot (PNG) tests,
+   CLAUDE.md, CHANGELOG entry. Decide default-writer switchover criteria.
+
+Each phase ends with `cargo fmt` + `cargo clippy` (per CLAUDE.md) and visual
+inspection against the equivalent Vega-Lite output.
+
+## 7. Decisions (resolved)
+
+1. **Dependency mode** — pinned **git rev** of `posit-dev/hephaestus` (now a
+   public repo, so CI fetches it with no credentials).
+2. **Output type** — `Output = Vec<u8>` (PNG bytes); ggsql encodes hephaestus's
+   RGBA buffer via the `png` crate.
+3. **First milestone** — the Phase 1 spike (this is implemented; see below).
+4. **Default-writer ambition** — land the gated alternative now, promote later.
+
+## Phase 1 — status: implemented
+
+Single-panel, single `point` layer, Cartesian, continuous scales with
+bottom/left axes → PNG bytes, behind the non-default `hephaestus` feature.
+
+- Module: `src/writer/hephaestus/{mod.rs, scales.rs, channels.rs, geom/point.rs}`.
+- Dep + feature in `src/Cargo.toml`; gate in `src/writer/mod.rs`; stable-only
+  CI step (+ lavapipe install) in `.github/workflows/build.yaml`.
+- Verified: feature build, default build (hephaestus absent), `cargo +1.86`
+  build (MSRV intact), fmt, clippy, tests (render + reject), output eyeballed.
+
+Hephaestus deficiencies noted during Phase 1 (for upstream):
+- `png::write_png` is file-only — no in-memory PNG/RGBA-bytes API, so each host
+  re-implements byte encoding.
+- `render_to_buffer` returns premultiplied RGBA (fine for opaque backgrounds;
+  transparent ones need un-premultiplying before PNG encode).
+- `src/scales/` docs claim transforms are Identity-only, but `TransformKind`
+  already implements the full Log/Sqrt/PseudoLog set — stale doc.
+
+## 8. Key source references
+
+ggsql:
+- `src/writer/mod.rs` — `Writer` trait (`type Output`, `write`, `render`).
+- `src/writer/vegalite/` — the writer to mirror; `layer.rs` `GeomRenderer`,
+  `projection/` `ProjectionRenderer`, `encoding.rs:501` palette resolution.
+- `src/reader/spec.rs` — `Spec` accessors (`plot()`, `data()`, `layer_data()`).
+- `src/naming.rs` — `__ggsql_*__` column conventions; data keys.
+- `src/plot/` — `Plot`, `Layer`, `Geom`/`GeomType`, `Scale`/`ScaleTypeKind`,
+  `Facet`/`FacetLayout`, `Projection`/`CoordKind`, `Labels`, `AestheticContext`.
+- `src/plot/scale/palettes.rs` — `lookup_palette()`.
+
+hephaestus (`~/GitHub/hephaestus`):
+- `src/plot/composition.rs` — `PlotComposition` orchestrator, `render`.
+- `src/plot/plot.rs` — `Plot`, `bind`, `add_geom`, chrome.
+- `src/plot/scale/mod.rs` + `constructors.rs` — `Scale`, `ScaleRegistry`.
+- `src/plot/geom/` — concrete geoms + `Geom`/`GeomBuilder` traits.
+- `src/plot/chrome/axis.rs` — `Axis`, `AxisPlacement`.
+- `src/plot/projection.rs` — `Projection::{Cartesian, Polar, Custom}`.
+- `src/composition/` — `Composition`, `Patch`, `grid`/`beside`/`stack`, `Slot`.
+- `src/backend/vello/` — `VelloRenderer`; `src/png.rs` — PNG writer.
+</content>
+</invoke>
+<invoke name="AskUserQuestion">
+<parameter name="questions">[{"question":"How should ggsql depend on hephaestus while both are pre-1.0?","header":"Dependency mode","multiSelect":false,"options":[{"label":"Path dep (../hephaestus)","description":"Easiest for co-development; both crates evolve together locally. Not reproducible on CI/other machines without the sibling checkout."},{"label":"Pinned git rev","description":"Reproducible everywhere, CI-friendly. Requires bumping the rev to pick up hephaestus changes."}]},{"question":"What should the writer's Output type be?","header":"Output type","multiSelect":false,"options":[{"label":"PNG bytes only (Vec<u8>)","description":"Simplest; matches the existing text/bytes Writer pattern. Callers decode if they need pixels."},{"label":"Also expose raw RGBA8","description":"A RasterImage { width, height, rgba } struct so wasm/embedders can present without re-decoding a PNG."}]},{"question":"What's the right first deliverable to build after this plan?","header":"First milestone","multiSelect":false,"options":[{"label":"Phase 1 spike only","description":"Single point layer, Cartesian, fixed scale → PNG. Proves the dep/MSRV/GPU path before investing further."},{"label":"Through Phase 3","description":"Full single-panel coverage: all scales, axes, legends, and all geoms. Bigger first chunk, no faceting/projections yet."}]},{"question":"What's the ambition for this effort?","header":"Ambition","multiSelect":false,"options":[{"label":"Land gated alternative, promote later","description":"Ship behind the hephaestus feature, iterate to parity over time, flip the default in a later effort."},{"label":"Drive to parity + flip default","description":"Treat full Vega-Lite parity and becoming the default writer as the goal of this effort."}]}]

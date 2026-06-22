@@ -34,6 +34,12 @@ pub mod vegalite;
 #[cfg(feature = "vegalite")]
 pub use vegalite::VegaLiteWriter;
 
+#[cfg(feature = "hephaestus")]
+pub mod hephaestus;
+
+#[cfg(feature = "hephaestus")]
+pub use hephaestus::HephaestusWriter;
+
 /// Trait for visualization output writers
 ///
 /// Writers take a Plot and data sources and produce formatted output
