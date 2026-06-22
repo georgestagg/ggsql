@@ -248,6 +248,45 @@ Hephaestus deficiencies noted during Phase 1 (for upstream):
 - `src/scales/` docs claim transforms are Identity-only, but `TransformKind`
   already implements the full Log/Sqrt/PseudoLog set — stale doc.
 
+## Phase 2 — status: implemented
+
+All scale types, transforms, material aesthetics, axis titles, and legends for
+the single-panel point geom.
+
+- `scales.rs::build_scale` builds continuous/discrete/ordinal/binned scales;
+  maps ggsql transforms → hephaestus `TransformKind` (cast/temporal → identity);
+  maps resolved `OutputRange::Array` → `range_colors/range_numbers/range_strings`
+  (palettes already concrete; hex/name colors parsed via `csscolorparser`).
+- `channels.rs` extracts columns as typed channel data (text → category strings,
+  numeric → f64) and parses literal colors.
+- `mod.rs` discovers mapped aesthetics, registers a scale + binds a channel per
+  data-mapped aesthetic, sets `Raw` constants for identity/literal aesthetics,
+  applies ggsql defaults otherwise, and adds axis titles + legends.
+- Channels driven by the same `(data source, output kind)` bind to **one**
+  shared scale (ggsql's `color` → fill + stroke); their legends then share a
+  `domain_scale` and **hephaestus auto-collapses them** — no bespoke legend
+  dedup. Generalized via `shared_scales` keyed on `(aesthetic_source, kind)`.
+- Continuous domains come from the **data extent** unless the user set `FROM`
+  explicitly; ggsql's inferred log-scale domain collapses its lower bound to
+  `f64::MIN_POSITIVE`, which would push all points to one edge. Under a
+  non-identity transform, hephaestus computes its own (transform-aware) breaks
+  rather than ggsql's (which were derived from that loose domain).
+- hephaestus builtin shape names match ggsql's 1:1 (pass-through).
+- Verified: discrete-color (single collapsed legend), continuous-size,
+  log-scale (correct log spacing), axis-title tests; output eyeballed; default
+  + 1.86 builds, fmt, clippy clean.
+
+Hephaestus deficiency noted in Phase 2 (for upstream):
+- No domain expansion / "nice" padding. Edge data points sit exactly on the
+  panel boundary and clip; consumers must pre-expand domains by hand, which is
+  awkward for non-linear transforms (data-space padding can push a log lower
+  bound ≤ 0). A scale-level expansion factor would help.
+
+Deferred to later phases: domain expansion (above); calendar-native temporal
+axes (continuous + ggsql formatted breaks used for now); `linetype` material
+aesthetic (line geoms, Phase 3); ggsql's degenerate inferred log domain is
+worked around here but is worth fixing upstream in ggsql too.
+
 ## 8. Key source references
 
 ggsql:
