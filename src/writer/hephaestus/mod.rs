@@ -4,12 +4,11 @@
 //! renderer.
 //!
 //! **Scope** (see `src/writer/hephaestus/PLAN.md`): single-panel, single-layer,
-//! Cartesian plots. All non-composite geoms (point/line/path/area/ribbon/bar/
-//! histogram/tile/polygon/segment/rule/range/text/density/smooth), all scale
+//! Cartesian plots. All geoms (point/line/path/area/ribbon/bar/histogram/tile/
+//! polygon/segment/rule/range/text/density/smooth/boxplot/violin), all scale
 //! types/transforms, material aesthetics, axis titles, and legends are
-//! supported. Faceting, projections, and composite geoms (boxplot/violin)
-//! arrive in later phases; unsupported specs are rejected by
-//! [`HephaestusWriter::validate`].
+//! supported. Faceting, projections, and multi-layer arrive in later phases;
+//! unsupported specs are rejected by [`HephaestusWriter::validate`].
 //!
 //! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
 //! (hardware or software, e.g. lavapipe) is required at render time.
@@ -84,17 +83,18 @@ impl Writer for HephaestusWriter {
                 ));
             }
         }
-        if spec.layers.len() != 1 {
-            return Err(GgsqlError::WriterError(format!(
-                "hephaestus writer supports exactly one layer, got {}",
-                spec.layers.len()
-            )));
+        if spec.layers.is_empty() {
+            return Err(GgsqlError::WriterError(
+                "hephaestus writer requires at least one layer".into(),
+            ));
         }
-        let geom_type = spec.layers[0].geom.geom_type();
-        if !geom::is_supported(geom_type) {
-            return Err(GgsqlError::WriterError(format!(
-                "hephaestus writer does not support the '{geom_type}' geom yet"
-            )));
+        for layer in &spec.layers {
+            let geom_type = layer.geom.geom_type();
+            if !geom::is_supported(geom_type) {
+                return Err(GgsqlError::WriterError(format!(
+                    "hephaestus writer does not support the '{geom_type}' geom yet"
+                )));
+            }
         }
         Ok(())
     }
@@ -102,20 +102,21 @@ impl Writer for HephaestusWriter {
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<Self::Output> {
         self.validate(spec)?;
 
-        let layer = &spec.layers[0];
-        let df = layer_dataframe(layer, data)?;
-        let ctx = Ctx {
-            spec,
-            layer,
-            df,
-            transposed: is_transposed(layer),
-        };
-
-        // Build the geom (+ its scales/axes/legends) through the shared wiring.
+        // Build every layer's geom into one panel, accumulating shared
+        // scales/axes/legends. Geoms draw in layer (DRAW) order = z-order.
         let mut plot =
             HPlot::new(&single_panel(), PANEL_ID).shape_registry(ShapeRegistry::with_builtins());
         let mut w = Wiring::default();
-        geom::build_into_plot(&mut plot, &ctx, &mut w)?;
+        for layer in &spec.layers {
+            let df = layer_dataframe(layer, data)?;
+            let ctx = Ctx {
+                spec,
+                layer,
+                df,
+                transposed: is_transposed(layer),
+            };
+            geom::build_into_plot(&mut plot, &ctx, &mut w)?;
+        }
 
         for (channel, scale_name) in &w.bindings {
             plot.set_binding(*channel, scale_name.clone());
@@ -283,6 +284,15 @@ mod tests {
     }
 
     #[test]
+    fn renders_dodged_bar() {
+        assert_png_or_skip(render(
+            "SELECT x, grp, v FROM (VALUES ('a','p',3),('a','q',5),('b','p',2),('b','q',4)) \
+             t(x, grp, v) \
+             VISUALISE x AS x, v AS y, grp AS fill DRAW bar SETTING position => 'dodge'",
+        ));
+    }
+
+    #[test]
     fn renders_histogram() {
         assert_png_or_skip(render(
             "SELECT x FROM (VALUES (1),(2),(2),(3),(3),(3),(4),(4),(5)) t(x) \
@@ -324,6 +334,16 @@ mod tests {
     }
 
     #[test]
+    fn renders_text_styled() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, 'a' AS lab UNION ALL SELECT 2, 2, 'Hello' \
+             UNION ALL SELECT 3, 3, 'z' \
+             VISUALISE x AS x, y AS y, lab AS label, 30 AS rotation, \
+             'bold' AS fontweight, 22 AS fontsize DRAW text",
+        ));
+    }
+
+    #[test]
     fn renders_polygon() {
         assert_png_or_skip(render(
             "SELECT x, y FROM (VALUES (0,0),(2,0),(1,2)) t(x, y) \
@@ -332,12 +352,128 @@ mod tests {
     }
 
     #[test]
-    fn rejects_composite_geom() {
+    fn renders_boxplot() {
+        assert_png_or_skip(render(
+            "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2),('a',20), \
+             ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
+             VISUALISE g AS x, y AS y DRAW boxplot",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_fill_by_group() {
+        assert_png_or_skip(render(
+            "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2), \
+             ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
+             VISUALISE g AS x, y AS y, g AS fill DRAW boxplot",
+        ));
+    }
+
+    #[test]
+    fn renders_diagonal_rule() {
+        assert_png_or_skip(render(
+            "SELECT 0 AS i VISUALISE i AS y DRAW rule \
+             SETTING slope => 1 SCALE x FROM (0, 10) SCALE y FROM (0, 10)",
+        ));
+    }
+
+    #[test]
+    fn renders_constant_aesthetics() {
+        // Constant material values from `SETTING` arrive as `AestheticValue::Literal`
+        // and must be honored (color/size on points, linetype/linewidth on a line).
+        assert_png_or_skip(render(
+            "SELECT * FROM (VALUES (1,1),(2,3),(3,2)) t(a,b) \
+             VISUALISE a AS x, b AS y DRAW point SETTING color => 'red', size => 8",
+        ));
+        assert_png_or_skip(render(
+            "SELECT * FROM (VALUES (1,1),(2,3),(3,2)) t(a,b) \
+             VISUALISE a AS x, b AS y DRAW line \
+             SETTING color => 'steelblue', linetype => 'dashed', linewidth => 2",
+        ));
+    }
+
+    #[test]
+    fn renders_multilayer_point_line() {
+        // Two layers share one pair of axes / position scales.
+        assert_png_or_skip(render(
+            "SELECT * FROM (VALUES (1,2),(2,4),(3,5),(4,4),(5,7)) t(a,b) \
+             VISUALISE a AS x, b AS y DRAW point DRAW line",
+        ));
+    }
+
+    #[test]
+    fn renders_multilayer_overlay() {
+        // Bar + point overlay (point drawn over bar) over a shared discrete x.
+        assert_png_or_skip(render(
+            "SELECT g, b FROM (VALUES ('a',2),('b',4),('c',5),('d',3)) t(g,b) \
+             VISUALISE g AS x, b AS y DRAW bar DRAW point SETTING color => 'red'",
+        ));
+    }
+
+    #[test]
+    fn renders_multilayer_abline() {
+        // A diagonal reference line overlaid on a scatter spans the shared
+        // resolved x/y domain.
+        assert_png_or_skip(render(
+            "SELECT * FROM (VALUES (1,2),(2,4),(3,5),(4,4),(5,7)) t(a,b) \
+             VISUALISE a AS x, b AS y DRAW point PLACE rule SETTING slope => 1, y => 0",
+        ));
+    }
+
+    #[test]
+    fn renders_multilayer_shared_legend() {
+        // Two layers both colored by the same variable → one collapsed legend.
+        assert_png_or_skip(render(
+            "SELECT g, a, b FROM (VALUES ('p',1,2),('p',2,4),('q',3,5),('q',4,4)) t(g,a,b) \
+             VISUALISE a AS x, b AS y, g AS color DRAW point DRAW line",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_styled() {
+        assert_png_or_skip(render(
+            "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2), \
+             ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
+             VISUALISE g AS x, y AS y, 'navy' AS stroke DRAW boxplot",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_stroke_by_group() {
+        // Data-mapped stroke colors every component (box/whisker/median/outlier)
+        // per group and registers one collapsed legend.
+        assert_png_or_skip(render(
+            "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2),('a',40), \
+             ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
+             VISUALISE g AS x, y AS y, g AS stroke DRAW boxplot",
+        ));
+    }
+
+    #[test]
+    fn renders_tile_sized() {
+        // `width`/`height` settings shrink discrete tiles within their band.
+        assert_png_or_skip(render(
+            "SELECT a, b, v FROM (VALUES ('x','p',1),('y','q',2),('x','q',3),('y','p',4)) t(a,b,v) \
+             VISUALISE a AS x, b AS y, v AS fill DRAW tile SETTING width => 0.5, height => 0.5",
+        ));
+    }
+
+    #[test]
+    fn renders_violin() {
+        assert_png_or_skip(render(
+            "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2), \
+             ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
+             VISUALISE g AS x, y AS y DRAW violin",
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_geom() {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
         let spec = reader
             .execute(
-                "SELECT 1 AS g, 2 AS y UNION ALL SELECT 1, 5 UNION ALL SELECT 1, 3 \
-                 VISUALISE g AS x, y AS y DRAW boxplot",
+                "SELECT 0 AS x, 0 AS y, 1 AS xend, 1 AS yend \
+                 VISUALISE x AS x, y AS y, xend AS xend, yend AS yend DRAW arrow",
             )
             .unwrap();
         let writer = HephaestusWriter::new(320, 240, 96.0);

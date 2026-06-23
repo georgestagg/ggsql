@@ -260,17 +260,15 @@ the single-panel point geom.
 - `channels.rs` extracts columns as typed channel data (text → category strings,
   numeric → f64) and parses literal colors.
 - `mod.rs` discovers mapped aesthetics, registers a scale + binds a channel per
-  data-mapped aesthetic, sets `Raw` constants for identity/literal aesthetics,
-  applies ggsql defaults otherwise, and adds axis titles + legends.
+  data-mapped aesthetic, sets constants for `Literal` aesthetics and `Raw`
+  per-row constants for identity/annotation columns, falls back to ggsql defaults
+  otherwise, and adds axis titles + legends.
 - Channels driven by the same `(data source, output kind)` bind to **one**
   shared scale (ggsql's `color` → fill + stroke); their legends then share a
   `domain_scale` and **hephaestus auto-collapses them** — no bespoke legend
   dedup. Generalized via `shared_scales` keyed on `(aesthetic_source, kind)`.
-- Continuous domains come from the **data extent** unless the user set `FROM`
-  explicitly; ggsql's inferred log-scale domain collapses its lower bound to
-  `f64::MIN_POSITIVE`, which would push all points to one edge. Under a
-  non-identity transform, hephaestus computes its own (transform-aware) breaks
-  rather than ggsql's (which were derived from that loose domain).
+- Continuous domains come straight from ggsql's resolved `numeric_domain` (see
+  the Multi-layer section — the writer never computes its own extents).
 - hephaestus builtin shape names match ggsql's 1:1 (pass-through).
 - Verified: discrete-color (single collapsed legend), continuous-size,
   log-scale (correct log spacing), axis-title tests; output eyeballed; default
@@ -314,13 +312,174 @@ segment/range/rule, text. Single panel, Cartesian.
 Known limitations (refinements, not blockers):
 - No domain expansion → data points/labels on the domain edge clip at the panel
   boundary (same hephaestus gap noted in Phase 2).
-- Bars fill the full category band (no inter-bar gap); ggsql's `width` setting
-  isn't read yet.
 - Legend keys are always point glyphs; line/area legends could use line/rect
   keys. (hephaestus supports `LegendKeySpec::line()`/`rect()`.)
 - Discrete-tile uses band edges best-effort; continuous/binned tile is exact.
 
 Deferred to Phase 3b: boxplot, violin (composite decomposition).
+
+## Phase 3b — status: implemented
+
+Composite geoms render by decomposing one ggsql layer into several hephaestus
+geoms sharing the `pos1`/`pos2` scales.
+
+- **boxplot** (`geom/boxplot.rs`): the stat's `type`-tagged rows are split by
+  index into box (`RectGeom`, q1→q3 filling the band), whiskers (`SegmentGeom`,
+  box edge→fence), median (`SegmentGeom` spanning the band via `Raw` x_band
+  ±0.5), and outliers (`PointGeom`). `fill` is data-mapped (e.g. fill-by-group →
+  colored boxes + legend) or a constant white default; stroke is constant.
+- **violin** (`geom/violin.rs`): rows grouped by `pos1`, each sorted by `pos2`;
+  one vertical `RibbonGeom` band per category — right edge `x_band = +offset`,
+  left edge `x2_band = -offset` (the stat's pre-scaled half-width, a band
+  fraction), sharing `y = pos2`. One ribbon row per grid sample (no hand-built
+  mirrored outline).
+- Composites dispatch through a dedicated path in `geom/mod.rs::build_into_plot`
+  (not `build_and_add`); shared helpers `wiring::{register_axis, resolve_fill,
+  material_legend}` are now `pub`, and `channels::ChannelData::select` subsets
+  extracted columns by row index (no DataFrame filtering).
+- **hephaestus dep bumped** to rev `79b240de`: the `RibbonGeom` band-channel gap
+  found while planning violin (no `x_band`/`x2_band`) was fixed upstream, so
+  violin moved from a doubled `PolygonGeom` outline to a `RibbonGeom` band.
+- Verified: `renders_boxplot` (with outlier — domain spans it, ggsql breaks),
+  `renders_boxplot_fill_by_group` (colored + legend), `renders_violin` (2
+  categories); all eyeballed. 16 writer tests pass; default + 1.86 builds, fmt,
+  clippy clean.
+
+Known limitations: boxplot stroke/linewidth/linetype/opacity are constant (only
+`fill` maps); outliers/edge points clip at the panel boundary (standing
+no-expansion gap). Composite geoms remain single-panel/Cartesian.
+
+## Gap-closing — status: implemented
+
+Closing the audit gaps in implemented geoms, most-visible first.
+
+- **width + dodge** (bar/histogram, boxplot, violin): the `width` parameter and
+  `position = dodge` are honored. `wiring::band_half_width` reads
+  `layer.parameters["width"]` (dodge-narrowed via `Layer::adjusted_width`), and
+  `wiring::dodge_offsets` reads the `pos1offset`/`pos2offset` columns; bars/boxes
+  set per-row `x_band`/`x2_band = offset ± half-width` (via the new
+  `GeomSpec::data_channels`), violins add the dodge offset to their band edges.
+  Bars now have proper gaps and dodge side-by-side; boxes honor `width`.
+- **text aesthetics**: `text` is now a custom builder wiring `fontsize`→size,
+  `fontweight`→weight (CSS keyword/numeric parse), `italic`→italic,
+  `typeface`→family, `hjust`→anchor_x, `vjust`→anchor_y (flipped to
+  hephaestus's top origin), `rotation`→angle (degrees→radians), plus
+  data-mapped/constant `fill` and `opacity`. (`column_to_bool` added.)
+- **domain expansion (pass ggsql's range through)**: ggsql already expands the
+  resolved input range, so the writer just uses `scale.numeric_domain()` for
+  untransformed continuous scales (`continuous_domain`, `use_resolved` path)
+  instead of the raw data extent — edge marks/labels no longer clip, with no
+  writer-side expansion. Under a non-identity transform ggsql's data-space
+  expansion can collapse a log lower bound toward `f64::MIN_POSITIVE`, so those
+  scales use the data extent + hephaestus's transform-aware breaks (so log
+  axes have no expansion yet — minor; tied to ggsql's log-domain expansion).
+- **legend key fidelity**: each geom declares a `LegendKind` (point/line/rect)
+  threaded through `GeomSpec`/`wire_material`/`resolve_fill`/`material_legend`,
+  so line legends show a line swatch, bar/area/box/violin a filled rect, points
+  a point — instead of always a point glyph.
+- **boxplot/violin styling**: honor a constant `stroke` (box/whisker/median
+  outline, both ribbon edges) and `opacity` (box fill / ribbon alpha) via
+  `wiring::{constant_color, constant_number}`, instead of hardcoded grey.
+- **tile linetype**: `linetype` wired on the rect material (dashed tile borders).
+- **diagonal rule (abline)**: a rule with a non-zero `slope` (ggsql sets
+  `parameters["diagonal"] = true`) renders as a single `SegmentGeom` spanning the
+  position scales' resolved range — `segment::build_diagonal` grabs each pos
+  domain from `spec.find_scale("pos1"/"pos2").numeric_domain()`, computes
+  `secondary = slope·primary + intercept` over it (intercept from the `pos2`/`pos1`
+  literal, slope from the `slope` literal/SETTING), registers both axes from the
+  endpoints, and binds x/x2→pos1, y/y2→pos2. The user supplies the ranges via
+  `SCALE x/y FROM (..)`; when a scale is unresolved it falls back to 0..1. No
+  DRAW/PLACE or multi-layer distinction — the writer just reads the scale ranges.
+  Required teaching `wiring::{constant_color, constant_number}` to read bare
+  `Literal` aesthetic values (not only annotation columns), since `slope`,
+  `stroke`, etc. arrive as `AestheticValue::Literal`.
+- **constant (`Literal`) material aesthetics across all geoms**: ggsql delivers
+  every geom default *and* every `SETTING` constant (`color => 'red'`,
+  `linetype => 'dashed'`, `size => 8`, …) as `AestheticValue::Literal` in the
+  layer mappings — **not** as a materialized column. `wire_material` previously
+  keyed only off `aesthetic_column_name` (columns), so it silently dropped all
+  literals and substituted its own `MatDefault`; e.g. `SETTING color => 'red'`
+  rendered black. It now dispatches the three variants exactly like the VL
+  writer's `build_encoding_channel`: `Literal` → a constant channel value via
+  `set_literal_channel` (color via `parse_color`, shape name string, linetype via
+  `map_linetype`→`Value::Linetype`, numbers pass through since hephaestus takes
+  points directly), `Column` (non-identity scale) → scaled + legend,
+  `Column`(identity)/`AnnotationColumn` → per-row `Raw`. `MatDefault` is now a
+  true last-resort fallback. ggsql's own defaults match the old hardcoded ones
+  (black fill, opacity 0.8, size 3), so plain geoms are unchanged.
+- **composite per-group color + outlier/tile fidelity** (mirrors the VL writer's
+  shared-encoding model): `wiring::resolve_color(aesthetic, channel)` generalizes
+  the old `resolve_fill` — a data-mapped color registers a scale, binds the
+  channel, and adds one legend (returning the column for components to select);
+  otherwise the mapped literal (via `constant_color`) or default. Boxplot and
+  violin resolve **fill and stroke** this way and apply the same resolved color to
+  every component (box/whisker/median/outlier; both ribbon edges), so a
+  `stroke AS group` colors the whole mark per group under one collapsed legend.
+  Boxplot **outliers** are hollow points (stroke only — matching VL's
+  `filled = false`) honoring the `size`/`shape` aesthetics (via `constant_number`
+  / new `constant_string`) instead of a hardcoded dot. Discrete **tile**
+  `width`/`height` are read from ggsql's per-row band-fraction columns (1.0 = full
+  band, like VL's `datum.width * bandwidth`) → per-axis band edges at ±fraction/2.
+  (`opacity`-on-stroke was investigated and is **not** a gap: VL retargets
+  `opacity → fillOpacity` only for fill-bearing geoms and leaves stroke-only geoms
+  on `opacity`, which the writer already mirrors.)
+- Verified: `renders_dodged_bar`, `renders_text_styled`, `renders_boxplot_styled`
+  (navy outline), `renders_boxplot_stroke_by_group` (per-group blue/orange incl.
+  hollow outlier, collapsed legend — eyeballed), `renders_tile_sized` (half-band
+  tiles eyeballed), `renders_diagonal_rule`, `renders_constant_aesthetics`,
+  grouped-line/dodged-bar legends, expanded point plot eyeballed; 23 writer tests;
+  default + 1.86 builds, fmt, clippy clean.
+
+Remaining geom gaps: text `stroke` (no hephaestus text-outline channel — upstream
+deficiency); calendar-native temporal axes (numeric axes with ggsql's formatted
+break labels work today; date-native ticks are a larger follow-up, not niche).
+
+## Multi-layer — status: implemented
+
+The writer now renders **N layers** into one shared Cartesian panel (`validate`
+allows ≥1 layer; FACET and non-Cartesian projections still rejected). `write`
+loops over `spec.layers`, building each layer's geom into one `HPlot` via one
+shared `Wiring`; geoms draw in DRAW order (= z-order).
+
+The enabling change is a principle correction: **the writer never computes its
+own scale extents — it uses the domain ggsql reports**, exactly as the VL writer
+uses `input_range`. ggsql resolves every `Scale` globally over all layers × the
+whole position family (`execute/scale.rs::find_columns_for_aesthetic` /
+`internal_position_family`), so `numeric_domain()` already spans every layer and
+includes pos2end/min/max, fences, tile extents, etc.
+
+- `scales.rs::continuous_domain` always returns `numeric_domain()` (the prior
+  data-extent / transformed-scale workaround is **removed**); `feed_breaks` now
+  feeds ggsql's breaks for transformed scales too. Net: log/sqrt and continuous
+  material scales render identically to the VL writer.
+- `register_axis` is **idempotent** — each position scale + its single axis is
+  registered once across all layers (hephaestus doesn't dedup `add_axis`).
+- Cross-layer legend dedup: `shared_scale_name` reports new-vs-reused so
+  `wire_material` adds a legend only when it creates the scale; composite
+  `resolve_color` consults `shared_scales` likewise (and `ColorSource` carries the
+  scale name so a ribbon's far edge binds to it). Material scales/bindings already
+  collapse via the persistent `shared_scales`.
+
+Verified (eyeballed): point+line (shared axes), bar+point overlay (point over
+bar, z-order), scatter+abline (line spans the shared resolved domain), two layers
+colored by one variable (single collapsed legend, one x/one y axis). Tests
+`renders_multilayer_{point_line,overlay,abline,shared_legend}`; 27 writer tests;
+default + 1.86 builds, fmt, clippy clean.
+
+**Confirmed shared with the VL writer (not a regression here):** ggsql's range
+expansion runs in linear data space then clips to the transform's valid domain,
+so a log scale's domain collapses to `[f64::MIN_POSITIVE, max]` and its breaks
+explode. The VL writer emits the same squashed domain + breaks (verified via the
+CLI). Fixing this belongs in ggsql core (expand in transform space); it will
+improve both writers at once.
+
+Known issue (orthogonal, shared with the VL writer): a `bar` mapped to a
+**numeric** primary axis is resolved by ggsql as a *continuous* `pos1` scale (no
+`pos1end`), so the writer's band-fraction bars get no width — and the VL writer
+hits the same wall (`bandwidth('x')` is 0 on a continuous scale). A `bar` is
+meant to have a discrete primary axis; this looks like ggsql not coercing a
+numeric bar axis to discrete. (`histogram` is unaffected — it carries real
+`pos1`/`pos1end` bin edges and renders correctly.)
 
 ## 8. Key source references
 

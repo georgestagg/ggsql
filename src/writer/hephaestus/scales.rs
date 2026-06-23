@@ -50,9 +50,10 @@ pub fn build_scale(scale: Option<&GScale>, data_extent: (f64, f64), kind: RangeK
         Some(ScaleTypeKind::Ordinal) => scale::ordinal(domain_values(usable)),
         // Continuous, Binned, Identity, or unknown: a continuous mapper.
         _ => {
+            let h_transform = transform.and_then(map_transform);
             let (min, max) = continuous_domain(usable, data_extent);
             let mut c = scale::continuous(min..=max);
-            if let Some(t) = transform.and_then(map_transform) {
+            if let Some(t) = h_transform {
                 c = c.with_transform(t);
             }
             c
@@ -65,31 +66,26 @@ pub fn build_scale(scale: Option<&GScale>, data_extent: (f64, f64), kind: RangeK
         }
     }
 
-    // Feed ggsql's resolved breaks for categorical scales and for
-    // identity-transform continuous scales (preserving ggsql's formatting).
-    // Under a non-identity transform ggsql's breaks are computed in transform
-    // space against a possibly-loose domain, so let hephaestus derive its own
-    // transform-aware breaks instead.
-    let feed_breaks = matches!(
-        type_kind,
-        Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal) | Some(ScaleTypeKind::Binned)
-    ) || matches!(transform, None | Some(GTransform::Identity));
-    if feed_breaks {
-        if let Some(s) = usable {
-            hs = apply_breaks(hs, s, type_kind);
-        }
+    // Feed ggsql's resolved breaks + formatted labels for every scale (including
+    // under a non-identity transform), so axis/legend ticks match ggsql — and the
+    // Vega-Lite writer — exactly. ggsql's breaks pair with the same resolved
+    // domain hephaestus now uses, so they line up. `apply_breaks` is a no-op when
+    // the scale has no resolved breaks.
+    if let Some(s) = usable {
+        hs = apply_breaks(hs, s, type_kind);
     }
     hs
 }
 
-/// Domain for a continuous scale. ggsql's resolved domain is authoritative only
-/// when the user set it explicitly (`FROM`); inferred domains can be degenerate
-/// (e.g. a log scale's lower bound collapses to `f64::MIN_POSITIVE`), so fall
-/// back to the actual data extent.
+/// Domain for a continuous scale. ggsql's resolved `numeric_domain` is
+/// authoritative — it carries ggsql's global, expanded, transform-aware training
+/// over every layer and the whole position family — so pass it straight through,
+/// exactly as the Vega-Lite writer uses `input_range`. `data_extent` is only a
+/// fallback for a scale ggsql left unresolved.
 fn continuous_domain(scale: Option<&GScale>, data_extent: (f64, f64)) -> (f64, f64) {
     let domain = scale
-        .filter(|s| s.explicit_input_range)
         .and_then(|s| s.numeric_domain())
+        .filter(|(min, max)| min.is_finite() && max.is_finite())
         .unwrap_or(data_extent);
     pad_degenerate(domain.0, domain.1)
 }
@@ -118,7 +114,7 @@ fn apply_output_range(hs: HScale, kind: RangeKind, values: &[ArrayElement]) -> H
 }
 
 /// Map a ggsql linetype name to a hephaestus dash pattern; unknown → solid.
-fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
+pub fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
     match name {
         "dashed" | "longdash" => dashed(),
         "dotted" => dotted(),

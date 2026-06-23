@@ -7,11 +7,17 @@
 //!   (horizontal); the free axis uses scale-bypassing 0..1 panel fractions.
 
 use hephaestus::color::rgb8;
+use hephaestus::plot::{Plot as HPlot, SegmentGeom};
 
 use super::super::channels::aesthetic_column_name;
 use super::super::scales::RangeKind;
-use super::super::wiring::{Ctx, GeomSpec, MatDefault, MaterialSpec, PanelAxis, PositionSpec};
+use super::super::wiring::{
+    constant_color, constant_number, register_axis, Ctx, GeomSpec, LegendKind, MatDefault,
+    MaterialSpec, PanelAxis, PositionSpec, Wiring,
+};
 use crate::plot::layer::geom::GeomType;
+use crate::plot::ParameterValue;
+use crate::{Layer, Result};
 
 pub fn spec(ctx: &Ctx) -> GeomSpec {
     let (positions, raw_numbers) = match ctx.layer.geom.geom_type() {
@@ -78,13 +84,79 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
         ],
         raw_strings: &[],
         raw_numbers,
+        data_channels: vec![],
+        legend_key: LegendKind::Line,
         grouped: false,
     }
 }
 
-/// A rule is a reference line spanning the whole panel on its free axis.
-/// Best-effort: the free axis uses raw 0..1 panel fractions, so no scale/axis
-/// is created for it.
+/// Whether this rule is a diagonal (abline): has a non-zero `slope`.
+pub fn is_diagonal(layer: &Layer) -> bool {
+    matches!(
+        layer.parameters.get("diagonal"),
+        Some(ParameterValue::Boolean(true))
+    )
+}
+
+/// A diagonal rule (abline): a single line spanning the position scales'
+/// resolved range, with `secondary = slope * primary + intercept`. The range
+/// comes straight from the scales (explicit `FROM` or data-trained); when a
+/// scale is unresolved it falls back to 0..1 like any continuous scale.
+pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+    let slope = slope_value(ctx);
+
+    let (x0, y0, x1, y1, x_extent, y_extent) = if !ctx.transposed {
+        // y-intercept (`pos2`); x is the spanning axis.
+        let intercept = constant_number(ctx, "pos2", 0.0);
+        let (x0, x1) = primary_range(ctx, "pos1");
+        let (y0, y1) = (slope * x0 + intercept, slope * x1 + intercept);
+        (x0, y0, x1, y1, (x0, x1), (y0.min(y1), y0.max(y1)))
+    } else {
+        // x-intercept (`pos1`); y is the spanning axis.
+        let intercept = constant_number(ctx, "pos1", 0.0);
+        let (y0, y1) = primary_range(ctx, "pos2");
+        let (x0, x1) = (slope * y0 + intercept, slope * y1 + intercept);
+        (x0, y0, x1, y1, (x0.min(x1), x0.max(x1)), (y0, y1))
+    };
+
+    register_axis(ctx, w, PanelAxis::X, x_extent);
+    register_axis(ctx, w, PanelAxis::Y, y_extent);
+    for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2"), ("y2", "pos2")] {
+        w.bindings.push((channel, scale.to_string()));
+    }
+
+    let mut b = SegmentGeom::builder();
+    b.set("x", vec![x0]);
+    b.set("x2", vec![x1]);
+    b.set("y", vec![y0]);
+    b.set("y2", vec![y1]);
+    b.set("stroke", constant_color(ctx, "stroke", rgb8(0, 0, 0)));
+    b.set("linewidth", constant_number(ctx, "linewidth", 1.0));
+    b.set("stroke_opacity", constant_number(ctx, "opacity", 1.0));
+    plot.add_geom(b.build());
+    Ok(())
+}
+
+/// Resolved (min, max) for a position scale, or 0..1 when unresolved.
+fn primary_range(ctx: &Ctx, aesthetic: &str) -> (f64, f64) {
+    ctx.spec
+        .find_scale(aesthetic)
+        .and_then(|s| s.numeric_domain())
+        .unwrap_or((0.0, 1.0))
+}
+
+/// Slope from the `slope` aesthetic (literal/annotation) or the SETTING param.
+fn slope_value(ctx: &Ctx) -> f64 {
+    let param = match ctx.layer.parameters.get("slope") {
+        Some(ParameterValue::Number(n)) => *n,
+        _ => 0.0,
+    };
+    constant_number(ctx, "slope", param)
+}
+
+/// A non-diagonal rule is a reference line spanning the whole panel on its free
+/// axis. The free axis uses raw 0..1 panel fractions, so no scale/axis is
+/// created for it.
 fn rule(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, f64)>) {
     if aesthetic_column_name(ctx.layer, "pos1").is_some() {
         // Vertical line at x = pos1, spanning full height.

@@ -3,7 +3,9 @@
 use hephaestus::color::rgb8;
 
 use super::super::scales::RangeKind;
-use super::super::wiring::{Ctx, GeomSpec, MatDefault, MaterialSpec, PanelAxis, PositionSpec};
+use super::super::wiring::{
+    Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec, PanelAxis, PositionSpec,
+};
 
 pub fn spec(_ctx: &Ctx) -> GeomSpec {
     GeomSpec {
@@ -38,6 +40,8 @@ pub fn spec(_ctx: &Ctx) -> GeomSpec {
         ],
         raw_strings: &[],
         raw_numbers: vec![],
+        data_channels: vec![],
+        legend_key: LegendKind::Point,
         grouped: false,
     }
 }

@@ -8,7 +8,7 @@ use hephaestus::color::Color;
 use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
 
 use super::scales::parse_color;
-use crate::array_util::{as_f64, as_str, cast_array, value_to_string};
+use crate::array_util::{as_bool, as_f64, as_str, cast_array, value_to_string};
 use crate::{AestheticValue, DataFrame, Layer, Result};
 
 /// A column extracted in the type hephaestus expects for a channel: numeric
@@ -25,6 +25,16 @@ impl ChannelData {
         match self {
             ChannelData::Floats(values) => extent(values),
             ChannelData::Strings(_) => (0.0, 1.0),
+        }
+    }
+
+    /// Select a subset of rows by index, preserving the channel's value type.
+    pub fn select(&self, idx: &[usize]) -> ChannelData {
+        match self {
+            ChannelData::Floats(v) => ChannelData::Floats(idx.iter().map(|&i| v[i]).collect()),
+            ChannelData::Strings(v) => {
+                ChannelData::Strings(idx.iter().map(|&i| v[i].clone()).collect())
+            }
         }
     }
 
@@ -120,6 +130,20 @@ pub fn build_group_keys(df: &DataFrame, partition_by: &[String]) -> Result<Optio
         })
         .collect();
     Ok(Some(keys))
+}
+
+/// Read a boolean column (arrow Boolean, or text `true`/`1`). Nulls → false.
+pub fn column_to_bool(df: &DataFrame, name: &str) -> Result<Vec<bool>> {
+    let array = df.column(name)?;
+    if matches!(array.data_type(), DataType::Boolean) {
+        let a = as_bool(array)?;
+        Ok((0..a.len()).map(|i| !a.is_null(i) && a.value(i)).collect())
+    } else {
+        Ok(column_to_strings(df, name)?
+            .iter()
+            .map(|s| matches!(s.to_lowercase().as_str(), "true" | "1"))
+            .collect())
+    }
 }
 
 /// Read a color column (visual-space literal values) as parsed colors,

@@ -1,22 +1,34 @@
 //! `bar`, `histogram`, and `tile` geoms → hephaestus `RectGeom`.
 //!
-//! Bars fill their category band (RectGeom's discrete `x_band` defaults ±0.5);
-//! histograms span explicit bin edges; tiles span min/max extents. Bars and
-//! histograms are orientation-aware (transposed swaps the value axis to x).
+//! Bars occupy a `width`-fraction of their category band, offset per dodge
+//! group (both come from ggsql: the `width` param and the `pos1offset`/
+//! `pos2offset` columns + `Layer::adjusted_width`); the value axis runs
+//! baseline→value. Histograms span explicit bin edges; tiles span min/max
+//! extents (continuous) or fill the band (discrete). Bars/histograms are
+//! orientation-aware.
 
 use hephaestus::color::rgb8;
 
-use super::super::channels::aesthetic_column_name;
+use super::super::channels::{aesthetic_column_name, column_to_f64};
 use super::super::scales::RangeKind;
-use super::super::wiring::{Ctx, GeomSpec, MatDefault, MaterialSpec, PanelAxis, PositionSpec};
+use super::super::wiring::{
+    band_half_width, dodge_offsets, Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec, PanelAxis,
+    PositionSpec,
+};
 use crate::plot::layer::geom::GeomType;
 
 pub fn spec(ctx: &Ctx) -> GeomSpec {
-    let (positions, raw_numbers) = match ctx.layer.geom.geom_type() {
-        GeomType::Bar => (bar(ctx.transposed), vec![]),
-        GeomType::Histogram => (histogram(ctx.transposed), vec![]),
-        GeomType::Tile => tile(ctx),
-        _ => (Vec::new(), vec![]),
+    let (positions, raw_numbers, data_channels) = match ctx.layer.geom.geom_type() {
+        GeomType::Bar => {
+            let (positions, bands) = bar(ctx);
+            (positions, vec![], bands)
+        }
+        GeomType::Histogram => (histogram(ctx.transposed), vec![], vec![]),
+        GeomType::Tile => {
+            let (positions, bands) = tile(ctx);
+            (positions, vec![], bands)
+        }
+        _ => (Vec::new(), vec![], vec![]),
     };
 
     GeomSpec {
@@ -43,30 +55,51 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
                 RangeKind::Number,
                 MatDefault::None,
             ),
+            MaterialSpec::new(
+                "linetype",
+                "linetype",
+                RangeKind::Linetype,
+                MatDefault::None,
+            ),
         ],
         raw_strings: &[],
         raw_numbers,
+        data_channels,
+        legend_key: LegendKind::Rect,
         grouped: false,
     }
 }
 
-/// Categorical bar: the main axis is a band (x and x2 share the category
-/// column; band defaults fill the cell); the value axis runs baseline→value.
-fn bar(transposed: bool) -> Vec<PositionSpec> {
-    if !transposed {
-        vec![
-            PositionSpec::new("x", "pos1", PanelAxis::X),
-            PositionSpec::new("x2", "pos1", PanelAxis::X),
-            PositionSpec::new("y", "pos2end", PanelAxis::Y),
-            PositionSpec::new("y2", "pos2", PanelAxis::Y),
-        ]
+/// Categorical bar: x/x2 share the category column; the band edges come from
+/// `width`/dodge as per-row band offsets. The value axis runs baseline→value.
+fn bar(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, Vec<f64>)>) {
+    let half = band_half_width(ctx.layer, 0.9);
+    if !ctx.transposed {
+        let offsets = dodge_offsets(ctx.df, "pos1offset");
+        let lo = offsets.iter().map(|o| o - half).collect();
+        let hi = offsets.iter().map(|o| o + half).collect();
+        (
+            vec![
+                PositionSpec::new("x", "pos1", PanelAxis::X),
+                PositionSpec::new("x2", "pos1", PanelAxis::X),
+                PositionSpec::new("y", "pos2end", PanelAxis::Y),
+                PositionSpec::new("y2", "pos2", PanelAxis::Y),
+            ],
+            vec![("x_band", lo), ("x2_band", hi)],
+        )
     } else {
-        vec![
-            PositionSpec::new("y", "pos2", PanelAxis::Y),
-            PositionSpec::new("y2", "pos2", PanelAxis::Y),
-            PositionSpec::new("x", "pos1end", PanelAxis::X),
-            PositionSpec::new("x2", "pos1", PanelAxis::X),
-        ]
+        let offsets = dodge_offsets(ctx.df, "pos2offset");
+        let lo = offsets.iter().map(|o| o - half).collect();
+        let hi = offsets.iter().map(|o| o + half).collect();
+        (
+            vec![
+                PositionSpec::new("y", "pos2", PanelAxis::Y),
+                PositionSpec::new("y2", "pos2", PanelAxis::Y),
+                PositionSpec::new("x", "pos1end", PanelAxis::X),
+                PositionSpec::new("x2", "pos1", PanelAxis::X),
+            ],
+            vec![("y_band", lo), ("y2_band", hi)],
+        )
     }
 }
 
@@ -89,9 +122,11 @@ fn histogram(transposed: bool) -> Vec<PositionSpec> {
     }
 }
 
-/// Tile/heatmap: continuous tiles span min/max extents; discrete tiles fill the
-/// category band on both axes.
-fn tile(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, f64)>) {
+/// Tile/heatmap: continuous tiles span min/max extents; discrete tiles occupy a
+/// `width`/`height` fraction of the category band on each axis. ggsql resolves
+/// `width`/`height` into per-row columns (1.0 = full band, like VL's
+/// `datum.width * bandwidth`); each axis's band edges sit at ±fraction/2.
+fn tile(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, Vec<f64>)>) {
     if aesthetic_column_name(ctx.layer, "pos1min").is_some() {
         (
             vec![
@@ -103,7 +138,8 @@ fn tile(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, f64)>) {
             vec![],
         )
     } else {
-        // Discrete tile: x band defaults (±0.5) fill x; add y bands for y.
+        let (x_lo, x_hi) = band_edges(ctx, "width");
+        let (y_lo, y_hi) = band_edges(ctx, "height");
         (
             vec![
                 PositionSpec::new("x", "pos1", PanelAxis::X),
@@ -111,7 +147,22 @@ fn tile(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, f64)>) {
                 PositionSpec::new("y", "pos2", PanelAxis::Y),
                 PositionSpec::new("y2", "pos2", PanelAxis::Y),
             ],
-            vec![("y_band", -0.5), ("y2_band", 0.5)],
+            vec![
+                ("x_band", x_lo),
+                ("x2_band", x_hi),
+                ("y_band", y_lo),
+                ("y2_band", y_hi),
+            ],
         )
     }
+}
+
+/// Per-row band edges (`-fraction/2`, `+fraction/2`) for a discrete tile's
+/// `width`/`height` column; a missing column defaults to a full (1.0) band.
+fn band_edges(ctx: &Ctx, aesthetic: &str) -> (Vec<f64>, Vec<f64>) {
+    let name = crate::naming::aesthetic_column(aesthetic);
+    let fracs = column_to_f64(ctx.df, &name).unwrap_or_else(|_| vec![1.0; ctx.df.height()]);
+    let lo = fracs.iter().map(|f| -f / 2.0).collect();
+    let hi = fracs.iter().map(|f| f / 2.0).collect();
+    (lo, hi)
 }

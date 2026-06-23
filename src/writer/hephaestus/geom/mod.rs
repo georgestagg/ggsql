@@ -3,15 +3,17 @@
 //! through the shared wiring. Composite geoms (boxplot, violin) are Phase 3b.
 
 mod area;
+mod boxplot;
 mod line;
 mod point;
 mod polygon;
 mod rect;
 mod segment;
 mod text;
+mod violin;
 
 use hephaestus::plot::{
-    LineGeom, Plot as HPlot, PointGeom, PolygonGeom, RectGeom, RibbonGeom, SegmentGeom, TextGeom,
+    LineGeom, Plot as HPlot, PointGeom, PolygonGeom, RectGeom, RibbonGeom, SegmentGeom,
 };
 
 use super::wiring::{build_and_add, Ctx, Wiring};
@@ -32,10 +34,13 @@ pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()
             build_and_add::<RibbonGeom>(plot, area::spec(ctx), ctx, w)
         }
         GeomType::Polygon => build_and_add::<PolygonGeom>(plot, polygon::spec(ctx), ctx, w),
+        GeomType::Rule if segment::is_diagonal(ctx.layer) => segment::build_diagonal(plot, ctx, w),
         GeomType::Segment | GeomType::Range | GeomType::Rule => {
             build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx, w)
         }
-        GeomType::Text => build_and_add::<TextGeom>(plot, text::spec(ctx), ctx, w),
+        GeomType::Text => text::build(plot, ctx, w),
+        GeomType::Boxplot => boxplot::build(plot, ctx, w),
+        GeomType::Violin => violin::build(plot, ctx, w),
         other => Err(GgsqlError::WriterError(format!(
             "hephaestus writer does not support the '{other}' geom yet"
         ))),
@@ -61,5 +66,7 @@ pub fn is_supported(geom: GeomType) -> bool {
             | GeomType::Range
             | GeomType::Rule
             | GeomType::Text
+            | GeomType::Boxplot
+            | GeomType::Violin
     )
 }
