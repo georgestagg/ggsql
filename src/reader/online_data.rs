@@ -1,3 +1,5 @@
+use const_format::concatcp;
+
 use crate::{DataFrame, GgsqlError};
 
 // =============================================================================
@@ -7,27 +9,28 @@ use crate::{DataFrame, GgsqlError};
 /// Resolve an online dataset name to its download URL.
 pub fn resolve_online_dataset(name: &str) -> Option<&'static str> {
     let name = name.replace('-', "_");
+    const BASE: &str = "https://github.com/ggsql-dev/datasets/releases/latest/download";
     let url = match name.as_str() {
         "world" | "world_110m" | "countries" | "countries_110m" => {
-            "https://example.com/placeholder/ne_110m_admin_0_countries.parquet"
+            concatcp!(BASE, "/ne_110m_admin_0_countries.parquet")
         }
         "world_50m" | "countries_50m" => {
-            "https://example.com/placeholder/ne_50m_admin_0_countries.parquet"
+            concatcp!(BASE, "/ne_50m_admin_0_countries.parquet")
         }
         "world_10m" | "countries_10m" => {
-            "https://example.com/placeholder/ne_10m_admin_0_countries.parquet"
+            concatcp!(BASE, "/ne_10m_admin_0_countries.parquet")
         }
         "states" | "states_110m" | "provinces" | "provinces_110m" => {
-            "https://example.com/placeholder/ne_110m_admin_1_states_provinces.parquet"
+            concatcp!(BASE, "/ne_110m_admin_1_states_provinces.parquet")
         }
         "states_50m" | "provinces_50m" => {
-            "https://example.com/placeholder/ne_50m_admin_1_states_provinces.parquet"
+            concatcp!(BASE, "/ne_50m_admin_1_states_provinces.parquet")
         }
         "states_10m" | "provinces_10m" => {
-            "https://example.com/placeholder/ne_10m_admin_1_states_provinces.parquet"
+            concatcp!(BASE, "/ne_10m_admin_1_states_provinces.parquet")
         }
         "us_counties" | "us_counties_10m" => {
-            "https://example.com/placeholder/ne_10m_admin_2_counties.parquet"
+            concatcp!(BASE, "/ne_10m_admin_2_counties.parquet")
         }
         _ => return None,
     };
