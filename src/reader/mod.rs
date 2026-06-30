@@ -430,7 +430,7 @@ pub mod odbc;
 pub mod adbc;
 
 pub mod connection;
-pub mod data;
+pub mod builtin_data;
 mod spec;
 
 #[cfg(feature = "duckdb")]

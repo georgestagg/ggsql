@@ -320,8 +320,8 @@ impl GgsqlContext {
 
     /// Register all known builtin datasets (e.g. ggsql:penguins)
     pub async fn register_builtin_datasets(&self) -> Result<(), JsValue> {
-        for &name in ggsql::reader::data::KNOWN_DATASETS {
-            if let Some(bytes) = ggsql::reader::data::builtin_parquet_bytes(name) {
+        for &name in ggsql::reader::builtin_data::KNOWN_DATASETS {
+            if let Some(bytes) = ggsql::reader::builtin_data::builtin_parquet_bytes(name) {
                 let table_name = ggsql::naming::builtin_data_table(name);
                 let columns_js = convert_parquet_js(bytes).await.map_err(|e| {
                     JsValue::from_str(&format!("Parquet error for '{}': {:?}", name, e))
