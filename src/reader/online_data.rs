@@ -37,6 +37,24 @@ pub fn resolve_online_dataset(name: &str) -> Option<&'static str> {
 // =============================================================================
 // Native download + cache (not available on wasm32)
 // =============================================================================
+//
+// Wasm integration lives in `ggsql-wasm/src/lib.rs` and must provide an
+// equivalent of `load_online_dataframe` using the browser fetch API:
+//
+//   1. Call `resolve_online_dataset(name)` to get the URL.
+//   2. Fetch the bytes via browser `fetch()` (async).
+//   3. Parse parquet via `convert_parquet_js` + `columns_js_to_dataframe`
+//      (same as `register_parquet` / `register_builtin_datasets`).
+//   4. Register the DataFrame under `naming::online_data_table(name)`.
+//
+// The method should be called `register_online_datasets` on `GgsqlWasm`,
+// following the shape of `register_builtin_datasets`. It should extract
+// `online:` dataset names from the SQL (via
+// `builtin_data::extract_prefixed_dataset_names(sql, "online")`), skip
+// any that are already registered, and fetch + register the rest.
+//
+// Caching: the native path uses the filesystem. In the browser, consider
+// the Cache API or simply re-fetch per session. This is a UX decision.
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "parquet"))]
 mod native {
