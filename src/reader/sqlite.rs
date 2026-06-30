@@ -371,7 +371,7 @@ impl Reader for SqliteReader {
         // Handle ggsql:name namespaced identifiers (builtin datasets)
         #[cfg(all(feature = "builtin-data", feature = "parquet"))]
         {
-            let dataset_names = super::builtin_data::extract_builtin_dataset_names(sql)?;
+            let dataset_names = super::builtin_data::extract_prefixed_dataset_names(sql, "ggsql")?;
             for name in &dataset_names {
                 let table_name = naming::builtin_data_table(name);
                 if !self.table_exists(&table_name) {

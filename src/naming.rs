@@ -152,6 +152,26 @@ pub fn builtin_data_table(name: &str) -> String {
     format!("{}{}{}", DATA_PREFIX, name, GGSQL_SUFFIX)
 }
 
+/// Generate table name for an online dataset.
+///
+/// Used when rewriting `online:world` to the internal table name.
+/// Format: `__ggsql_online_<name>__`
+///
+/// # Example
+/// ```
+/// use ggsql::naming;
+/// assert_eq!(naming::online_data_table("world"), "__ggsql_online_world__");
+/// assert_eq!(naming::online_data_table("us-counties"), "__ggsql_online_us_counties__");
+/// ```
+pub fn online_data_table(name: &str) -> String {
+    format!(
+        "{}online_{}{}",
+        GGSQL_PREFIX,
+        name.replace('-', "_"),
+        GGSQL_SUFFIX
+    )
+}
+
 /// Generate column name for a constant aesthetic value.
 ///
 /// Used when a single layer has a literal aesthetic value that needs

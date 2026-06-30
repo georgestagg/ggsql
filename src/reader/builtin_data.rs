@@ -123,11 +123,14 @@ pub fn is_known_builtin(name: &str) -> bool {
 // SQL namespace rewriting (always available, including WASM)
 // =============================================================================
 
-/// Extract builtin dataset names from SQL containing namespaced identifiers.
+/// Extract dataset names with a given namespace prefix from SQL.
 ///
-/// Finds `ggsql:X` patterns via tree-sitter and returns the dataset names
-/// (without the `ggsql:` prefix), deduplicated.
-pub fn extract_builtin_dataset_names(sql: &str) -> Result<Vec<String>, GgsqlError> {
+/// Finds `prefix:X` patterns via tree-sitter and returns the dataset names
+/// (without the prefix), deduplicated.
+pub fn extract_prefixed_dataset_names(
+    sql: &str,
+    prefix: &str,
+) -> Result<Vec<String>, GgsqlError> {
     let token_def = r#"(namespaced_identifier) @select"#;
     let mut tokens = tokens_from_tree(sql, token_def, "select")?;
 
@@ -138,9 +141,10 @@ pub fn extract_builtin_dataset_names(sql: &str) -> Result<Vec<String>, GgsqlErro
     tokens.sort_unstable();
     tokens.dedup();
 
+    let prefix_colon = format!("{}:", prefix);
     let datasets: Vec<String> = tokens
         .iter()
-        .filter_map(|token| token.strip_prefix("ggsql:").map(|s| s.to_string()))
+        .filter_map(|token| token.strip_prefix(&prefix_colon).map(|s| s.to_string()))
         .collect();
 
     Ok(datasets)
@@ -148,7 +152,9 @@ pub fn extract_builtin_dataset_names(sql: &str) -> Result<Vec<String>, GgsqlErro
 
 /// Rewrite SQL to replace namespaced identifiers with internal table names.
 ///
-/// e.g., `SELECT * FROM ggsql:penguins` -> `SELECT * FROM __ggsql_data_penguins__`
+/// Handles both builtin and online dataset prefixes:
+/// - `ggsql:penguins` -> `__ggsql_data_penguins__`
+/// - `online:world`   -> `__ggsql_online_world__`
 ///
 /// Uses tree-sitter to find the exact byte positions of namespaced identifiers,
 /// then replaces them in reverse order to preserve offsets.
@@ -189,6 +195,12 @@ pub fn rewrite_namespaced_sql(sql: &str) -> Result<String, GgsqlError> {
                     node.start_byte(),
                     node.end_byte(),
                     naming::quote_ident(&naming::builtin_data_table(name)),
+                ));
+            } else if let Some(name) = full_text.strip_prefix("online:") {
+                replacements.push((
+                    node.start_byte(),
+                    node.end_byte(),
+                    naming::quote_ident(&naming::online_data_table(name)),
                 ));
             }
         }
@@ -286,7 +298,7 @@ mod tests {
     #[test]
     fn test_extract_builtin_dataset_names_single() {
         let sql = "SELECT * FROM ggsql:penguins VISUALISE DRAW point MAPPING x AS x";
-        let names = extract_builtin_dataset_names(sql).unwrap();
+        let names = extract_prefixed_dataset_names(sql, "ggsql").unwrap();
         assert_eq!(names, vec!["penguins"]);
     }
 
@@ -294,7 +306,7 @@ mod tests {
     fn test_extract_builtin_dataset_names_multiple() {
         let sql =
             "SELECT * FROM ggsql:penguins, ggsql:airquality VISUALISE DRAW point MAPPING x AS x";
-        let names = extract_builtin_dataset_names(sql).unwrap();
+        let names = extract_prefixed_dataset_names(sql, "ggsql").unwrap();
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"airquality".to_string()));
         assert!(names.contains(&"penguins".to_string()));
@@ -303,14 +315,14 @@ mod tests {
     #[test]
     fn test_extract_builtin_dataset_names_dedup() {
         let sql = "SELECT * FROM ggsql:penguins p1, ggsql:penguins p2 VISUALISE DRAW point MAPPING x AS x";
-        let names = extract_builtin_dataset_names(sql).unwrap();
+        let names = extract_prefixed_dataset_names(sql, "ggsql").unwrap();
         assert_eq!(names, vec!["penguins"]);
     }
 
     #[test]
     fn test_extract_builtin_dataset_names_none() {
         let sql = "SELECT * FROM regular_table VISUALISE DRAW point MAPPING x AS x";
-        let names = extract_builtin_dataset_names(sql).unwrap();
+        let names = extract_prefixed_dataset_names(sql, "ggsql").unwrap();
         assert!(names.is_empty());
     }
 

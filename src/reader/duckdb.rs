@@ -25,7 +25,7 @@ use std::sync::Arc;
 fn register_builtin_datasets_duckdb(sql: &str, conn: &Connection) -> Result<()> {
     use std::{env, fs};
 
-    let dataset_names = super::builtin_data::extract_builtin_dataset_names(sql)?;
+    let dataset_names = super::builtin_data::extract_prefixed_dataset_names(sql, "ggsql")?;
 
     // Load spatial extension before registering datasets that contain
     // geometry columns, so that spatial features are available.
