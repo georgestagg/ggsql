@@ -64,10 +64,46 @@ pub fn builtin_parquet_bytes(name: &str) -> Option<&'static [u8]> {
 // Arrow-based builtin data loading
 // =============================================================================
 
-#[cfg(all(feature = "builtin-data", feature = "parquet"))]
-pub fn load_builtin_dataframe(name: &str) -> Result<crate::DataFrame, GgsqlError> {
+/// Convert raw parquet bytes into a DataFrame.
+#[cfg(feature = "parquet")]
+pub fn dataframe_from_parquet_bytes(
+    label: &str,
+    bytes: bytes::Bytes,
+) -> Result<crate::DataFrame, GgsqlError> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
+    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+        .map_err(|e| {
+            GgsqlError::ReaderError(format!("Failed to read parquet for '{}': {}", label, e))
+        })?
+        .build()
+        .map_err(|e| {
+            GgsqlError::ReaderError(format!("Failed to build reader for '{}': {}", label, e))
+        })?;
+
+    let batches: Vec<_> = reader
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| {
+            GgsqlError::ReaderError(format!("Failed to load dataset '{}': {}", label, e))
+        })?;
+
+    if batches.is_empty() {
+        return Ok(crate::DataFrame::empty());
+    }
+
+    let rb = if batches.len() == 1 {
+        batches.into_iter().next().unwrap()
+    } else {
+        arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
+            GgsqlError::ReaderError(format!("Failed to concat batches for '{}': {}", label, e))
+        })?
+    };
+
+    Ok(crate::DataFrame::from_record_batch(rb))
+}
+
+#[cfg(all(feature = "builtin-data", feature = "parquet"))]
+pub fn load_builtin_dataframe(name: &str) -> Result<crate::DataFrame, GgsqlError> {
     let parquet_bytes = match name {
         "penguins" => PENGUINS,
         "airquality" => AIRQUALITY,
@@ -80,35 +116,7 @@ pub fn load_builtin_dataframe(name: &str) -> Result<crate::DataFrame, GgsqlError
         }
     };
 
-    let bytes = bytes::Bytes::from_static(parquet_bytes);
-    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
-        .map_err(|e| {
-            GgsqlError::ReaderError(format!("Failed to read builtin dataset '{}': {}", name, e))
-        })?
-        .build()
-        .map_err(|e| {
-            GgsqlError::ReaderError(format!("Failed to build reader for '{}': {}", name, e))
-        })?;
-
-    let batches: Vec<_> = reader
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| {
-            GgsqlError::ReaderError(format!("Failed to load builtin dataset '{}': {}", name, e))
-        })?;
-
-    if batches.is_empty() {
-        return Ok(crate::DataFrame::empty());
-    }
-
-    let rb = if batches.len() == 1 {
-        batches.into_iter().next().unwrap()
-    } else {
-        arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
-            GgsqlError::ReaderError(format!("Failed to concat batches for '{}': {}", name, e))
-        })?
-    };
-
-    Ok(crate::DataFrame::from_record_batch(rb))
+    dataframe_from_parquet_bytes(name, bytes::Bytes::from_static(parquet_bytes))
 }
 
 /// Known builtin dataset names in the ggsql namespace
@@ -127,10 +135,7 @@ pub fn is_known_builtin(name: &str) -> bool {
 ///
 /// Finds `prefix:X` patterns via tree-sitter and returns the dataset names
 /// (without the prefix), deduplicated.
-pub fn extract_prefixed_dataset_names(
-    sql: &str,
-    prefix: &str,
-) -> Result<Vec<String>, GgsqlError> {
+pub fn extract_prefixed_dataset_names(sql: &str, prefix: &str) -> Result<Vec<String>, GgsqlError> {
     let token_def = r#"(namespaced_identifier) @select"#;
     let mut tokens = tokens_from_tree(sql, token_def, "select")?;
 
@@ -356,6 +361,32 @@ mod tests {
         let rewritten = rewrite_namespaced_sql(sql).unwrap();
         assert!(rewritten.starts_with("SELECT * FROM \"__ggsql_data_penguins__\""));
         assert!(!rewritten.contains("ggsql:"));
+    }
+
+    #[test]
+    fn test_rewrite_online_dataset() {
+        let sql = "SELECT * FROM online:world";
+        let rewritten = rewrite_namespaced_sql(sql).unwrap();
+        assert_eq!(rewritten, "SELECT * FROM \"__ggsql_online_world__\"");
+    }
+
+    #[test]
+    fn test_rewrite_mixed_namespaces() {
+        // JOIN not yet supported by tree-sitter grammar for namespaced identifiers;
+        // comma-separated FROM works.
+        let sql = "SELECT * FROM ggsql:penguins, online:world";
+        let rewritten = rewrite_namespaced_sql(sql).unwrap();
+        assert!(rewritten.contains("\"__ggsql_data_penguins__\""));
+        assert!(rewritten.contains("\"__ggsql_online_world__\""));
+        assert!(!rewritten.contains("ggsql:"));
+        assert!(!rewritten.contains("online:"));
+    }
+
+    #[test]
+    fn test_extract_online_dataset_names() {
+        let sql = "SELECT * FROM online:world VISUALISE DRAW polygon MAPPING geom AS geometry";
+        let names = extract_prefixed_dataset_names(sql, "online").unwrap();
+        assert_eq!(names, vec!["world"]);
     }
 }
 
