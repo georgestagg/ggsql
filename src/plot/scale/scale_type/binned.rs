@@ -1989,7 +1989,6 @@ mod tests {
         // Issue: breaks like [2600, 3550, 4050, 4750, 6400] were getting terminal
         // breaks removed when data range was ~[2700, 6300].
         use super::ScaleTypeTrait;
-        use arrow::datatypes::DataType;
 
         let binned = Binned;
         let mut scale = Scale::new("fill");
@@ -2035,7 +2034,6 @@ mod tests {
         // When BOTH explicit breaks AND explicit range are provided,
         // breaks should be filtered to the range.
         use super::ScaleTypeTrait;
-        use arrow::datatypes::DataType;
 
         let binned = Binned;
         let mut scale = Scale::new("fill");

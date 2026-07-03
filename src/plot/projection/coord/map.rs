@@ -219,12 +219,19 @@ fn scale_override_bbox(
 /// (computed by the Geographic transform's `calculate_breaks`), and `resolved` will be
 /// true so the later `resolve_scales` pass skips it.
 fn resolve_map_scale(scale: &mut Scale, range: (f64, f64)) {
+    use crate::plot::scale::transform::Transform;
+    use crate::plot::scale::ScaleType;
+
     if scale.resolved {
         return;
     }
-    let Some(ref scale_type) = scale.scale_type.clone() else {
-        return;
-    };
+    if scale.scale_type.is_none() {
+        scale.scale_type = Some(ScaleType::continuous());
+    }
+    if scale.transform.is_none() {
+        scale.transform = Some(Transform::geographic());
+    }
+    let scale_type = scale.scale_type.clone().unwrap();
 
     let mut context = ScaleDataContext::from_range(range.0, range.1);
     context.default_expand = Some((0.0, 0.0));

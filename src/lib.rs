@@ -1297,7 +1297,7 @@ mod integration_tests {
     #[cfg(feature = "spatial")]
     #[test]
     fn test_scale_limits_override_map_bbox() {
-        use crate::plot::types::{ArrayElement, ParameterValue};
+        use crate::plot::types::ParameterValue;
 
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
 
@@ -1380,5 +1380,66 @@ mod integration_tests {
             line_count, 4,
             "Expected 4 graticule meridians for breaks [0, 30, 60, 90], got {line_count}\nWKT: {wkt:.200}"
         );
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn test_scale_break_count_controls_graticule() {
+        use crate::plot::types::ParameterValue;
+
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        let query = r#"
+            VISUALISE FROM ggsql:world
+            DRAW spatial PROJECT TO mercator
+            SCALE lon SETTING breaks => 4
+        "#;
+
+        let prepared = execute::prepare_data_with_reader(query, &reader).unwrap();
+
+        let project = prepared.specs[0].project.as_ref().unwrap();
+        let grat_lon = project
+            .computed
+            .get("graticule_lon")
+            .expect("graticule_lon should be set");
+
+        let ParameterValue::String(wkt) = grat_lon else {
+            panic!("graticule_lon should be a String (WKT)");
+        };
+
+        let line_count = wkt.split("), (").count();
+        assert_eq!(
+            line_count, 4,
+            "Expected 4 graticule meridians for breaks => 4, got {line_count}\nWKT: {wkt:.200}"
+        );
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn test_map_position_scales_resolved_after_projection() {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+
+        let query = r#"
+            VISUALISE FROM ggsql:world
+            DRAW spatial PROJECT TO mercator
+        "#;
+
+        let prepared = execute::prepare_data_with_reader(query, &reader).unwrap();
+
+        let spec = &prepared.specs[0];
+        for scale in &spec.scales {
+            if scale.aesthetic == "pos1" || scale.aesthetic == "pos2" {
+                assert!(
+                    scale.resolved,
+                    "Map position scale '{}' should be marked resolved",
+                    scale.aesthetic
+                );
+                assert!(
+                    !scale.numeric_breaks().is_empty(),
+                    "Map position scale '{}' should have breaks",
+                    scale.aesthetic
+                );
+            }
+        }
     }
 }
