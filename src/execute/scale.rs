@@ -434,7 +434,9 @@ pub fn resolve_scale_types_and_transforms(
                     | TransformKind::Asinh
                     | TransformKind::PseudoLog
                     // Integer transform uses Continuous scale
-                    | TransformKind::Integer => ScaleType::continuous(),
+                    | TransformKind::Integer
+                    // Geographic transform uses Continuous scale
+                    | TransformKind::Geographic => ScaleType::continuous(),
                     // Discrete transforms (String, Bool) use Discrete scale
                     TransformKind::String | TransformKind::Bool => ScaleType::discrete(),
                     // Identity: fall back to dtype inference (considers aesthetic)
