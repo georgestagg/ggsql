@@ -1383,11 +1383,11 @@ pub fn prepare_data_with_reader(query: &str, reader: &dyn Reader) -> Result<Prep
             &execute_query,
         )?;
     }
-    let scales = std::mem::take(&mut specs[0].scales);
+    let mut scales = std::mem::take(&mut specs[0].scales);
     project.apply_projection_transforms(
         &mut specs[0].layers,
         &mut layer_queries,
-        &scales,
+        &mut scales,
         dialect,
         &execute_query,
     )?;

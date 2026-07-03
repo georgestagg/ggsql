@@ -147,7 +147,7 @@ pub trait CoordTrait: std::fmt::Debug + Send + Sync {
         layers: &mut [Layer],
         layer_queries: &mut [String],
         projection: &mut super::Projection,
-        _scales: &[Scale],
+        _scales: &mut [Scale],
         dialect: &dyn SqlDialect,
         _execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
     ) -> crate::Result<()> {
@@ -245,7 +245,7 @@ impl Coord {
         layers: &mut [Layer],
         layer_queries: &mut [String],
         projection: &mut super::Projection,
-        scales: &[Scale],
+        scales: &mut [Scale],
         dialect: &dyn SqlDialect,
         execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
     ) -> crate::Result<()> {

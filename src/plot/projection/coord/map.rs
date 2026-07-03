@@ -3,8 +3,7 @@
 use super::map_projections::MapProjectionTrait;
 use crate::naming;
 use crate::plot::layer::geom::GeomType;
-use crate::plot::scale::breaks::graticule_breaks;
-use crate::plot::scale::Scale;
+use crate::plot::scale::{Scale, ScaleDataContext};
 use crate::plot::{DataSource, Layer, ParameterValue, Parameters};
 use crate::reader::SqlDialect;
 use crate::DataFrame;
@@ -18,7 +17,7 @@ pub(crate) fn apply_map_transforms(
     layers: &mut [Layer],
     layer_queries: &mut [String],
     projection: &mut super::super::Projection,
-    scales: &[Scale],
+    scales: &mut [Scale],
     dialect: &dyn SqlDialect,
     execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
 ) -> crate::Result<()> {
@@ -214,21 +213,25 @@ fn scale_override_bbox(
         .or(data_bbox)
 }
 
-/// Extract explicit break positions from a scale's properties.
-/// Returns None if the scale has no explicit breaks (i.e. breaks is absent or a count).
-fn scale_breaks(scales: &[Scale], aesthetic: &str) -> Option<Vec<f64>> {
-    let scale = scales.iter().find(|s| s.aesthetic == aesthetic)?;
-    match scale.properties.get("breaks") {
-        Some(ParameterValue::Array(arr)) => {
-            let breaks: Vec<f64> = arr.iter().filter_map(|e| e.to_f64()).collect();
-            if breaks.is_empty() {
-                None
-            } else {
-                Some(breaks)
-            }
-        }
-        _ => None,
+/// Resolve a map position scale using the geographic bounding box as synthetic data.
+///
+/// After this call, the scale's `properties["breaks"]` will be an Array of positions
+/// (computed by the Geographic transform's `calculate_breaks`), and `resolved` will be
+/// true so the later `resolve_scales` pass skips it.
+fn resolve_map_scale(scale: &mut Scale, range: (f64, f64)) {
+    if scale.resolved {
+        return;
     }
+    let Some(ref scale_type) = scale.scale_type.clone() else {
+        return;
+    };
+
+    let mut context = ScaleDataContext::from_range(range.0, range.1);
+    context.default_expand = Some((0.0, 0.0));
+
+    let aesthetic_owned = scale.aesthetic.clone();
+    let _ = scale_type.resolve(scale, &context, &aesthetic_owned);
+    scale.resolved = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +367,7 @@ fn build_graticule(
     bbox: &BBox,
     clip_boundary_wkt: Option<&str>,
     crs: &str,
-    scales: &[Scale],
+    scales: &mut [Scale],
     dialect: &dyn SqlDialect,
     execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
 ) -> crate::Result<(Option<String>, Option<String>)> {
@@ -372,12 +375,20 @@ fn build_graticule(
         return Ok((None, None));
     };
 
-    let (lon_min, lon_max) = geo_bbox.xrange();
-    let (lat_min, lat_max) = geo_bbox.yrange();
-    let lon_breaks =
-        scale_breaks(scales, "pos1").unwrap_or_else(|| graticule_breaks(lon_min, lon_max, 7));
-    let lat_breaks =
-        scale_breaks(scales, "pos2").unwrap_or_else(|| graticule_breaks(lat_min, lat_max, 7));
+    let lon_breaks = match scales.iter_mut().find(|s| s.aesthetic == "pos1") {
+        Some(s) => {
+            resolve_map_scale(s, geo_bbox.xrange());
+            s.numeric_breaks()
+        }
+        None => Vec::new(),
+    };
+    let lat_breaks = match scales.iter_mut().find(|s| s.aesthetic == "pos2") {
+        Some(s) => {
+            resolve_map_scale(s, geo_bbox.yrange());
+            s.numeric_breaks()
+        }
+        None => Vec::new(),
+    };
 
     if lon_breaks.is_empty() && lat_breaks.is_empty() {
         return Ok((None, None));
@@ -1379,53 +1390,44 @@ mod tests {
         }
     }
 
-    mod scale_breaks_tests {
+    mod resolve_map_scale_tests {
         use super::*;
+        use crate::plot::scale::transform::Transform;
+        use crate::plot::scale::ScaleType;
+
         use crate::plot::scale::Scale;
-        use crate::plot::types::ArrayElement;
 
         #[test]
-        fn explicit_array_breaks_returned() {
+        fn resolves_breaks_from_range() {
             let mut s = Scale::new("pos1");
+            s.scale_type = Some(ScaleType::continuous());
+            s.transform = Some(Transform::geographic());
+            s.properties
+                .insert("breaks".to_string(), ParameterValue::Number(5.0));
+
+            resolve_map_scale(&mut s, (-180.0, 180.0));
+
+            assert!(s.resolved);
+            let breaks = s.numeric_breaks();
+            assert!(!breaks.is_empty());
+            assert!(breaks.iter().all(|&b| (-180.0..=180.0).contains(&b)));
+        }
+
+        #[test]
+        fn skips_already_resolved() {
+            let mut s = Scale::new("pos1");
+            s.resolved = true;
             s.properties.insert(
                 "breaks".to_string(),
                 ParameterValue::Array(vec![
-                    ArrayElement::Number(0.0),
-                    ArrayElement::Number(30.0),
-                    ArrayElement::Number(60.0),
+                    crate::plot::types::ArrayElement::Number(10.0),
+                    crate::plot::types::ArrayElement::Number(20.0),
                 ]),
             );
-            let scales = vec![s];
 
-            assert_eq!(scale_breaks(&scales, "pos1"), Some(vec![0.0, 30.0, 60.0]));
-        }
+            resolve_map_scale(&mut s, (-180.0, 180.0));
 
-        #[test]
-        fn numeric_break_count_ignored() {
-            let mut s = Scale::new("pos1");
-            s.properties
-                .insert("breaks".to_string(), ParameterValue::Number(5.0));
-            let scales = vec![s];
-
-            assert_eq!(scale_breaks(&scales, "pos1"), None);
-        }
-
-        #[test]
-        fn absent_breaks_returns_none() {
-            let scales = vec![Scale::new("pos1")];
-            assert_eq!(scale_breaks(&scales, "pos1"), None);
-        }
-
-        #[test]
-        fn wrong_aesthetic_returns_none() {
-            let mut s = Scale::new("pos2");
-            s.properties.insert(
-                "breaks".to_string(),
-                ParameterValue::Array(vec![ArrayElement::Number(10.0)]),
-            );
-            let scales = vec![s];
-
-            assert_eq!(scale_breaks(&scales, "pos1"), None);
+            assert_eq!(s.numeric_breaks(), vec![10.0, 20.0]);
         }
     }
 

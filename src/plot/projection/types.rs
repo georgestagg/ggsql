@@ -70,7 +70,7 @@ impl Projection {
         &mut self,
         layers: &mut [Layer],
         layer_queries: &mut [String],
-        scales: &[Scale],
+        scales: &mut [Scale],
         dialect: &dyn SqlDialect,
         execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
     ) -> crate::Result<()> {

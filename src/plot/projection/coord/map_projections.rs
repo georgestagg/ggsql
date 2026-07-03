@@ -241,7 +241,7 @@ impl<T: MapProjectionTrait + 'static> super::CoordTrait for T {
         layers: &mut [Layer],
         layer_queries: &mut [String],
         projection: &mut super::super::Projection,
-        scales: &[Scale],
+        scales: &mut [Scale],
         dialect: &dyn SqlDialect,
         execute_query: &dyn Fn(&str) -> crate::Result<DataFrame>,
     ) -> crate::Result<()> {

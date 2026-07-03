@@ -2009,15 +2009,7 @@ mod tests {
         scale.explicit_input_range = false;
 
         // Data context with narrower range than breaks
-        let context = ScaleDataContext {
-            range: Some(InputRange::Continuous(vec![
-                ArrayElement::Number(2700.0),
-                ArrayElement::Number(6300.0),
-            ])),
-            dtype: Some(DataType::Float64),
-            is_discrete: false,
-            default_expand: None,
-        };
+        let context = ScaleDataContext::from_range(2700.0, 6300.0);
 
         binned.resolve(&mut scale, &context, "fill").unwrap();
 
@@ -2066,15 +2058,7 @@ mod tests {
         ]);
         scale.explicit_input_range = true;
 
-        let context = ScaleDataContext {
-            range: Some(InputRange::Continuous(vec![
-                ArrayElement::Number(2700.0),
-                ArrayElement::Number(6300.0),
-            ])),
-            dtype: Some(DataType::Float64),
-            is_discrete: false,
-            default_expand: None,
-        };
+        let context = ScaleDataContext::from_range(2700.0, 6300.0);
 
         binned.resolve(&mut scale, &context, "fill").unwrap();
 
