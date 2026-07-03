@@ -6,9 +6,10 @@
 
 use crate::naming;
 use crate::plot::aesthetic::AestheticContext;
+use crate::plot::projection::CoordKind;
 use crate::plot::scale::{
     default_oob, gets_default_scale, infer_scale_target_type, infer_transform_from_input_range,
-    is_facet_aesthetic, transform::Transform, OOB_CENSOR, OOB_KEEP, OOB_SQUISH,
+    is_facet_aesthetic, transform::Transform, TransformKind, OOB_CENSOR, OOB_KEEP, OOB_SQUISH,
 };
 use crate::plot::{
     AestheticValue, ArrayElement, ArrayElementType, ColumnInfo, Layer, ParameterValue, Plot, Scale,
@@ -328,6 +329,10 @@ pub fn resolve_scale_types_and_transforms(
     use crate::plot::scale::coerce_dtypes;
 
     let aesthetic_ctx = spec.get_aesthetic_context();
+    let is_map = spec
+        .project
+        .as_ref()
+        .is_some_and(|p| p.coord.coord_kind() == CoordKind::Map);
 
     for scale in &mut spec.scales {
         // Skip scales that already have explicit types (user specified)
@@ -362,26 +367,7 @@ pub fn resolve_scale_types_and_transforms(
 
                     // Resolve transform if not set
                     if scale.transform.is_none() && !scale.explicit_transform {
-                        // For Discrete/Ordinal scales, check input range first for transform inference
-                        // This allows SCALE DISCRETE x FROM [true, false] to infer Bool transform
-                        // even when the column is String
-                        let transform_kind = if matches!(
-                            scale_type.scale_type_kind(),
-                            ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal
-                        ) {
-                            if let Some(ref input_range) = scale.input_range {
-                                if let Some(kind) = infer_transform_from_input_range(input_range) {
-                                    kind
-                                } else {
-                                    scale_type
-                                        .default_transform(&scale.aesthetic, Some(&common_dtype))
-                                }
-                            } else {
-                                scale_type.default_transform(&scale.aesthetic, Some(&common_dtype))
-                            }
-                        } else {
-                            scale_type.default_transform(&scale.aesthetic, Some(&common_dtype))
-                        };
+                        let transform_kind = infer_transform(scale, &common_dtype, is_map);
                         scale.transform = Some(Transform::from_kind(transform_kind));
                     }
                 }
@@ -416,7 +402,6 @@ pub fn resolve_scale_types_and_transforms(
         // If user specified VIA date/datetime/time/log/sqrt/etc., use Continuous scale
         let inferred_scale_type = if scale.explicit_transform {
             if let Some(ref transform) = scale.transform {
-                use crate::plot::scale::TransformKind;
                 match transform.transform_kind() {
                     // Temporal transforms require Continuous scale
                     TransformKind::Date
@@ -454,28 +439,34 @@ pub fn resolve_scale_types_and_transforms(
 
         // Infer transform if not explicit
         if scale.transform.is_none() && !scale.explicit_transform {
-            // For Discrete scales, check input range first for transform inference
-            // This allows SCALE DISCRETE x FROM [true, false] to infer Bool transform
-            // even when the column is String
-            let transform_kind = if inferred_scale_type.scale_type_kind() == ScaleTypeKind::Discrete
-            {
-                if let Some(ref input_range) = scale.input_range {
-                    if let Some(kind) = infer_transform_from_input_range(input_range) {
-                        kind
-                    } else {
-                        inferred_scale_type.default_transform(&scale.aesthetic, Some(&common_dtype))
-                    }
-                } else {
-                    inferred_scale_type.default_transform(&scale.aesthetic, Some(&common_dtype))
-                }
-            } else {
-                inferred_scale_type.default_transform(&scale.aesthetic, Some(&common_dtype))
-            };
+            let transform_kind = infer_transform(scale, &common_dtype, is_map);
             scale.transform = Some(Transform::from_kind(transform_kind));
         }
     }
 
     Ok(())
+}
+
+fn infer_transform(
+    scale: &Scale,
+    common_dtype: &arrow::datatypes::DataType,
+    is_map: bool,
+) -> TransformKind {
+    if is_map && (scale.aesthetic == "pos1" || scale.aesthetic == "pos2") {
+        return TransformKind::Geographic;
+    }
+    let scale_type = scale.scale_type.as_ref().unwrap();
+    if matches!(
+        scale_type.scale_type_kind(),
+        ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal
+    ) {
+        if let Some(ref input_range) = scale.input_range {
+            if let Some(kind) = infer_transform_from_input_range(input_range) {
+                return kind;
+            }
+        }
+    }
+    scale_type.default_transform(&scale.aesthetic, Some(common_dtype))
 }
 
 /// Collect all dtypes for an aesthetic across layers.
@@ -942,7 +933,6 @@ pub fn coerce_aesthetic_columns(
 ///
 /// Scales that were already resolved pre-stat (Binned scales) are skipped.
 pub fn resolve_scales(spec: &mut Plot, data_map: &mut HashMap<String, DataFrame>) -> Result<()> {
-    use crate::plot::projection::CoordKind;
     use crate::plot::scale::ScaleDataContext;
 
     let aesthetic_ctx = spec.get_aesthetic_context();
@@ -1086,8 +1076,6 @@ pub fn find_columns_for_aesthetic<'a>(
 /// - The scale has an explicit input range, AND
 /// - NULL is not part of the explicit input range
 pub fn apply_scale_oob(spec: &Plot, data_map: &mut HashMap<String, DataFrame>) -> Result<()> {
-    use crate::plot::projection::CoordKind;
-
     let aesthetic_ctx = spec.get_aesthetic_context();
     let is_map = spec
         .project
