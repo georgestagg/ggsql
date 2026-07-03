@@ -217,16 +217,22 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_states() {
-        let url = resolve_online_dataset("states").unwrap();
+    fn test_resolve_us_states() {
+        let url = resolve_online_dataset("us_states").unwrap();
         assert!(url.contains("110m_admin_1_states_provinces"));
     }
 
     #[test]
+    fn test_resolve_states_10m() {
+        let url = resolve_online_dataset("states_10m").unwrap();
+        assert!(url.contains("10m_admin_1_states_provinces"));
+    }
+
+    #[test]
     fn test_resolve_provinces_alias() {
-        let states = resolve_online_dataset("states").unwrap();
-        let provinces = resolve_online_dataset("provinces").unwrap();
-        assert_eq!(states, provinces);
+        let states_10m = resolve_online_dataset("states_10m").unwrap();
+        let provinces_10m = resolve_online_dataset("provinces_10m").unwrap();
+        assert_eq!(states_10m, provinces_10m);
     }
 
     #[test]
