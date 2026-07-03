@@ -20,12 +20,16 @@ pub fn resolve_online_dataset(name: &str) -> Option<&'static str> {
         "world_10m" | "countries_10m" => {
             concatcp!(BASE, "/ne_10m_admin_0_countries.parquet")
         }
-        "states" | "states_110m" | "provinces" | "provinces_110m" => {
+        // Only US is included in the 110m dataset
+        "us_states" | "us_states_110m" => {
             concatcp!(BASE, "/ne_110m_admin_1_states_provinces.parquet")
         }
+        // Only includes large countries Russia, US, Canada, Brazil, China, and some others
+        // Notably missing are many European, African, South American countries
         "states_50m" | "provinces_50m" => {
             concatcp!(BASE, "/ne_50m_admin_1_states_provinces.parquet")
         }
+        // Includes all countries
         "states_10m" | "provinces_10m" => {
             concatcp!(BASE, "/ne_10m_admin_1_states_provinces.parquet")
         }
