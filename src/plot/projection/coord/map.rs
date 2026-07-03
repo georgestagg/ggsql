@@ -168,7 +168,7 @@ fn scale_override_bbox(
             .find(|s| s.aesthetic == aesthetic && s.explicit_input_range)?
             .input_range
             .as_deref()?;
-        if range.len() == 2 && range.iter().any(|e| e.to_f64().is_some()) {
+        if range.len() == 2 && range.iter().all(|e| e.to_f64().is_some()) {
             Some(range)
         } else {
             None

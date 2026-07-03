@@ -1427,19 +1427,27 @@ mod integration_tests {
         let prepared = execute::prepare_data_with_reader(query, &reader).unwrap();
 
         let spec = &prepared.specs[0];
-        for scale in &spec.scales {
-            if scale.aesthetic == "pos1" || scale.aesthetic == "pos2" {
-                assert!(
-                    scale.resolved,
-                    "Map position scale '{}' should be marked resolved",
-                    scale.aesthetic
-                );
-                assert!(
-                    !scale.numeric_breaks().is_empty(),
-                    "Map position scale '{}' should have breaks",
-                    scale.aesthetic
-                );
-            }
+        let pos_scales: Vec<_> = spec
+            .scales
+            .iter()
+            .filter(|s| s.aesthetic == "pos1" || s.aesthetic == "pos2")
+            .collect();
+        assert_eq!(
+            pos_scales.len(),
+            2,
+            "Map projection should create pos1 and pos2 scales even without explicit SCALE clauses"
+        );
+        for scale in pos_scales {
+            assert!(
+                scale.resolved,
+                "Map position scale '{}' should be marked resolved",
+                scale.aesthetic
+            );
+            assert!(
+                !scale.numeric_breaks().is_empty(),
+                "Map position scale '{}' should have breaks",
+                scale.aesthetic
+            );
         }
     }
 }

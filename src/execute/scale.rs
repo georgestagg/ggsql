@@ -334,6 +334,17 @@ pub fn resolve_scale_types_and_transforms(
         .as_ref()
         .is_some_and(|p| p.coord.coord_kind() == CoordKind::Map);
 
+    if is_map {
+        for aes in ["pos1", "pos2"] {
+            if !spec.scales.iter().any(|s| s.aesthetic == aes) {
+                let mut scale = Scale::new(aes);
+                scale.scale_type = Some(ScaleType::continuous());
+                scale.transform = Some(Transform::geographic());
+                spec.scales.push(scale);
+            }
+        }
+    }
+
     for scale in &mut spec.scales {
         // Skip scales that already have explicit types (user specified)
         if let Some(scale_type) = &scale.scale_type {
