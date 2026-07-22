@@ -43,6 +43,7 @@ parquet = ["ggsql/parquet"]
 sqlite = ["ggsql/sqlite"]
 odbc = ["ggsql/odbc"]
 vegalite = ["ggsql/vegalite"]
+hephaestus = ["ggsql/hephaestus"]
 builtin-data = ["ggsql/builtin-data"]
 all-readers = ["duckdb", "sqlite", "odbc"]
 

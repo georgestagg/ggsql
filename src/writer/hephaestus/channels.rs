@@ -19,15 +19,6 @@ pub enum ChannelData {
 }
 
 impl ChannelData {
-    /// Finite (min, max) of numeric data; `(0, 1)` for categorical (which feeds
-    /// a discrete scale that ignores the extent).
-    pub fn extent(&self) -> (f64, f64) {
-        match self {
-            ChannelData::Floats(values) => extent(values),
-            ChannelData::Strings(_) => (0.0, 1.0),
-        }
-    }
-
     /// Select a subset of rows by index, preserving the channel's value type.
     pub fn select(&self, idx: &[usize]) -> ChannelData {
         match self {
@@ -153,21 +144,4 @@ pub fn column_to_colors(df: &DataFrame, name: &str) -> Result<Vec<Color>> {
         .iter()
         .map(|s| parse_color(s).unwrap_or(Color::BLACK))
         .collect())
-}
-
-/// Finite (min, max) of the data, or `(0, 1)` when there are no finite values.
-fn extent(values: &[f64]) -> (f64, f64) {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for &v in values {
-        if v.is_finite() {
-            min = min.min(v);
-            max = max.max(v);
-        }
-    }
-    if min <= max {
-        (min, max)
-    } else {
-        (0.0, 1.0)
-    }
 }

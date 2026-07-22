@@ -14,13 +14,10 @@ use hephaestus::plot::{Plot as HPlot, RibbonGeom};
 use super::super::channels::{
     aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
 };
-use super::super::wiring::{
-    constant_number, dodge_offsets, register_axis, resolve_color, Ctx, LegendKind, PanelAxis,
-    Wiring,
-};
+use super::super::wiring::{constant_number, dodge_offsets, resolve_color, Ctx, LegendKind};
 use crate::{GgsqlError, Result};
 
-pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
 
     let pos1 = require(layer, "pos1")?;
@@ -49,10 +46,8 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
         order.extend_from_slice(rows);
     }
 
-    register_axis(ctx, w, PanelAxis::X, p1.extent());
-    register_axis(ctx, w, PanelAxis::Y, finite_extent(&p2));
     for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2")] {
-        w.bindings.push((channel, scale.to_string()));
+        plot.set_binding(channel, scale);
     }
 
     // One vertical ribbon per category: right edge +offset, left edge -offset,
@@ -67,7 +62,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     // constant), mirroring the VL writer's shared-encoding model.
     let fill = resolve_color(
         ctx,
-        w,
+        plot,
         "fill",
         "fill",
         rgb8(255, 255, 255),
@@ -75,7 +70,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     )?;
     let stroke = resolve_color(
         ctx,
-        w,
+        plot,
         "stroke",
         "stroke",
         rgb8(60, 60, 60),
@@ -83,7 +78,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     )?;
     // The ribbon's two edges share the stroke scale (`stroke2` is the far edge).
     if let Some(name) = stroke.scale_name() {
-        w.bindings.push(("stroke2", name.to_string()));
+        plot.set_binding("stroke2", name);
     }
 
     let mut b = RibbonGeom::builder();
@@ -105,21 +100,4 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
 fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
     aesthetic_column_name(layer, aesthetic)
         .ok_or_else(|| GgsqlError::WriterError(format!("violin layer has no {aesthetic} mapping")))
-}
-
-/// Finite (min, max), or `(0, 1)` if no finite values.
-fn finite_extent(v: &[f64]) -> (f64, f64) {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for &x in v {
-        if x.is_finite() {
-            min = min.min(x);
-            max = max.max(x);
-        }
-    }
-    if min <= max {
-        (min, max)
-    } else {
-        (0.0, 1.0)
-    }
 }

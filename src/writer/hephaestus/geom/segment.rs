@@ -12,8 +12,8 @@ use hephaestus::plot::{Plot as HPlot, SegmentGeom};
 use super::super::channels::aesthetic_column_name;
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_color, constant_number, register_axis, Ctx, GeomSpec, LegendKind, MatDefault,
-    MaterialSpec, PanelAxis, PositionSpec, Wiring,
+    constant_color, constant_number, Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec,
+    PanelAxis, PositionSpec,
 };
 use crate::plot::layer::geom::GeomType;
 use crate::plot::ParameterValue;
@@ -102,27 +102,25 @@ pub fn is_diagonal(layer: &Layer) -> bool {
 /// resolved range, with `secondary = slope * primary + intercept`. The range
 /// comes straight from the scales (explicit `FROM` or data-trained); when a
 /// scale is unresolved it falls back to 0..1 like any continuous scale.
-pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let slope = slope_value(ctx);
 
-    let (x0, y0, x1, y1, x_extent, y_extent) = if !ctx.transposed {
+    let (x0, y0, x1, y1) = if !ctx.transposed {
         // y-intercept (`pos2`); x is the spanning axis.
         let intercept = constant_number(ctx, "pos2", 0.0);
         let (x0, x1) = primary_range(ctx, "pos1");
         let (y0, y1) = (slope * x0 + intercept, slope * x1 + intercept);
-        (x0, y0, x1, y1, (x0, x1), (y0.min(y1), y0.max(y1)))
+        (x0, y0, x1, y1)
     } else {
         // x-intercept (`pos1`); y is the spanning axis.
         let intercept = constant_number(ctx, "pos1", 0.0);
         let (y0, y1) = primary_range(ctx, "pos2");
         let (x0, x1) = (slope * y0 + intercept, slope * y1 + intercept);
-        (x0, y0, x1, y1, (x0.min(x1), x0.max(x1)), (y0, y1))
+        (x0, y0, x1, y1)
     };
 
-    register_axis(ctx, w, PanelAxis::X, x_extent);
-    register_axis(ctx, w, PanelAxis::Y, y_extent);
     for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2"), ("y2", "pos2")] {
-        w.bindings.push((channel, scale.to_string()));
+        plot.set_binding(channel, scale);
     }
 
     let mut b = SegmentGeom::builder();

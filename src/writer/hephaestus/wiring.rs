@@ -2,22 +2,20 @@
 //! group keys. Each geom module declares its channel specs; these helpers do the
 //! repetitive work, generic over the concrete geom builder.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use hephaestus::color::Color;
-use hephaestus::plot::chrome::axis::{Axis, AxisPlacement};
 use hephaestus::plot::chrome::legend::{Legend, LegendKeySpec};
 use hephaestus::plot::geom::{BuildableGeom, Geom, GeomBuilder, Raw};
-use hephaestus::plot::scale::Scale as HScale;
 use hephaestus::plot::Plot as HPlot;
-use hephaestus::scales::chrome::{AxisSide, LegendSide};
+use hephaestus::scales::chrome::LegendSide;
 use hephaestus::scales::value::Value as HValue;
 
 use super::channels::{
     aesthetic_column_name, build_group_keys, column_to_channel, column_to_colors, column_to_f64,
     column_to_strings, ChannelData,
 };
-use super::scales::{build_scale, map_linetype, parse_color, RangeKind};
+use super::scales::{map_linetype, parse_color, RangeKind};
 use crate::plot::{ParameterValue, ScaleTypeKind};
 use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Plot, Result};
 
@@ -30,19 +28,6 @@ pub struct Ctx<'a> {
     pub transposed: bool,
 }
 
-/// Accumulates everything that attaches to the plot/composition while building
-/// a geom: scales to register, channel→scale bindings, axes, and legends.
-#[derive(Default)]
-pub struct Wiring {
-    pub registered: Vec<(String, HScale)>,
-    pub bindings: Vec<(&'static str, String)>,
-    pub axes: Vec<Axis>,
-    pub legends: Vec<Legend>,
-    /// Channels sharing a `(data source, output kind)` reuse one scale so their
-    /// legends collapse (e.g. ggsql's `color` → fill + stroke).
-    shared_scales: HashMap<(String, RangeKind), String>,
-}
-
 /// Which panel axis a position channel drives.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PanelAxis {
@@ -51,16 +36,13 @@ pub enum PanelAxis {
 }
 
 impl PanelAxis {
-    fn scale_name(self) -> &'static str {
+    /// The ggsql scale name backing this axis (`pos1` for x, `pos2` for y).
+    /// Scales are registered globally from `spec.scales`; geoms bind their
+    /// position channels to these names.
+    pub fn scale_name(self) -> &'static str {
         match self {
             PanelAxis::X => "pos1",
             PanelAxis::Y => "pos2",
-        }
-    }
-    fn side(self) -> AxisSide {
-        match self {
-            PanelAxis::X => AxisSide::Bottom,
-            PanelAxis::Y => AxisSide::Left,
         }
     }
 }
@@ -142,9 +124,11 @@ pub struct GeomSpec {
     pub grouped: bool,
 }
 
-/// Build a concrete geom from its spec and attach it to the plot, recording its
-/// scales/bindings/axes/legends in `w`.
-pub fn build_and_add<G>(plot: &mut HPlot, spec: GeomSpec, ctx: &Ctx, w: &mut Wiring) -> Result<()>
+/// Build a concrete geom from its spec and attach it to the plot. Bindings and
+/// legends are written directly onto `plot`; scales are registered globally from
+/// `spec.scales` (see `HephaestusWriter::write`), and axes are created per
+/// coordinate system in `projection`.
+pub fn build_and_add<G>(plot: &mut HPlot, spec: GeomSpec, ctx: &Ctx) -> Result<()>
 where
     G: BuildableGeom + Geom + 'static,
 {
@@ -154,7 +138,7 @@ where
             builder.keys(keys);
         }
     }
-    wire_positions(&mut builder, &spec.positions, ctx, w)?;
+    wire_positions(&mut builder, &spec.positions, plot, ctx)?;
     for (channel, aesthetic) in spec.raw_strings {
         if let Some(col) = aesthetic_column_name(ctx.layer, aesthetic) {
             builder.set(*channel, Raw(column_to_strings(ctx.df, col)?));
@@ -166,22 +150,20 @@ where
     for (channel, values) in spec.data_channels {
         builder.set(channel, values);
     }
-    wire_material(&mut builder, &spec.material, ctx, w, spec.legend_key)?;
+    wire_material(&mut builder, &spec.material, plot, ctx, spec.legend_key)?;
     plot.add_geom(builder.build());
     Ok(())
 }
 
-/// Set position channels and register the `pos1`/`pos2` scales + axes. Each
-/// axis scale's domain is the union extent of the position columns on that axis.
+/// Set position channels on the builder and bind them to the `pos1`/`pos2`
+/// scales. `set_binding` is idempotent, so repeated bindings across layers are
+/// harmless. Axis chrome is created later, per coordinate system, in `projection`.
 fn wire_positions<G: BuildableGeom>(
     builder: &mut GeomBuilder<G>,
     positions: &[PositionSpec],
+    plot: &mut HPlot,
     ctx: &Ctx,
-    w: &mut Wiring,
 ) -> Result<()> {
-    let mut x_extent: Option<(f64, f64)> = None;
-    let mut y_extent: Option<(f64, f64)> = None;
-
     for p in positions {
         let col = aesthetic_column_name(ctx.layer, &p.aesthetic).ok_or_else(|| {
             GgsqlError::WriterError(format!(
@@ -191,54 +173,20 @@ fn wire_positions<G: BuildableGeom>(
             ))
         })?;
         let data = column_to_channel(ctx.df, col)?;
-        let extent = data.extent();
-        match p.axis {
-            PanelAxis::X => merge_extent(&mut x_extent, extent),
-            PanelAxis::Y => merge_extent(&mut y_extent, extent),
-        }
         data.apply(builder, p.channel);
-        w.bindings
-            .push((p.channel, p.axis.scale_name().to_string()));
-    }
-
-    if let Some(extent) = x_extent {
-        register_axis(ctx, w, PanelAxis::X, extent);
-    }
-    if let Some(extent) = y_extent {
-        register_axis(ctx, w, PanelAxis::Y, extent);
+        plot.set_binding(p.channel, p.axis.scale_name());
     }
     Ok(())
 }
 
-/// Register one panel axis's scale and axis chrome. Composite geoms call this
-/// directly to set up shared `pos1`/`pos2` scales before building components.
-///
-/// Idempotent across layers: a position scale is registered (and its axis added)
-/// exactly once, since ggsql's resolved domain is global — every layer that uses
-/// the axis shares the same scale. `extent` is only a fallback for an unresolved
-/// scale, so the first layer's value is authoritative.
-pub fn register_axis(ctx: &Ctx, w: &mut Wiring, axis: PanelAxis, extent: (f64, f64)) {
-    let name = axis.scale_name();
-    if w.registered.iter().any(|(n, _)| n == name) {
-        return;
-    }
-    let scale = build_scale(ctx.spec.find_scale(name), extent, RangeKind::Position);
-    w.registered.push((name.to_string(), scale));
-
-    let mut rail = Axis::rail(name, AxisPlacement::Cartesian(axis.side()));
-    if let Some(title) = aesthetic_label(ctx.spec, ctx.layer, name) {
-        rail = rail.title(title);
-    }
-    w.axes.push(rail);
-}
-
-/// Set material channels: data-mapped → scale + binding + legend; identity/
-/// literal → `Raw` visual values; unmapped → the spec's default.
+/// Set material channels: data-mapped → bind channel to its (globally
+/// registered) scale + add a legend; literal → constant visual value; identity/
+/// annotation → `Raw` per-row values; unmapped → the spec's default.
 fn wire_material<G: BuildableGeom>(
     builder: &mut GeomBuilder<G>,
     material: &[MaterialSpec],
+    plot: &mut HPlot,
     ctx: &Ctx,
-    w: &mut Wiring,
     legend_kind: LegendKind,
 ) -> Result<()> {
     let mut handled: HashSet<&str> = HashSet::new();
@@ -271,23 +219,19 @@ fn wire_material<G: BuildableGeom>(
 
         if data_mapped {
             let data = column_to_channel(ctx.df, col)?;
-            let extent = data.extent();
-            let (scale_name, is_new) = shared_scale_name(w, ctx, m, extent);
             data.apply(builder, m.channel);
-            w.bindings.push((m.channel, scale_name.clone()));
-            // One legend per scale: skip when an earlier channel/layer already
-            // registered it (hephaestus collapses compatible stack legends but
-            // not colorbars, so duplicates must not be pushed).
-            if is_new {
-                w.legends.push(material_legend(
-                    &scale_name,
-                    m.channel,
-                    m.kind,
-                    type_kind,
-                    aesthetic_label(ctx.spec, ctx.layer, m.aesthetic),
-                    legend_kind,
-                ));
-            }
+            // Bind the channel to the aesthetic's scale (registered globally) and
+            // add a legend. hephaestus collapses compatible legends, so repeated
+            // adds across layers for the same scale merge.
+            plot.set_binding(m.channel, m.aesthetic);
+            plot.add_legend(material_legend(
+                m.aesthetic,
+                m.channel,
+                m.kind,
+                type_kind,
+                aesthetic_label(ctx.spec, ctx.layer, m.aesthetic),
+                legend_kind,
+            ));
         } else {
             match m.kind {
                 RangeKind::Color => {
@@ -357,25 +301,6 @@ fn set_literal_channel<G: BuildableGeom>(
         }
         _ => false,
     }
-}
-
-/// Reuse (or create) the shared scale for a material channel's `(source, kind)`,
-/// returning `(scale_name, is_new)` — `is_new` is `true` only when this call
-/// registered the scale, so the caller adds its legend exactly once.
-fn shared_scale_name(
-    w: &mut Wiring,
-    ctx: &Ctx,
-    m: &MaterialSpec,
-    extent: (f64, f64),
-) -> (String, bool) {
-    let key = (aesthetic_source(ctx.layer, m.aesthetic), m.kind);
-    if let Some(existing) = w.shared_scales.get(&key) {
-        return (existing.clone(), false);
-    }
-    let scale = build_scale(ctx.spec.find_scale(m.aesthetic), extent, m.kind);
-    w.registered.push((m.aesthetic.to_string(), scale));
-    w.shared_scales.insert(key, m.aesthetic.to_string());
-    (m.aesthetic.to_string(), true)
 }
 
 /// Half the band width a banded geom (bar/box/violin) occupies: the
@@ -460,14 +385,6 @@ pub fn dodge_offsets(df: &DataFrame, aesthetic: &str) -> Vec<f64> {
     }
 }
 
-/// Union of two data extents.
-fn merge_extent(slot: &mut Option<(f64, f64)>, e: (f64, f64)) {
-    *slot = Some(match *slot {
-        Some((min, max)) => (min.min(e.0), max.max(e.1)),
-        None => e,
-    });
-}
-
 /// Resolve a label for an aesthetic: explicit `LABEL` wins (`None` suppresses),
 /// else the original mapped column name is the default.
 pub fn aesthetic_label(spec: &Plot, layer: &Layer, aesthetic: &str) -> Option<String> {
@@ -482,21 +399,6 @@ pub fn aesthetic_label(spec: &Plot, layer: &Layer, aesthetic: &str) -> Option<St
             ..
         }) => Some(name.clone()),
         _ => None,
-    }
-}
-
-/// A mapping's underlying data source — original column name when known, else
-/// the internal column name. Lets color-family channels sharing a source
-/// collapse to one scale + legend.
-fn aesthetic_source(layer: &Layer, aesthetic: &str) -> String {
-    match layer.mappings.get(aesthetic) {
-        Some(AestheticValue::Column {
-            original_name: Some(name),
-            ..
-        }) => name.clone(),
-        Some(AestheticValue::Column { name, .. }) => name.clone(),
-        Some(AestheticValue::AnnotationColumn { name }) => name.clone(),
-        _ => aesthetic.to_string(),
     }
 }
 
@@ -537,14 +439,15 @@ impl ColorSource {
 }
 
 /// Resolve a color aesthetic (`fill`, `stroke`, …) for a composite geom. A
-/// data-mapped non-identity scale reuses (or registers) the shared color scale
-/// for its `(source, kind)`, binds `channel` to it, and adds one legend on first
-/// registration; the full color-domain column is returned for components to
-/// select. Otherwise the constant value (the mapped literal, else `default`).
+/// data-mapped non-identity scale binds `channel` to the aesthetic's (globally
+/// registered) scale and adds a legend; the full color-domain column is returned
+/// for components to select. Otherwise the constant value (the mapped literal,
+/// else `default`). hephaestus collapses compatible legends, so repeated binds
+/// across a geom's components merge.
 pub fn resolve_color(
     ctx: &Ctx,
-    w: &mut Wiring,
-    aesthetic: &str,
+    plot: &mut HPlot,
+    aesthetic: &'static str,
     channel: &'static str,
     default: Color,
     legend_kind: LegendKind,
@@ -560,30 +463,18 @@ pub fn resolve_color(
             ctx, aesthetic, default,
         )));
     }
-    // Reuse the shared color scale for this source (collapsing fill/stroke and
-    // cross-layer duplicates), registering + legending it only on first sight.
-    let key = (aesthetic_source(ctx.layer, aesthetic), RangeKind::Color);
-    let scale_name = match w.shared_scales.get(&key) {
-        Some(existing) => existing.clone(),
-        None => {
-            let hs = build_scale(scale, (0.0, 1.0), RangeKind::Color);
-            w.registered.push((aesthetic.to_string(), hs));
-            w.shared_scales.insert(key, aesthetic.to_string());
-            w.legends.push(material_legend(
-                aesthetic,
-                channel,
-                RangeKind::Color,
-                kind,
-                aesthetic_label(ctx.spec, ctx.layer, aesthetic),
-                legend_kind,
-            ));
-            aesthetic.to_string()
-        }
-    };
-    w.bindings.push((channel, scale_name.clone()));
+    plot.set_binding(channel, aesthetic);
+    plot.add_legend(material_legend(
+        aesthetic,
+        channel,
+        RangeKind::Color,
+        kind,
+        aesthetic_label(ctx.spec, ctx.layer, aesthetic),
+        legend_kind,
+    ));
     Ok(ColorSource::Data {
         data: column_to_channel(ctx.df, col.unwrap())?,
-        scale: scale_name,
+        scale: aesthetic.to_string(),
     })
 }
 

@@ -38,7 +38,7 @@ pub use vegalite::VegaLiteWriter;
 pub mod hephaestus;
 
 #[cfg(feature = "hephaestus")]
-pub use hephaestus::HephaestusWriter;
+pub use hephaestus::{rgba, Color, HephaestusWriter};
 
 /// Trait for visualization output writers
 ///

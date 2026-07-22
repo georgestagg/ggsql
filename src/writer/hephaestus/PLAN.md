@@ -436,35 +436,72 @@ break labels work today; date-native ticks are a larger follow-up, not niche).
 
 ## Multi-layer — status: implemented
 
-The writer now renders **N layers** into one shared Cartesian panel (`validate`
-allows ≥1 layer; FACET and non-Cartesian projections still rejected). `write`
-loops over `spec.layers`, building each layer's geom into one `HPlot` via one
-shared `Wiring`; geoms draw in DRAW order (= z-order).
+The writer renders **N layers** into one shared panel (`validate` allows ≥1
+layer; FACET still rejected, non-Cartesian projections now supported — see
+below). `write` loops over `spec.layers`, building each layer's geom into one
+`HPlot`; geoms draw in DRAW order (= z-order).
 
 The enabling change is a principle correction: **the writer never computes its
 own scale extents — it uses the domain ggsql reports**, exactly as the VL writer
 uses `input_range`. ggsql resolves every `Scale` globally over all layers × the
-whole position family (`execute/scale.rs::find_columns_for_aesthetic` /
-`internal_position_family`), so `numeric_domain()` already spans every layer and
+whole position family, so `numeric_domain()` already spans every layer and
 includes pos2end/min/max, fences, tile extents, etc.
 
-- `scales.rs::continuous_domain` always returns `numeric_domain()` (the prior
-  data-extent / transformed-scale workaround is **removed**); `feed_breaks` now
-  feeds ggsql's breaks for transformed scales too. Net: log/sqrt and continuous
-  material scales render identically to the VL writer.
-- `register_axis` is **idempotent** — each position scale + its single axis is
-  registered once across all layers (hephaestus doesn't dedup `add_axis`).
-- Cross-layer legend dedup: `shared_scale_name` reports new-vs-reused so
-  `wire_material` adds a legend only when it creates the scale; composite
-  `resolve_color` consults `shared_scales` likewise (and `ColorSource` carries the
-  scale name so a ribbon's far edge binds to it). Material scales/bindings already
-  collapse via the persistent `shared_scales`.
+The wiring was then refactored to make ggsql the single source of scale truth and
+the geoms per-geom-stateless (the old `Wiring` accumulator is **gone**):
+- **Scales** are registered once, up front, from `spec.scales` into the
+  `PlotComposition` (`write` → `build_scale(scale, kind)`; `build_scale` returns
+  `Option`, registering nothing when a scale has no resolved type). No per-geom
+  scale registration or extent computation.
+- **Geoms write directly to `plot`**: `wire_positions`/`wire_material`/
+  `resolve_color` and the composites call `plot.set_binding` (idempotent) and
+  `plot.add_legend` (hephaestus collapses compatible legends).
+- **Axes** are created per coordinate system in `projection::apply_projection`
+  (Cartesian → bottom/left rails; polar → angular + radial rings), so the axis
+  kind can depend on the coord.
 
-Verified (eyeballed): point+line (shared axes), bar+point overlay (point over
-bar, z-order), scatter+abline (line spans the shared resolved domain), two layers
-colored by one variable (single collapsed legend, one x/one y axis). Tests
-`renders_multilayer_{point_line,overlay,abline,shared_legend}`; 27 writer tests;
-default + 1.86 builds, fmt, clippy clean.
+Supporting ggsql fix: a scale that no layer trains (e.g. a diagonal rule keeps
+its position out of training) but that has an explicit `FROM` range is now typed
+by `infer_scale_type_from_input_range` (numeric/temporal → continuous, string/
+bool → discrete) in `execute/scale.rs`. Previously it stayed untyped, so the
+writer registered no scale and the abline couldn't bind; this benefits the VL
+writer too.
+
+Projections (Phase 5): `projection.rs` dispatches on `CoordKind` — Cartesian
+(clip/aspect-ratio + rails), Polar (`HProj::Polar` with start/end/inner + angular/
+radial rings), Map (stub). Polar renders **truthfully**: pos1→radius, pos2→theta
+(matching the VL writer), so a stacked bar becomes a correct pie/donut with the
+right slice proportions, fills, and angular axis. `start`/`end` are degrees
+clockwise from 12 o'clock (`end` defaults to `start + 360°`, so setting only
+`start` rotates a full circle); `inner` opens a donut hole. A synthetic dummy
+position scale (`__ggsql_stat_dummy` — a pie's radius, or a bar with no x) is
+given no axis, in every projection, via the shared `has_real_axis` predicate,
+mirroring the VL writer's `AxisInfo::suppress`.
+
+Two hephaestus fixes were required (in `~/GitHub/hephaestus`, pending push + rev
+bump — a temporary path `[patch]` in the root `Cargo.toml` wires the local clone
+meanwhile):
+1. `angle_channel`/`radius_channel` are now honored by **geom geometry**, not
+   just chrome: `project_to_panel_px` / `interpolate_segment_with_t` route a
+   geom's positional `[x, y]` to theta/radius via `PolarProjection::theta_r_from_xy`
+   (default `x→theta`; ggsql sets `angle_channel="y"` so pos2 drives the angle).
+2. RectGeom's zero-size cull now applies only on the linear path — a 180° polar
+   wedge whose two diagonal corners share a pixel coordinate is no longer dropped.
+
+Verified (eyeballed): point+line (shared axes), bar+point overlay (z-order),
+scatter+abline, two layers colored by one variable, polar pie (180° slice), donut,
+rotated + reflex + 4-slice pies. 29 writer tests; fmt, clippy clean.
+
+Minor cosmetic (deferred): a plain pie shows a tiny centre hole because the dummy
+bar occupies a `width` band (radius ~0.05–0.95) rather than the full 0–1 radius;
+proportions/angles are unaffected.
+
+Known issue (deferred): `color AS <var>` maps **both** fill and stroke to the
+variable → two separate scales (`fill`, `stroke`) whose legends no longer merge
+(different `domain_scale`), so a filled-dot legend and a hollow-dot legend both
+show. The old `Wiring.shared_scales` collapsed these; recovering it needs either
+a hephaestus legend-merge across scales with equal domains, or reintroducing a
+small shared-source map.
 
 **Confirmed shared with the VL writer (not a regression here):** ggsql's range
 expansion runs in linear data space then clips to the transform's valid domain,

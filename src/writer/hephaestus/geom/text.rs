@@ -12,10 +12,10 @@ use hephaestus::plot::{Plot as HPlot, TextGeom};
 use super::super::channels::{
     aesthetic_column_name, column_to_bool, column_to_channel, column_to_f64, column_to_strings,
 };
-use super::super::wiring::{register_axis, resolve_color, Ctx, LegendKind, PanelAxis, Wiring};
+use super::super::wiring::{resolve_color, Ctx, LegendKind};
 use crate::{GgsqlError, Result};
 
-pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
     let n = df.height();
 
@@ -25,15 +25,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
 
     let mut b = TextGeom::builder();
 
-    // Positions + shared scales/axes.
+    // Positions: bind to the global pos1/pos2 scales.
     let p1 = column_to_channel(df, pos1)?;
-    let p1x = p1.extent();
     let p2 = column_to_channel(df, pos2)?;
-    let p2y = p2.extent();
-    register_axis(ctx, w, PanelAxis::X, p1x);
-    register_axis(ctx, w, PanelAxis::Y, p2y);
-    w.bindings.push(("x", "pos1".to_string()));
-    w.bindings.push(("y", "pos2".to_string()));
+    plot.set_binding("x", "pos1");
+    plot.set_binding("y", "pos2");
     p1.apply(&mut b, "x");
     p2.apply(&mut b, "y");
 
@@ -41,7 +37,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     b.set("text", Raw(column_to_strings(df, label)?));
 
     // Color: data-mapped (color-by-group) or constant black.
-    resolve_color(ctx, w, "fill", "fill", rgb8(0, 0, 0), LegendKind::Point)?.apply(
+    resolve_color(ctx, plot, "fill", "fill", rgb8(0, 0, 0), LegendKind::Point)?.apply(
         &mut b,
         "fill",
         &(0..n).collect::<Vec<_>>(),

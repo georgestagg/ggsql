@@ -11,12 +11,12 @@ use super::super::channels::{
     aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
 };
 use super::super::wiring::{
-    band_half_width, constant_number, constant_string, dodge_offsets, register_axis, resolve_color,
-    Ctx, LegendKind, PanelAxis, Wiring,
+    band_half_width, constant_number, constant_string, dodge_offsets, resolve_color, Ctx,
+    LegendKind,
 };
 use crate::{GgsqlError, Result};
 
-pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
     let n = df.height();
 
@@ -38,11 +38,9 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
         .collect();
     let out_i = rows_of("outlier");
 
-    // Shared scales: pos1 (category), pos2 (full value range incl. fences).
-    register_axis(ctx, w, PanelAxis::X, p1.extent());
-    register_axis(ctx, w, PanelAxis::Y, finite_extent(&[&p2, &p2e]));
+    // Bind the shared position channels (scales are registered globally).
     for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2"), ("y2", "pos2")] {
-        w.bindings.push((channel, scale.to_string()));
+        plot.set_binding(channel, scale);
     }
 
     // Resolve fill + stroke once (data-mapped → shared scale/legend, else
@@ -50,7 +48,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     // component draws with the same resolved fill/stroke.
     let fill = resolve_color(
         ctx,
-        w,
+        plot,
         "fill",
         "fill",
         rgb8(255, 255, 255),
@@ -58,7 +56,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
     )?;
     let stroke = resolve_color(
         ctx,
-        w,
+        plot,
         "stroke",
         "stroke",
         rgb8(60, 60, 60),
@@ -141,23 +139,4 @@ fn pick(v: &[f64], idx: &[usize]) -> Vec<f64> {
 /// the box width for the two edges, 0 for a centered line/point).
 fn shift(offsets: &[f64], idx: &[usize], delta: f64) -> Vec<f64> {
     idx.iter().map(|&i| offsets[i] + delta).collect()
-}
-
-/// Finite (min, max) across several columns, or `(0, 1)` if none are finite.
-fn finite_extent(cols: &[&[f64]]) -> (f64, f64) {
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for v in cols {
-        for &x in v.iter() {
-            if x.is_finite() {
-                min = min.min(x);
-                max = max.max(x);
-            }
-        }
-    }
-    if min <= max {
-        (min, max)
-    } else {
-        (0.0, 1.0)
-    }
 }

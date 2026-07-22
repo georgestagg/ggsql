@@ -7,12 +7,16 @@ Provides commands for executing ggsql queries with various data sources and outp
 use clap::{Parser, Subcommand, ValueEnum};
 use ggsql::reader::{Reader, Spec};
 use ggsql::validate::validate;
+use ggsql::writer::Writer;
 use ggsql::{parser, VERSION};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 #[cfg(feature = "vegalite")]
-use ggsql::writer::{VegaLiteWriter, Writer};
+use ggsql::writer::VegaLiteWriter;
+
+#[cfg(feature = "hephaestus")]
+use ggsql::writer::{rgba, HephaestusWriter};
 
 mod docs {
     include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
@@ -25,6 +29,11 @@ mod docs {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+}
+
+enum Output {
+    Text(String),
+    Bin(Vec<u8>),
 }
 
 #[derive(Subcommand)]
@@ -323,47 +332,52 @@ fn render_spec(spec: Spec, writer: &str, output: Option<PathBuf>, verbose: bool)
         std::process::exit(1);
     }
 
-    // Check writer
-    if writer != "vegalite" {
-        eprintln!("\nNote: Writer '{}' not yet implemented", writer);
-        eprintln!("Available writers: vegalite")
-    }
-
-    #[cfg(not(feature = "vegalite"))]
-    {
-        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
-        std::process::exit(1)
-    }
-
-    // Render
-    let vl_writer = VegaLiteWriter::new();
-    let json_output = match vl_writer.render(&spec) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to generate Vega-Lite output: {}", e);
-            std::process::exit(1);
+    let render = match writer {
+        "vegalite" => render_vegalite(&spec),
+        "hephaestus" => render_hephaestus(&spec),
+        _ => {
+            eprintln!("\nNote: Writer '{}' not yet implemented", writer);
+            std::process::exit(1)
         }
     };
 
-    if output.is_none() {
-        // Empty output location, write to stdout
-        println!("{}", json_output);
-        return;
-    }
-    let output = output.unwrap();
-
-    // Write to file
-    match std::fs::write(&output, json_output) {
-        Ok(_) => {
-            if verbose {
-                eprintln!("\nVega-Lite JSON written to: {}", output.display());
+    match (render, output) {
+        (Output::Text(txt), None) => {
+            println!("{}", txt);
+        }
+        (Output::Text(txt), Some(path)) => match std::fs::write(&path, txt) {
+            Ok(_) => {
+                if verbose {
+                    eprintln!("\nVega-Lite JSON written to: {}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to write to output file: {}", e);
+                std::process::exit(1);
+            }
+        },
+        (Output::Bin(buf), None) => {
+            if std::io::stdout().is_terminal() {
+                eprintln!("Suppressing output in terminal. Pipe output to another process or use --output <FILE> to save to a file.");
+            } else {
+                std::io::stdout().write_all(&buf).unwrap_or_else(|e| {
+                    eprintln!("Failed to write buffer with the error: {}", e);
+                    std::process::exit(1);
+                });
             }
         }
-        Err(e) => {
-            eprintln!("Failed to write to output file: {}", e);
-            std::process::exit(1);
-        }
-    }
+        (Output::Bin(buf), Some(path)) => match std::fs::write(&path, buf) {
+            Ok(_) => {
+                if verbose {
+                    eprintln!("\nPNG written to: {}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to write to output file: {}", e);
+                std::process::exit(1);
+            }
+        },
+    };
 }
 
 fn cmd_parse(query: String, format: String) {
@@ -709,4 +723,51 @@ fn cmd_skill(format: Option<DocsFormat>) {
             }
         }
     }
+}
+
+fn render_vegalite(spec: &Spec) -> Output {
+    #[cfg(not(feature = "vegalite"))]
+    {
+        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
+        std::process::exit(1)
+    }
+
+    let json_output;
+    #[cfg(feature = "vegalite")]
+    {
+        // Render
+        let vl_writer = VegaLiteWriter::new();
+        json_output = match vl_writer.render(spec) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to generate Vega-Lite output: {}", e);
+                std::process::exit(1);
+            }
+        };
+    };
+    Output::Text(json_output)
+}
+
+fn render_hephaestus(spec: &Spec) -> Output {
+    #[cfg(not(feature = "hephaestus"))]
+    {
+        eprintln!("Hephaestus writer not compiled in. Rebuild with --features hephaestus");
+        std::process::exit(1)
+    }
+
+    let png_output;
+    #[cfg(feature = "hephaestus")]
+    {
+        // Render
+        let hs_writer =
+            HephaestusWriter::new(1500, 1000, 300.0).background(rgba(0.0, 0.0, 0.0, 0.0));
+        png_output = match hs_writer.render(spec) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to generate Hephaestus output: {}", e);
+                std::process::exit(1);
+            }
+        };
+    };
+    Output::Bin(png_output)
 }

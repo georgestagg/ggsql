@@ -15,13 +15,14 @@
 
 mod channels;
 mod geom;
+mod projection;
 mod scales;
 mod wiring;
 
 use std::collections::HashMap;
 
 use hephaestus::backend::vello::VelloRenderer;
-use hephaestus::color::{rgb8, Color};
+pub use hephaestus::color::{rgba, Color};
 use hephaestus::composition::{Composition, Patch, Span};
 use hephaestus::geometry::Size;
 use hephaestus::plot::{Plot as HPlot, PlotComposition};
@@ -29,11 +30,12 @@ use hephaestus::shape::ShapeRegistry;
 use hephaestus::Renderer;
 
 use crate::plot::layer::is_transposed;
-use crate::plot::projection::coord::CoordKind;
+use crate::writer::hephaestus::projection::apply_projection;
+use crate::writer::hephaestus::scales::build_scale;
 use crate::writer::Writer;
 use crate::{DataFrame, GgsqlError, Layer, Plot, Result};
 
-use wiring::{Ctx, Wiring};
+use wiring::Ctx;
 
 /// Internal patch id for the single panel.
 const PANEL_ID: &str = "ggsql_panel";
@@ -56,7 +58,7 @@ impl HephaestusWriter {
             width,
             height,
             dpi,
-            background: rgb8(255, 255, 255),
+            background: rgba(1.0, 1.0, 1.0, 1.0),
         }
     }
 
@@ -76,13 +78,6 @@ impl Writer for HephaestusWriter {
                 "hephaestus writer does not support FACET yet".into(),
             ));
         }
-        if let Some(projection) = &spec.project {
-            if projection.coord.coord_kind() != CoordKind::Cartesian {
-                return Err(GgsqlError::WriterError(
-                    "hephaestus writer supports only Cartesian coordinates".into(),
-                ));
-            }
-        }
         if spec.layers.is_empty() {
             return Err(GgsqlError::WriterError(
                 "hephaestus writer requires at least one layer".into(),
@@ -101,12 +96,32 @@ impl Writer for HephaestusWriter {
 
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<Self::Output> {
         self.validate(spec)?;
+        let composition = single_panel();
+        let mut view = PlotComposition::new(&composition);
+        for scale in &spec.scales {
+            let kind = match scale.aesthetic.as_str() {
+                "fill" | "stroke" | "color" | "colour" => scales::RangeKind::Color,
+                "shape" => scales::RangeKind::Shape,
+                "linetype" => scales::RangeKind::Linetype,
+                _ => {
+                    if scale.aesthetic.starts_with("pos") {
+                        scales::RangeKind::Position
+                    } else {
+                        scales::RangeKind::Number
+                    }
+                }
+            };
+            if let Some(hs) = build_scale(Some(scale), kind) {
+                view.insert_scale(scale.aesthetic.clone(), hs);
+            }
+        }
 
-        // Build every layer's geom into one panel, accumulating shared
-        // scales/axes/legends. Geoms draw in layer (DRAW) order = z-order.
+        // Build every layer's geom into one panel; each geom binds its channels
+        // and adds its legends directly onto `plot`. Geoms draw in layer (DRAW)
+        // order = z-order.
         let mut plot =
-            HPlot::new(&single_panel(), PANEL_ID).shape_registry(ShapeRegistry::with_builtins());
-        let mut w = Wiring::default();
+            HPlot::new(&composition, PANEL_ID).shape_registry(ShapeRegistry::with_builtins());
+
         for layer in &spec.layers {
             let df = layer_dataframe(layer, data)?;
             let ctx = Ctx {
@@ -115,23 +130,12 @@ impl Writer for HephaestusWriter {
                 df,
                 transposed: is_transposed(layer),
             };
-            geom::build_into_plot(&mut plot, &ctx, &mut w)?;
+            geom::build_into_plot(&mut plot, &ctx)?;
         }
 
-        for (channel, scale_name) in &w.bindings {
-            plot.set_binding(*channel, scale_name.clone());
-        }
-        for axis in w.axes {
-            plot.add_axis(axis);
-        }
-        for legend in w.legends {
-            plot.add_legend(legend);
-        }
+        // Axes are created per coordinate system (Cartesian rails, polar rings).
+        plot = apply_projection(plot, spec);
 
-        let mut view = PlotComposition::new(single_panel());
-        for (name, scale) in w.registered {
-            view.insert_scale(name, scale);
-        }
         view.attach_plot(plot);
 
         let issues = view.validate();
@@ -154,6 +158,29 @@ impl Writer for HephaestusWriter {
 /// The single-panel composition the writer renders into.
 fn single_panel() -> Composition {
     Composition::empty(1, 1).place(1, 1, Span::cell(), Patch::new(PANEL_ID))
+}
+
+// Scaffolding for faceted (grid) compositions — not wired up yet.
+#[allow(dead_code)]
+fn grid_id(row: usize, col: usize) -> String {
+    format!("{}x{}", row, col)
+}
+
+/// A `rows`×`cols` grid composition, one patch per cell (faceting; not yet used).
+#[allow(dead_code)]
+fn panel_grid(rows: usize, cols: usize) -> Composition {
+    let mut comp = Composition::empty(rows, cols);
+    for row in 1..(rows + 1) {
+        for col in 1..(cols + 1) {
+            comp = comp.place(
+                row.try_into().unwrap(),
+                col.try_into().unwrap(),
+                Span::cell(),
+                Patch::new(grid_id(row, col)),
+            );
+        }
+    }
+    comp
 }
 
 /// Look up the DataFrame backing a layer by its execution-assigned data key.
@@ -464,6 +491,26 @@ mod tests {
             "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2), \
              ('b',4),('b',6),('b',5),('b',7),('b',3)) t(g, y) \
              VISUALISE g AS x, y AS y DRAW violin",
+        ));
+    }
+
+    #[test]
+    fn renders_polar_pie() {
+        // A stacked bar under polar becomes a pie: pos2 (count) → theta,
+        // pos1 (dummy) → radius. Includes a 180° slice, which exercises the
+        // wide-wedge path.
+        assert_png_or_skip(render(
+            "SELECT c FROM (VALUES ('a'),('a'),('a'),('b'),('b'),('c')) t(c) \
+             VISUALISE c AS fill DRAW bar PROJECT TO polar",
+        ));
+    }
+
+    #[test]
+    fn renders_polar_donut() {
+        // `inner` opens a centre hole (donut).
+        assert_png_or_skip(render(
+            "SELECT c FROM (VALUES ('a'),('a'),('a'),('b'),('b'),('c')) t(c) \
+             VISUALISE c AS fill DRAW bar PROJECT TO polar SETTING inner => 0.5",
         ));
     }
 

@@ -36,22 +36,33 @@ pub enum RangeKind {
 ///
 /// `data_extent` is the finite (min, max) of the channel's data, used as the
 /// domain fallback when the ggsql scale carries none (continuous scales only).
-pub fn build_scale(scale: Option<&GScale>, data_extent: (f64, f64), kind: RangeKind) -> HScale {
-    let usable = scale.filter(|s| !s.is_dummy());
-    let type_kind = usable
+pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
+    // No resolved scale type → no scale to register. ggsql is the source of scale
+    // truth; the writer never fabricates one.
+    let type_kind = scale
         .and_then(|s| s.scale_type.as_ref())
-        .map(|st| st.scale_type_kind());
-    let transform = usable
+        .map(|st| st.scale_type_kind())?;
+    let transform = scale
         .and_then(|s| s.transform.as_ref())
         .map(|t| t.transform_kind());
 
     let mut hs = match type_kind {
-        Some(ScaleTypeKind::Discrete) => scale::discrete(domain_values(usable)),
-        Some(ScaleTypeKind::Ordinal) => scale::ordinal(domain_values(usable)),
-        // Continuous, Binned, Identity, or unknown: a continuous mapper.
-        _ => {
+        ScaleTypeKind::Discrete => scale::discrete(domain_values(scale)),
+        ScaleTypeKind::Ordinal => scale::ordinal(domain_values(scale)),
+        ScaleTypeKind::Identity => scale::identity(),
+        ScaleTypeKind::Binned => {
             let h_transform = transform.and_then(map_transform);
-            let (min, max) = continuous_domain(usable, data_extent);
+            let (min, max) = continuous_domain(scale);
+            let breaks = scale.map(|x| x.numeric_breaks()).unwrap_or(vec![min, max]);
+            let mut c = scale::binned(min..=max, breaks);
+            if let Some(t) = h_transform {
+                c = c.with_transform(t);
+            }
+            c
+        }
+        ScaleTypeKind::Continuous => {
+            let h_transform = transform.and_then(map_transform);
+            let (min, max) = continuous_domain(scale);
             let mut c = scale::continuous(min..=max);
             if let Some(t) = h_transform {
                 c = c.with_transform(t);
@@ -61,7 +72,7 @@ pub fn build_scale(scale: Option<&GScale>, data_extent: (f64, f64), kind: RangeK
     };
 
     if kind != RangeKind::Position {
-        if let Some(OutputRange::Array(values)) = usable.and_then(|s| s.output_range.as_ref()) {
+        if let Some(OutputRange::Array(values)) = scale.and_then(|s| s.output_range.as_ref()) {
             hs = apply_output_range(hs, kind, values);
         }
     }
@@ -71,22 +82,21 @@ pub fn build_scale(scale: Option<&GScale>, data_extent: (f64, f64), kind: RangeK
     // Vega-Lite writer — exactly. ggsql's breaks pair with the same resolved
     // domain hephaestus now uses, so they line up. `apply_breaks` is a no-op when
     // the scale has no resolved breaks.
-    if let Some(s) = usable {
-        hs = apply_breaks(hs, s, type_kind);
+    if let Some(scale) = scale {
+        hs = apply_breaks(hs, scale, Some(type_kind));
     }
-    hs
+    Some(hs)
 }
 
 /// Domain for a continuous scale. ggsql's resolved `numeric_domain` is
 /// authoritative — it carries ggsql's global, expanded, transform-aware training
 /// over every layer and the whole position family — so pass it straight through,
-/// exactly as the Vega-Lite writer uses `input_range`. `data_extent` is only a
-/// fallback for a scale ggsql left unresolved.
-fn continuous_domain(scale: Option<&GScale>, data_extent: (f64, f64)) -> (f64, f64) {
+/// exactly as the Vega-Lite writer uses `input_range`.
+fn continuous_domain(scale: Option<&GScale>) -> (f64, f64) {
     let domain = scale
         .and_then(|s| s.numeric_domain())
         .filter(|(min, max)| min.is_finite() && max.is_finite())
-        .unwrap_or(data_extent);
+        .unwrap_or((0.0, 1.0));
     pad_degenerate(domain.0, domain.1)
 }
 

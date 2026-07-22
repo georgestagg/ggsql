@@ -16,31 +16,31 @@ use hephaestus::plot::{
     LineGeom, Plot as HPlot, PointGeom, PolygonGeom, RectGeom, RibbonGeom, SegmentGeom,
 };
 
-use super::wiring::{build_and_add, Ctx, Wiring};
+use super::wiring::{build_and_add, Ctx};
 use crate::plot::layer::geom::GeomType;
 use crate::{GgsqlError, Result};
 
 /// Build the layer's geom into `plot`, recording its scales/axes/legends in `w`.
-pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx, w: &mut Wiring) -> Result<()> {
+pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     match ctx.layer.geom.geom_type() {
-        GeomType::Point => build_and_add::<PointGeom>(plot, point::spec(ctx), ctx, w),
+        GeomType::Point => build_and_add::<PointGeom>(plot, point::spec(ctx), ctx),
         GeomType::Line | GeomType::Path | GeomType::Smooth => {
-            build_and_add::<LineGeom>(plot, line::spec(ctx), ctx, w)
+            build_and_add::<LineGeom>(plot, line::spec(ctx), ctx)
         }
         GeomType::Bar | GeomType::Histogram | GeomType::Tile => {
-            build_and_add::<RectGeom>(plot, rect::spec(ctx), ctx, w)
+            build_and_add::<RectGeom>(plot, rect::spec(ctx), ctx)
         }
         GeomType::Area | GeomType::Ribbon | GeomType::Density => {
-            build_and_add::<RibbonGeom>(plot, area::spec(ctx), ctx, w)
+            build_and_add::<RibbonGeom>(plot, area::spec(ctx), ctx)
         }
-        GeomType::Polygon => build_and_add::<PolygonGeom>(plot, polygon::spec(ctx), ctx, w),
-        GeomType::Rule if segment::is_diagonal(ctx.layer) => segment::build_diagonal(plot, ctx, w),
+        GeomType::Polygon => build_and_add::<PolygonGeom>(plot, polygon::spec(ctx), ctx),
+        GeomType::Rule if segment::is_diagonal(ctx.layer) => segment::build_diagonal(plot, ctx),
         GeomType::Segment | GeomType::Range | GeomType::Rule => {
-            build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx, w)
+            build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx)
         }
-        GeomType::Text => text::build(plot, ctx, w),
-        GeomType::Boxplot => boxplot::build(plot, ctx, w),
-        GeomType::Violin => violin::build(plot, ctx, w),
+        GeomType::Text => text::build(plot, ctx),
+        GeomType::Boxplot => boxplot::build(plot, ctx),
+        GeomType::Violin => violin::build(plot, ctx),
         other => Err(GgsqlError::WriterError(format!(
             "hephaestus writer does not support the '{other}' geom yet"
         ))),
