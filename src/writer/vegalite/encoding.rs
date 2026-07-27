@@ -915,12 +915,57 @@ fn build_column_encoding(
         insert_legend_property(&mut encoding, "type", json!("gradient"));
     }
 
+    apply_plot_legend_preference(&mut encoding, aesthetic, ctx.spec);
+
     // Hide axis for dummy columns
     if is_dummy {
         encoding["axis"] = Value::Null;
     }
 
     Ok(encoding)
+}
+
+/// Apply the plot-wide legend preference carried by `LABEL legend`.
+///
+/// This keeps guide placement in the ggsql Plot/Writer boundary instead of
+/// requiring each downstream renderer to mutate Vega-Lite output. `none`
+/// suppresses every material guide; the four cardinal values map directly to
+/// Vega-Lite's legend orientation.
+fn apply_plot_legend_preference(encoding: &mut Value, aesthetic: &str, spec: &Plot) {
+    if !matches!(
+        aesthetic,
+        "color"
+            | "colour"
+            | "fill"
+            | "stroke"
+            | "opacity"
+            | "size"
+            | "shape"
+            | "linetype"
+            | "linewidth"
+    ) {
+        return;
+    }
+
+    let preference = spec
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.labels.get("legend"));
+    match preference {
+        Some(None) => encoding["legend"] = Value::Null,
+        Some(Some(value)) if value.eq_ignore_ascii_case("none") => {
+            encoding["legend"] = Value::Null;
+        }
+        Some(Some(value))
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "left" | "right" | "top" | "bottom"
+            ) =>
+        {
+            insert_legend_property(encoding, "orient", json!(value.to_ascii_lowercase()));
+        }
+        _ => {}
+    }
 }
 
 /// Build encoding for a literal aesthetic value

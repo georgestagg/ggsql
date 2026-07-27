@@ -43,11 +43,11 @@ pub fn geom_to_mark(geom: &Geom) -> Value {
         GeomType::Boxplot => "boxplot",
         GeomType::Text => "text",
         GeomType::Segment => "rule",
+        GeomType::Arrow => "rule",
         GeomType::Smooth => "line",
         GeomType::Rule => "rule",
         GeomType::Range => "rule",
         GeomType::Spatial => "geoshape",
-        _ => "point", // Default fallback
     };
     json!({
         "type": mark_type,
@@ -853,6 +853,103 @@ impl GeomRenderer for RuleRenderer {
 
         Ok(())
     }
+
+    fn finalize(
+        &self,
+        mut layer_spec: Value,
+        layer: &Layer,
+        _data_key: &str,
+        _prepared: &PreparedData,
+        context: &RenderContext,
+    ) -> Result<Vec<Value>> {
+        let has_label = matches!(
+            layer.mappings.get("label"),
+            Some(AestheticValue::Literal(ParameterValue::String(_)))
+                | Some(AestheticValue::Column { .. })
+                | Some(AestheticValue::AnnotationColumn { .. })
+        );
+        if !has_label {
+            return Ok(vec![layer_spec]);
+        }
+
+        if matches!(
+            layer.parameters.get("densified"),
+            Some(ParameterValue::Boolean(true))
+        ) {
+            return Ok(vec![layer_spec]);
+        }
+
+        let mut label_spec = layer_spec.clone();
+        let shaft_encoding = layer_spec
+            .get_mut("encoding")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                GgsqlError::WriterError("Rule layer is missing its Vega-Lite encoding".to_string())
+            })?;
+        shaft_encoding.remove("text");
+
+        let label_encoding = label_spec
+            .get_mut("encoding")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                GgsqlError::WriterError(
+                    "Labeled rule layer is missing its Vega-Lite encoding".to_string(),
+                )
+            })?;
+        if let Some(stroke) = label_encoding.remove("stroke") {
+            label_encoding.insert("fill".to_string(), stroke);
+        }
+        label_encoding.remove("strokeWidth");
+        label_encoding.remove("strokeDash");
+
+        let (pos1, pos1_end, _, pos2, pos2_end, _) = &context.channels;
+
+        let label_mark = if label_encoding.contains_key(pos2.as_str())
+            && !label_encoding.contains_key(pos1.as_str())
+        {
+            label_encoding.remove(pos1_end.as_str());
+            label_encoding.remove(pos2_end.as_str());
+            label_encoding.insert(pos1.clone(), json!({"value": "width"}));
+            json!({
+                "type": "text",
+                "align": "right",
+                "baseline": "bottom",
+                "dx": -4,
+                "dy": -4,
+                "clip": true
+            })
+        } else if label_encoding.contains_key(pos1.as_str())
+            && !label_encoding.contains_key(pos2.as_str())
+        {
+            label_encoding.remove(pos1_end.as_str());
+            label_encoding.remove(pos2_end.as_str());
+            label_encoding.insert(pos2.clone(), json!({"value": 0}));
+            json!({
+                "type": "text",
+                "align": "left",
+                "baseline": "top",
+                "dx": 4,
+                "dy": 4,
+                "clip": true
+            })
+        } else {
+            // Diagonal rules already carry both endpoints. Anchor the label at
+            // the end of the resolved line.
+            move_endpoint_encoding(label_encoding, pos1, pos1_end)?;
+            move_endpoint_encoding(label_encoding, pos2, pos2_end)?;
+            json!({
+                "type": "text",
+                "align": "left",
+                "baseline": "bottom",
+                "dx": 4,
+                "dy": -4,
+                "clip": true
+            })
+        };
+        label_spec["mark"] = label_mark;
+
+        Ok(vec![layer_spec, label_spec])
+    }
 }
 
 // =============================================================================
@@ -1622,6 +1719,133 @@ impl GeomRenderer for SegmentRenderer {
 
         Ok(())
     }
+}
+
+// =============================================================================
+// Arrow Renderer
+// =============================================================================
+
+/// Renderer for arrow geom — a rule shaft plus a directional point at the end.
+///
+/// Vega-Lite has no primitive arrow mark, but its point mark supports an
+/// `arrow` symbol and the `angle` channel. Rendering both components from the
+/// same resolved layer preserves ggsql's scales, facets, material aesthetics,
+/// and source filtering without asking downstream consumers to reinterpret the
+/// plot.
+pub struct ArrowRenderer;
+
+impl GeomRenderer for ArrowRenderer {
+    fn modify_spec(
+        &self,
+        layer_spec: &mut Value,
+        _layer: &Layer,
+        _context: &RenderContext,
+    ) -> Result<()> {
+        layer_spec["mark"] = json!({
+            "type": "rule",
+            "clip": true
+        });
+        Ok(())
+    }
+
+    fn finalize(
+        &self,
+        layer_spec: Value,
+        _layer: &Layer,
+        _data_key: &str,
+        _prepared: &PreparedData,
+        context: &RenderContext,
+    ) -> Result<Vec<Value>> {
+        let mut arrowhead = layer_spec.clone();
+        arrowhead["mark"] = json!({
+            "type": "point",
+            "shape": "arrow",
+            "filled": true,
+            "size": 72,
+            "clip": true
+        });
+
+        let (pos1, pos1_end, _, pos2, pos2_end, _) = &context.channels;
+        let encoding = arrowhead
+            .get_mut("encoding")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                GgsqlError::WriterError("Arrow layer is missing its Vega-Lite encoding".to_string())
+            })?;
+
+        move_endpoint_encoding(encoding, pos1, pos1_end)?;
+        move_endpoint_encoding(encoding, pos2, pos2_end)?;
+
+        let angle_field = "__ggsql_arrow_angle__";
+        encoding.insert(
+            "angle".to_string(),
+            json!({
+                "field": angle_field,
+                "type": "quantitative",
+                "scale": null
+            }),
+        );
+
+        // Arrowheads inherit the shaft colour. `fill` defaults to null for
+        // arrows, so use the resolved stroke channel unless the author supplied
+        // an explicit fill mapping or literal.
+        if encoding
+            .get("fill")
+            .and_then(|value| value.get("value"))
+            .is_some_and(Value::is_null)
+        {
+            if let Some(stroke) = encoding.get("stroke").cloned() {
+                encoding.insert("fill".to_string(), stroke);
+            }
+        }
+
+        let mut transforms = arrowhead
+            .get("transform")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let start_x = naming::aesthetic_column("pos1");
+        let start_y = naming::aesthetic_column("pos2");
+        let end_x = naming::aesthetic_column("pos1end");
+        let end_y = naming::aesthetic_column("pos2end");
+        transforms.push(json!({
+            "calculate": format!(
+                "90 - atan2(datum[{end_y:?}] - datum[{start_y:?}], \
+                 datum[{end_x:?}] - datum[{start_x:?}]) * 180 / PI"
+            ),
+            "as": angle_field
+        }));
+        arrowhead["transform"] = Value::Array(transforms);
+
+        Ok(vec![layer_spec, arrowhead])
+    }
+}
+
+fn move_endpoint_encoding(
+    encoding: &mut Map<String, Value>,
+    primary: &str,
+    secondary: &str,
+) -> Result<()> {
+    let endpoint = encoding.remove(secondary).ok_or_else(|| {
+        GgsqlError::WriterError(format!(
+            "Arrow layer is missing its '{}' endpoint encoding",
+            secondary
+        ))
+    })?;
+    let endpoint_field = endpoint.get("field").cloned().ok_or_else(|| {
+        GgsqlError::WriterError(format!(
+            "Arrow layer's '{}' endpoint encoding has no field",
+            secondary
+        ))
+    })?;
+    let primary_encoding = encoding.get_mut(primary).ok_or_else(|| {
+        GgsqlError::WriterError(format!(
+            "Arrow layer is missing its '{}' position encoding",
+            primary
+        ))
+    })?;
+    primary_encoding["field"] = endpoint_field;
+    Ok(())
 }
 
 // =============================================================================
@@ -2598,9 +2822,11 @@ pub fn get_renderer(geom: &Geom) -> Box<dyn GeomRenderer> {
         GeomType::Rule => Box::new(RuleRenderer),
         GeomType::Ribbon => Box::new(RibbonRenderer),
         GeomType::Segment => Box::new(SegmentRenderer),
+        GeomType::Arrow => Box::new(ArrowRenderer),
         GeomType::Spatial => Box::new(SpatialRenderer),
-        // All other geoms (Point, Area, Density, etc.) use the default renderer
-        _ => Box::new(DefaultRenderer),
+        GeomType::Area | GeomType::Histogram | GeomType::Density | GeomType::Smooth => {
+            Box::new(DefaultRenderer)
+        }
     }
 }
 
@@ -2608,6 +2834,104 @@ pub fn get_renderer(geom: &Geom) -> Box<dyn GeomRenderer> {
 mod tests {
     use super::*;
     use crate::plot::Parameters;
+
+    #[test]
+    fn test_arrow_renderer_emits_shaft_and_directional_head() {
+        let renderer = ArrowRenderer;
+        let layer = Layer::new(crate::plot::Geom::arrow());
+        let context = RenderContext::default_for_test();
+        let prepared = PreparedData::Single {
+            values: Vec::new(),
+            metadata: Box::new(()),
+        };
+        let prototype = json!({
+            "mark": {"type": "rule", "clip": true},
+            "transform": [{
+                "filter": {
+                    "field": naming::SOURCE_COLUMN,
+                    "equal": "test"
+                }
+            }],
+            "encoding": {
+                "x": {
+                    "field": naming::aesthetic_column("pos1"),
+                    "type": "quantitative"
+                },
+                "x2": {"field": naming::aesthetic_column("pos1end")},
+                "y": {
+                    "field": naming::aesthetic_column("pos2"),
+                    "type": "quantitative"
+                },
+                "y2": {"field": naming::aesthetic_column("pos2end")},
+                "stroke": {"value": "#123456"},
+                "fill": {"value": null}
+            }
+        });
+
+        let layers = renderer
+            .finalize(prototype, &layer, "test", &prepared, &context)
+            .unwrap();
+
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0]["mark"]["type"], "rule");
+        assert_eq!(layers[1]["mark"]["type"], "point");
+        assert_eq!(layers[1]["mark"]["shape"], "arrow");
+        assert_eq!(
+            layers[1]["encoding"]["x"]["field"],
+            naming::aesthetic_column("pos1end")
+        );
+        assert_eq!(
+            layers[1]["encoding"]["y"]["field"],
+            naming::aesthetic_column("pos2end")
+        );
+        assert!(layers[1]["encoding"].get("x2").is_none());
+        assert!(layers[1]["encoding"].get("y2").is_none());
+        assert_eq!(layers[1]["encoding"]["fill"]["value"], "#123456");
+        assert_eq!(
+            layers[1]["encoding"]["angle"]["field"],
+            "__ggsql_arrow_angle__"
+        );
+        assert_eq!(layers[1]["transform"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_rule_renderer_emits_trailing_label() {
+        let renderer = RuleRenderer;
+        let mut layer = Layer::new(crate::plot::Geom::rule());
+        layer.mappings.insert(
+            "label".to_string(),
+            AestheticValue::Literal(ParameterValue::String("Target".to_string())),
+        );
+        let context = RenderContext::default_for_test();
+        let prepared = PreparedData::Single {
+            values: Vec::new(),
+            metadata: Box::new(()),
+        };
+        let prototype = json!({
+            "mark": {"type": "rule", "clip": true},
+            "encoding": {
+                "y": {
+                    "field": naming::aesthetic_column("pos2"),
+                    "type": "quantitative"
+                },
+                "text": {"value": "Target"},
+                "stroke": {"value": "#123456"}
+            }
+        });
+
+        let layers = renderer
+            .finalize(prototype, &layer, "test", &prepared, &context)
+            .unwrap();
+
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0]["mark"]["type"], "rule");
+        assert!(layers[0]["encoding"].get("text").is_none());
+        assert_eq!(layers[1]["mark"]["type"], "text");
+        assert_eq!(layers[1]["mark"]["align"], "right");
+        assert_eq!(layers[1]["encoding"]["x"]["value"], "width");
+        assert_eq!(layers[1]["encoding"]["text"]["value"], "Target");
+        assert_eq!(layers[1]["encoding"]["fill"]["value"], "#123456");
+    }
 
     #[test]
     fn test_violin_detail_encoding() {

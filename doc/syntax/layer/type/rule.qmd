@@ -22,6 +22,7 @@ The following aesthetics are recognised by the rule layer.
 * `opacity`: The opacity of the line
 * `linewidth`: The width of the line
 * `linetype`: The type of the line, i.e. the dashing pattern
+* `label`: Optional text placed at the trailing edge of the reference line.
 
 ## Settings
 * `position`: Position adjustment. One of `'identity'` (default), `'stack'`, `'dodge'`, or `'jitter'`
@@ -56,7 +57,7 @@ VISUALISE
 DRAW line 
   MAPPING date AS x, temperature AS y
 PLACE rule 
-  SETTING y => 70
+  SETTING y => 70, label => 'Target'
 ```
 
 Add a vertical line to mark a specific value:

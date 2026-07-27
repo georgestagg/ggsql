@@ -1593,6 +1593,66 @@ mod tests {
     }
 
     #[test]
+    fn test_plot_legend_label_controls_guide_orientation_and_visibility() {
+        let writer = VegaLiteWriter::new();
+        let make_spec = |preference: Option<&str>| {
+            let mut spec = Plot::new();
+            spec.layers.push(
+                Layer::new(Geom::point())
+                    .with_aesthetic(
+                        "pos1".to_string(),
+                        AestheticValue::standard_column("x".to_string()),
+                    )
+                    .with_aesthetic(
+                        "pos2".to_string(),
+                        AestheticValue::standard_column("y".to_string()),
+                    )
+                    .with_aesthetic(
+                        "fill".to_string(),
+                        AestheticValue::standard_column("group".to_string()),
+                    ),
+            );
+            spec.labels = Some(Labels {
+                labels: HashMap::from([("legend".to_string(), preference.map(str::to_string))]),
+            });
+            transform_spec(&mut spec);
+            spec
+        };
+        let data = || {
+            df! {
+                "x" => vec![1, 2],
+                "y" => vec![3, 4],
+                "group" => vec!["a", "b"],
+            }
+            .unwrap()
+        };
+
+        let bottom: Value = serde_json::from_str(
+            &writer
+                .write(&make_spec(Some("bottom")), &wrap_data(data()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            bottom["layer"][0]["encoding"]["fill"]["legend"]["orient"],
+            "bottom"
+        );
+
+        let hidden: Value = serde_json::from_str(
+            &writer
+                .write(&make_spec(Some("none")), &wrap_data(data()))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(hidden["layer"][0]["encoding"]["fill"]["legend"].is_null());
+
+        let suppressed: Value =
+            serde_json::from_str(&writer.write(&make_spec(None), &wrap_data(data())).unwrap())
+                .unwrap();
+        assert!(suppressed["layer"][0]["encoding"]["fill"]["legend"].is_null());
+    }
+
+    #[test]
     fn test_labels_newline_splitting() {
         use crate::execute;
         use crate::reader::DuckDBReader;

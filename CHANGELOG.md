@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Added
+
+- Support `LABEL legend => 'left' | 'right' | 'top' | 'bottom' | 'none'`
+  (or `null`) for plot-wide legend placement and suppression.
+- Allow rule layers to carry a `label` aesthetic, rendered at the trailing
+  edge of the reference line by the Vega-Lite writer.
+
+### Fixed
+
+- Render `DRAW arrow` as a line segment with a directional arrowhead in the
+  Vega-Lite writer instead of falling back to a point mark.
+
 ## 0.4.1 - 2026-06-22
 
 ### Changed
