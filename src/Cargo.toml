@@ -68,7 +68,11 @@ parquet = ["dep:parquet"]
 sqlite = ["dep:rusqlite"]
 adbc = ["dep:adbc_core"]
 odbc = ["dep:toml_edit", "dep:libloading"]
-spatial = ["dep:geozero", "rusqlite?/load_extension"]
+# Spatial plot preparation only needs geozero. The SQLite reader already
+# enables rusqlite's load_extension feature when `sqlite` is selected; keeping
+# that optional dependency out of this feature avoids libsqlite3 link conflicts
+# for consumers that provide another SQLite-backed subsystem.
+spatial = ["dep:geozero"]
 vegalite = []
 builtin-data = []
 all-readers = ["duckdb", "sqlite", "odbc"]
