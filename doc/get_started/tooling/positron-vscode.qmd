@@ -41,6 +41,26 @@ To create a cell, simply add a line with `-- %%` between blocks of code in your 
 
 ![](./screenshots/positron-cells.png)
 
+## Using ggsql with `.sql` files {#sql-files}
+
+ggsql is a superset of SQL, so the ggsql console can execute a plain SQL query. The extension offers the "Source Current File" button and code cells in `.sql` files as well as `.gsql` files, which means you can run SQL you already have against a ggsql kernel without renaming anything.
+
+By default `.sql` files keep their usual SQL syntax highlighting, so any other database tooling you have installed continues to work as before. If you would rather give `.sql` files the full ggsql treatment, including highlighting for `VISUALISE` and the other ggsql clauses, map them to the `ggsql` language type:
+
+```json
+"files.associations": {
+    "*.sql": "ggsql"
+}
+```
+
+The extension points you at this setting when you open a `.sql` file, but it never changes the setting for you. Mapping `*.sql` affects every `.sql` file you open, so the choice is left to you. Add it to a single workspace rather than your user settings if you only want it for one project, and use "Don't show again" on the notification if you would rather not be reminded.
+
+If you use `.sql` files with other database tooling and would prefer the extension leave them alone entirely, turn the run buttons and cells off:
+
+```json
+"ggsql.enableSqlFiles": false
+```
+
 ## Database connections
 
 By default, ggsql starts in the Positron console with an empty in-memory duckdb database connection. A "magic" comment can be used to initiate a different database connection after the session has launched, which can be either a comment in your source file or invoked directly in the console.
