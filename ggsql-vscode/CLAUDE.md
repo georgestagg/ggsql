@@ -55,6 +55,31 @@ Cells are detected by `cellParser.ts`; `codelens.ts` puts a CodeLens above each 
 
 `ggsql.createNewFile` is contributed to the `file/newFile` menu under its own `ggsql` group, so the New File dialog lists it beneath the built-in File and Notebook sections rather than alongside them. It is registered before the Positron API check in `extension.ts`, since opening an untitled document does not need Positron.
 
+## Attaching to `.sql` files
+
+ggsql is a SQL superset, so the kernel can execute a plain `.sql` file. Rather than claiming the `.sql` file association, the extension attaches its run affordances to documents already tokenized as `sql`:
+
+- [`src/languages.ts`](src/languages.ts) is the single source of truth. `isGgsqlDocument()` decides whether ggsql will act on a document; every command guard, decoration and context key routes through it. Add new language-scoped behaviour there rather than comparing `languageId` inline.
+- `CELL_LANGUAGE_IDS` registers the CodeLens provider for both ids. The provider gates on `isGgsqlDocument()` at request time and fires `onDidChangeCodeLenses` when `ggsql.enableSqlFiles` changes, so the setting takes effect without re-registering.
+- The `editor/title/run` `when` clauses gate on `config.ggsql.enableSqlFiles` directly, so no context key is needed for the buttons.
+
+Why not claim `.sql` in `contributes.languages`: extension-contributed associations are resolved last-registered-wins (`languagesAssociations.ts`), which is not a contract and is fragile against other SQL extensions. It would also replace the richer built-in `source.sql` grammar and break language-scoped features from other SQL tooling.
+
+[`src/sqlAssociation.ts`](src/sqlAssociation.ts) shows a one-time notice pointing at `files.associations`, which is the right mechanism for users who want ggsql highlighting in `.sql` files because user-configured associations sit in the highest precedence tier and so win deterministically.
+
+**It does not write the setting.** Mapping `*.sql` rewrites how every `.sql` file in every workspace is treated, which is not an extension's call, and running SQL in the ggsql console does not need it. An earlier version did write it on a button press, and that turned out to need a reset command, an offer to un-write, and care over which config level to base the update on. None of that is needed now.
+
+Three constraints worth knowing before editing the notice:
+
+- **Notification text is not markdown.** It is parsed by `parseLinkedText`, which matches markdown links and nothing else, so code spans and emphasis render literally. Hrefs are limited to `https:`, `command:` and `file:`, and may contain no spaces or `)`. The setting name is therefore a `command:` link, and the mapping is spelled out in prose rather than backticked.
+- **Any button press dismisses the notification**, so every button has to be a complete answer. The documentation link lives on the `ggsql.enableSqlFiles` setting rather than being a button here.
+- **The notice fires on every `.sql` open, and only "Don't show again" persists.** An Info notification with buttons is *not* sticky (`notifications.ts` makes actions sticky only at Error severity), so it auto-hides after 10 seconds and extensions cannot opt out. A show-once notice is therefore trivially missed, which would defeat the point. A module-level `noticeVisible` guard stops that becoming a pile-up when many `.sql` files open at once. `ggsql: Reset .sql File Association Prompt` clears the persisted flag, the only route back from "Don't show again" short of editing the global storage database.
+
+The `ggsql.enableSqlFiles` description uses `markdownDescription` rather than `description`, which matters for two reasons: only the markdown path runs `fixSettingLinks`, and only it renders links at all. It uses both link forms available there:
+
+- `` `#files.associations#` `` renders as a link to that setting. The backticks (or single quotes) are required; a bare `#files.associations#` is left as literal text.
+- A plain markdown link to [`/doc/get_started/tooling/positron-vscode.qmd`](../doc/get_started/tooling/positron-vscode.qmd), whose `## Using ggsql with .sql files` heading carries an explicit `{#sql-files}` anchor so the URL survives a rewording. Keep the anchor if you edit that heading.
+
 ## Positron integration
 
 The extension declares `contributes.languageRuntimes` for `ggsql` (see `package.json`) and depends on `@posit-dev/positron`. When activated under Positron, `manager.ts`:

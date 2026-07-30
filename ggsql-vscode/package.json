@@ -87,6 +87,11 @@
         "category": "ggsql",
         "title": "New ggsql File",
         "shortTitle": "ggsql File"
+      },
+      {
+        "command": "ggsql.resetSqlAssociationPrompt",
+        "category": "ggsql",
+        "title": "Reset .sql File Association Prompt"
       }
     ],
     "keybindings": [
@@ -113,11 +118,11 @@
         {
           "command": "ggsql.sourceCurrentFile",
           "group": "navigation@0",
-          "when": "resourceLangId == ggsql && !isInDiffEditor"
+          "when": "(resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
         },
         {
           "command": "workbench.action.positronConsole.executeCode",
-          "when": "resourceLangId == ggsql && !isInDiffEditor"
+          "when": "(resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
         }
       ],
       "file/newFile": [
@@ -136,6 +141,11 @@
           "type": "string",
           "default": "",
           "description": "Path to the ggsql-jupyter executable. If empty, uses 'ggsql-jupyter' from PATH."
+        },
+        "ggsql.enableSqlFiles": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer ggsql run buttons and code cells in plain `.sql` files. ggsql is a superset of SQL, so the ggsql console can execute them. Turn this off if you use `.sql` files with other database tooling.\n\nTo also give `.sql` files ggsql syntax highlighting, map them to the ggsql language with `#files.associations#`. See [Using ggsql with `.sql` files](https://ggsql.org/get_started/tooling/positron-vscode.html#sql-files) for details."
         }
       }
     }

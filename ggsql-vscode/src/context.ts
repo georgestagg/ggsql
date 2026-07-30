@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { parseCells } from './cellParser';
+import { isGgsqlDocument } from './languages';
 
 function setHasCodeCells(editor: vscode.TextEditor | undefined): void {
 	let value = false;
-	if (editor && editor.document.languageId === 'ggsql') {
+	if (editor && isGgsqlDocument(editor.document)) {
 		value = parseCells(editor.document).length > 0;
 	}
 	vscode.commands.executeCommand('setContext', 'ggsql.hasCodeCells', value);
