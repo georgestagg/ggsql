@@ -17,6 +17,9 @@
 - The VS Code / Positron extension now ships a language icon that renders in the
   session picker, editor tabs and the Explorer. It previously pointed at a file
   that did not exist, which left the icon blank.
+- In plain VS Code, the extension no longer offers run buttons, keybindings or
+  Command Palette entries for commands that need the Positron runtime and so
+  had no handler there.
 
 ## 0.4.1 - 2026-06-22
 

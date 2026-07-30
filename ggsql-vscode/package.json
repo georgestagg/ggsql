@@ -99,18 +99,18 @@
         "command": "ggsql.runCurrentAdvance",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       },
       {
         "command": "ggsql.runCurrentAdvance",
         "key": "shift+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       },
       {
         "command": "ggsql.runQuery",
         "key": "ctrl+shift+enter",
         "mac": "cmd+shift+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       }
     ],
     "menus": {
@@ -118,11 +118,11 @@
         {
           "command": "ggsql.sourceCurrentFile",
           "group": "navigation@0",
-          "when": "(resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
+          "when": "isPositron && (resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
         },
         {
           "command": "workbench.action.positronConsole.executeCode",
-          "when": "(resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
+          "when": "isPositron && (resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
         }
       ],
       "file/newFile": [
@@ -130,6 +130,28 @@
           "command": "ggsql.createNewFile",
           "group": "ggsql",
           "when": "!virtualWorkspace"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ggsql.sourceCurrentFile",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runQuery",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runCellsAbove",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runNextCell",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runCurrentAdvance",
+          "when": "isPositron"
         }
       ]
     },

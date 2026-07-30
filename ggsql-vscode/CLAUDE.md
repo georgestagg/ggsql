@@ -88,7 +88,15 @@ The extension declares `contributes.languageRuntimes` for `ggsql` (see `package.
 2. Registers it as a Positron language runtime so `▶ Run` and the Console route to the kernel.
 3. Routes plot output to Positron's Plot pane via metadata coming back from the kernel (`output_location: "plot"`).
 
-Outside Positron, the same commands fall back to writing query output to the active terminal.
+Outside Positron there is no way to execute a query: `activate()` returns early, so every command that runs code stays unregistered. To avoid offering actions that cannot work, everything execution-related gates on Positron's built-in **`isPositron`** context key ([extension development docs](https://positron.posit.co/extension-development.html#option-1-context-keys)):
+
+- the two `editor/title/run` buttons
+- the three keybindings
+- the five run commands, hidden from the Command Palette via a `commandPalette` menu entry
+
+`isPositron` is declared with a default of `true`, so it is correct in Positron from startup with no code and no activation-order window. In VS Code the key is never declared, so it evaluates falsy. Prefer it over a hand-rolled `setContext` key for anything purely declarative; the Positron API (`tryAcquirePositronApi`) is the right check when the code needs the API object itself.
+
+Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSqlAssociationPrompt`, syntax highlighting) is registered before the early return and works in plain VS Code. Add new commands on the correct side of that line, and gate them if they execute code.
 
 ## Settings
 
