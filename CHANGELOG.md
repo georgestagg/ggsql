@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Added
+
+- The VS Code / Positron extension now offers its "Source Current File" button
+  and code cells in plain `.sql` files, so existing SQL can be run against a
+  ggsql kernel without renaming it. `.sql` files keep their usual SQL syntax
+  highlighting; to get ggsql highlighting as well, map them to the `ggsql`
+  language type with `files.associations`, which the extension points out the
+  first time a `.sql` file is opened. The new `ggsql.enableSqlFiles` setting
+  turns the whole behaviour off.
+- The VS Code / Positron extension contributes a "ggsql File" entry to the
+  New File dialog.
+
+### Fixed
+
+- The VS Code / Positron extension now ships a language icon that renders in the
+  session picker, editor tabs and the Explorer. It previously pointed at a file
+  that did not exist, which left the icon blank.
+
 ## 0.4.1 - 2026-06-22
 
 ### Changed
