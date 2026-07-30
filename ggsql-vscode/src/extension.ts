@@ -29,6 +29,14 @@ export function log(message: string): void {
 export function activate(context: vscode.ExtensionContext): void {
     log('ggsql extension activating...');
 
+    // Register "New ggsql File" for the New File dialog
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ggsql.createNewFile', async () => {
+            const document = await vscode.workspace.openTextDocument({ language: 'ggsql' });
+            await vscode.window.showTextDocument(document);
+        })
+    );
+
     // Try to acquire the Positron API
     const positronApi = tryAcquirePositronApi();
 

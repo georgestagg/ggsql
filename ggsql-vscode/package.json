@@ -32,9 +32,9 @@
       {
         "id": "ggsql",
         "extensions": [
+          ".gsql",
           ".ggsql",
-          ".ggsql.sql",
-          ".gsql"
+          ".ggsql.sql"
         ],
         "configuration": "./language-configuration.json",
         "icon": {
@@ -81,6 +81,12 @@
         "command": "ggsql.runCurrentAdvance",
         "category": "ggsql",
         "title": "Run Query and Advance"
+      },
+      {
+        "command": "ggsql.createNewFile",
+        "category": "ggsql",
+        "title": "New ggsql File",
+        "shortTitle": "ggsql File"
       }
     ],
     "keybindings": [
@@ -112,6 +118,13 @@
         {
           "command": "workbench.action.positronConsole.executeCode",
           "when": "resourceLangId == ggsql && !isInDiffEditor"
+        }
+      ],
+      "file/newFile": [
+        {
+          "command": "ggsql.createNewFile",
+          "group": "ggsql",
+          "when": "!virtualWorkspace"
         }
       ]
     },

@@ -34,7 +34,9 @@ ggsql-vscode/
 
 ## File extensions and language ID
 
-`package.json` registers `id: ggsql` for `.ggsql`, `.ggsql.sql`, and `.gsql`. The TextMate grammar at `syntaxes/ggsql.tmLanguage.json` provides tokenization. Tree-sitter highlights — used by editors that prefer the grammar package directly — live in [`/tree-sitter-ggsql/queries/highlights.scm`](../tree-sitter-ggsql/queries/highlights.scm).
+`package.json` registers `id: ggsql` for `.gsql`, `.ggsql`, and `.ggsql.sql`. **Order matters:** the first entry is the primary extension, and it is what the workbench suggests when saving an untitled ggsql document (`textFileService.suggestFilename` uses `extensions.at(0)`). `.gsql` is first to match the documented extension in [`/doc/get_started/tooling/positron-vscode.qmd`](../doc/get_started/tooling/positron-vscode.qmd).
+
+The TextMate grammar at `syntaxes/ggsql.tmLanguage.json` provides tokenization. Tree-sitter highlights — used by editors that prefer the grammar package directly — live in [`/tree-sitter-ggsql/queries/highlights.scm`](../tree-sitter-ggsql/queries/highlights.scm).
 
 ## Commands and keybindings
 
@@ -47,8 +49,11 @@ Declared in `package.json` and wired up in `extension.ts`:
 | `ggsql.runNextCell` | — | Run the next cell |
 | `ggsql.runCellsAbove` | — | Run all cells above the cursor |
 | `ggsql.sourceCurrentFile` | — | Run the entire file (also exposed as the editor "Run" button) |
+| `ggsql.createNewFile` | — | Open a new untitled ggsql document (also in the New File dialog) |
 
 Cells are detected by `cellParser.ts`; `codelens.ts` puts a CodeLens above each cell.
+
+`ggsql.createNewFile` is contributed to the `file/newFile` menu under its own `ggsql` group, so the New File dialog lists it beneath the built-in File and Notebook sections rather than alongside them. It is registered before the Positron API check in `extension.ts`, since opening an untitled document does not need Positron.
 
 ## Positron integration
 
