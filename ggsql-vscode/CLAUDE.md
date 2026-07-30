@@ -13,7 +13,7 @@ ggsql-vscode/
 ├── esbuild.js                Bundler config (builds out/extension.js)
 ├── eslint.config.mjs
 ├── language-configuration.json   Bracket pairs, comment markers
-├── logo.png, icon.png
+├── logo.png                  Marketplace icon
 ├── src/
 │   ├── extension.ts          activate(): registers commands, manager, code lenses
 │   ├── manager.ts            Kernel discovery + Positron language-runtime registration
@@ -27,6 +27,8 @@ ggsql-vscode/
 │   └── ggsql.tmLanguage.json TextMate grammar (used for tokenization in VS Code)
 ├── examples/                 Sample .ggsql files
 ├── resources/                Static assets bundled with the extension
+│   ├── ggsql-icon.svg        Full-colour logo; read by manager.ts for base64EncodedIconSvg
+│   └── ggsql-lang-icon.svg   contributes.languages[].icon; tuned for the 16px file-icon slot
 └── ggsql-0.1.0.vsix          Packaged extension (build artifact, may be stale)
 ```
 

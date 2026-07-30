@@ -38,8 +38,8 @@
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icon.png",
-          "dark": "./icon.png"
+          "light": "./resources/ggsql-lang-icon.svg",
+          "dark": "./resources/ggsql-lang-icon.svg"
         }
       }
     ],
