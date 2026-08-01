@@ -15,3 +15,4 @@ esbuild.js
 out/**/*.map
 package-lock.json
 *.vsix
+out-test/**
