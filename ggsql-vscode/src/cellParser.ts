@@ -52,7 +52,9 @@ export function parseCells(document: vscode.TextDocument): Cell[] {
 		}
 	}
 
-	// Close the last cell (or treat entire document as one cell if no markers)
+	// Close the final cell. A document with no markers opened none, so it yields no
+	// cells at all; callers such as `sourceCurrentFile` treat that as "run the whole
+	// document" rather than relying on this function to synthesise a cell.
 	if (currentStart !== undefined) {
 		const range = new vscode.Range(
 			new vscode.Position(currentStart, 0),
