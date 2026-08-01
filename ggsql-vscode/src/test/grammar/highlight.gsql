@@ -13,9 +13,7 @@ VISUALISE date AS x, revenue AS y, region AS color
 -- <-------- keyword.other.ggsql
 --             ^^ keyword.other.ggsql
 --                ^ support.type.aesthetic.ggsql
---                           ^^ keyword.other.ggsql
 --                              ^ support.type.aesthetic.ggsql
---                                        ^^ keyword.other.ggsql
 --                                           ^^^^^ support.type.aesthetic.ggsql
 
 DRAW point

@@ -20,6 +20,10 @@ suite('isGgsqlDocument', () => {
 	test('defaults to attaching to sql files', async () => {
 		// Asserts the shipped default, so it must clear any value a previous
 		// test or file may have left behind rather than rely on teardown alone.
+		// This pins the `ggsql.enableSqlFiles` default declared in package.json's
+		// configuration schema, not sqlFilesEnabled()'s own fallback argument: VS Code
+		// resolves `.get()` against the registered schema default first, so a change to
+		// the code-level fallback alone would not turn this test red.
 		await setSqlFiles(undefined);
 		assert.strictEqual(sqlFilesEnabled(), true);
 	});

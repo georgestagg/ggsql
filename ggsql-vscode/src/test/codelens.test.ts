@@ -49,9 +49,13 @@ suite('GgsqlCodeLensProvider', () => {
 
 	test('each lens carries its cell start line as the command argument', async () => {
 		const document = await docOf('-- %%\nSELECT 1\n-- %%\nSELECT 2\n');
-		for (const lens of provider.provideCodeLenses(document)) {
-			assert.deepStrictEqual(lens.command?.arguments, [lens.range.start.line]);
-		}
+		// Expected values are written out literally (not read from each lens's own
+		// range) because comparing a lens's argument to its own range still passes
+		// even if every cell start line is uniformly wrong upstream. The two cells
+		// start on lines 0 and 2; in push order that is Run Query/Run Next for the
+		// first cell, then Run Query/Run Above for the second.
+		const args = provider.provideCodeLenses(document).map(l => l.command?.arguments);
+		assert.deepStrictEqual(args, [[0], [0], [2], [2]]);
 	});
 
 	test('sql documents get no lenses while enableSqlFiles is off', async () => {
