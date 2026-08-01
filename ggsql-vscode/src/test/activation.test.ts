@@ -6,6 +6,9 @@ import * as vscode from 'vscode';
 
 const EXTENSION_ID = 'ggsql.ggsql';
 
+// Directories created by openFileNamed, removed in suiteTeardown below.
+const tempDirs: string[] = [];
+
 /**
  * Opens a real file on disk so the workbench resolves its language from the
  * contributed extensions. `openTextDocument({content})` would let the test pick
@@ -13,6 +16,7 @@ const EXTENSION_ID = 'ggsql.ggsql';
  */
 async function openFileNamed(name: string, content: string): Promise<vscode.TextDocument> {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ggsql-test-'));
+	tempDirs.push(dir);
 	const file = path.join(dir, name);
 	fs.writeFileSync(file, content);
 	return vscode.workspace.openTextDocument(file);
@@ -56,5 +60,11 @@ suite('activation', () => {
 
 	teardown(async () => {
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+	});
+
+	suiteTeardown(() => {
+		for (const dir of tempDirs) {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

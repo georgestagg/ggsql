@@ -22,7 +22,9 @@ ggsql-vscode/
 │   ├── codelens.ts           "▶ Run cell" lens above each cell
 │   ├── decorations.ts        Cell separator decorations
 │   ├── context.ts            Sets editor context keys (e.g. ggsql.hasCodeCells)
-│   └── types.ts              Shared interfaces
+│   ├── sqlAssociation.ts     One-time notice pointing at files.associations for .sql highlighting
+│   ├── types.ts              Shared interfaces
+│   └── test/                 Mocha suites (unit + activation) and the grammar fixture
 ├── syntaxes/
 │   └── ggsql.tmLanguage.json TextMate grammar (used for tokenization in VS Code)
 ├── examples/                 Sample .ggsql files
@@ -118,6 +120,33 @@ code --install-extension ggsql-<version>.vsix
 ```
 
 Watch mode for development: `npm run watch` (runs esbuild + tsc in parallel).
+
+## Testing
+
+```sh
+cd ggsql-vscode
+npm test              # grammar scopes, then the VS Code suites
+npm run test:grammar  # TextMate scopes only; no Electron, fast
+npm run test:extension
+```
+
+Tests live in `src/test/` and compile to `out-test/` via `tsconfig.test.json`, deliberately not to `out/`, which `esbuild.js` owns. The whole of `src/` compiles there, not just `src/test/`, because the unit tests import the extension's own modules. `@vscode/test-cli` launches a real VS Code instance, so a window appears while the suites run; CI wraps the same command in `xvfb-run`.
+
+Note that `tsc` does not prune output for deleted sources: if you delete or rename a test, remove its `.js` and `.js.map` from `out-test/test/` or the runner keeps executing the stale copy. `npm run test:extension` on its own does not recompile, so run `npm test` (or `npm run compile-tests` first) after editing any `.ts`.
+
+The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement and TextMate scopes. The Positron surface (runtime manager, connection drivers, cell execution) is not covered, since it needs a Positron host. `sqlAssociation.ts`, `manager.ts` and `connections.ts` are also untested.
+
+Add new tests as `src/test/<name>.test.ts`; no config change is needed.
+
+### Editing the grammar fixture
+
+`src/test/grammar/highlight.gsql` uses `vscode-tmgrammar-test`'s annotation format, which has three rules worth knowing before you touch it:
+
+- The header must be exactly `-- SYNTAX TEST "source.ggsql"`. A trailing `>>`, which some examples show, makes the tool reject the file with a parse error rather than an assertion failure.
+- A `^` caret's column is the comment token length plus its index in the assertion line, matched against the source line's 0-based columns. Carets therefore cannot target source columns 0 and 1, which is why the `<---` form exists for line-initial tokens.
+- For `<---`, the dash count sets the assertion's right edge from column 0. It must be at least 1 and no more than the target token's length, so it is not cosmetic.
+
+Assertion lines are stripped before tokenization, so they never tokenize as ggsql comments.
 
 ## See also
 

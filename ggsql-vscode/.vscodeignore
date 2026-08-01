@@ -4,6 +4,7 @@
 .yarnrc
 vsc-extension-quickstart.md
 **/tsconfig.json
+tsconfig.test.json
 **/.eslintrc.json
 **/*.map
 **/*.ts
@@ -16,3 +17,4 @@ out/**/*.map
 package-lock.json
 *.vsix
 out-test/**
+.vscode-test.mjs
