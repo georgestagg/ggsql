@@ -43,3 +43,8 @@ LABEL title => 'Sales by Region', x => 'Date', y => 'Revenue'
 --             ^^^^^^^^^^^^^^^^^ string.quoted.single.ggsql
 --                                ^ support.type.property.ggsql
 --                                             ^ support.type.property.ggsql
+
+FACET region SETTING free => 'y', missing => 'repeat'
+-- <---- keyword.other.ggsql
+--                   ^^^^ support.type.property.ggsql
+--                                ^^^^^^^ support.type.property.ggsql
