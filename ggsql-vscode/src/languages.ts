@@ -25,15 +25,7 @@ export const SQL_LANGUAGE_ID = 'sql';
  */
 export const CELL_LANGUAGE_IDS = [GGSQL_LANGUAGE_ID, SQL_LANGUAGE_ID];
 
-/**
- * Whether ggsql offers its run affordances in plain `.sql` files.
- *
- * The effective default in practice is the `ggsql.enableSqlFiles` default declared in
- * `package.json`'s configuration schema, not the fallback argument below: once a setting
- * is registered there, VS Code resolves `.get()` against that schema default before
- * falling back to the argument passed here. The `true` below is defensive documentation
- * for the (registered) default, not the value that actually applies.
- */
+/** Whether ggsql offers its run affordances in plain `.sql` files. */
 export function sqlFilesEnabled(): boolean {
 	return vscode.workspace
 		.getConfiguration('ggsql')
