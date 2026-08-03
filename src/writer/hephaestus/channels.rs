@@ -1,15 +1,16 @@
 //! Bridging ggsql aesthetic mappings and DataFrame columns to the typed data
 //! hephaestus geoms consume.
 
-use arrow::array::{Array, ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
 
 use hephaestus::color::Color;
 use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
+use hephaestus::scales::geometry::{Coord, Geometry, Polygon as GeoPolygon};
 
 use super::scales::parse_color;
 use crate::array_util::{as_bool, as_f64, as_str, cast_array, value_to_string};
-use crate::{AestheticValue, DataFrame, Layer, Result};
+use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Result};
 
 /// A column extracted in the type hephaestus expects for a channel: numeric
 /// columns become `f64`s, text columns become category strings.
@@ -144,4 +145,97 @@ pub fn column_to_colors(df: &DataFrame, name: &str) -> Result<Vec<Color>> {
         .iter()
         .map(|s| parse_color(s).unwrap_or(Color::BLACK))
         .collect())
+}
+
+/// Read a geometry column into hephaestus `Geometry` values. ggsql's spatial
+/// pipeline re-encodes the geometry aesthetic as WKB (arrow `Binary`), which we
+/// decode via `Geometry::from_wkb`; hex-encoded WKB strings (PostGIS over ODBC)
+/// are decoded too, mirroring the Vega-Lite writer's `parse_geometry_from_array`.
+/// Null rows become `Geometry::Empty` (drawn as nothing).
+pub fn column_to_geometry(df: &DataFrame, name: &str) -> Result<Vec<Geometry>> {
+    let array = df.column(name)?;
+    let parse = |bytes: &[u8]| -> Result<Geometry> {
+        Geometry::from_wkb(bytes)
+            .map_err(|e| GgsqlError::WriterError(format!("could not parse WKB geometry: {e:?}")))
+    };
+    (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                return Ok(Geometry::Empty);
+            }
+            match array.data_type() {
+                DataType::Binary => parse(
+                    array
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .ok_or_else(|| geom_type_err("Binary"))?
+                        .value(i),
+                ),
+                DataType::LargeBinary => parse(
+                    array
+                        .as_any()
+                        .downcast_ref::<LargeBinaryArray>()
+                        .ok_or_else(|| geom_type_err("LargeBinary"))?
+                        .value(i),
+                ),
+                DataType::Utf8 => parse(&decode_hex_wkb(
+                    array
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| geom_type_err("Utf8"))?
+                        .value(i),
+                )?),
+                DataType::LargeUtf8 => parse(&decode_hex_wkb(
+                    array
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| geom_type_err("LargeUtf8"))?
+                        .value(i),
+                )?),
+                other => Err(GgsqlError::WriterError(format!(
+                    "geometry column has unsupported type {other:?}; expected WKB (Binary)"
+                ))),
+            }
+        })
+        .collect()
+}
+
+fn geom_type_err(kind: &str) -> GgsqlError {
+    GgsqlError::WriterError(format!("failed to read geometry column as {kind}"))
+}
+
+/// Decode a hex-encoded WKB string (optionally `\x`-prefixed, as PostGIS emits
+/// over ODBC) into raw bytes.
+fn decode_hex_wkb(hex: &str) -> Result<Vec<u8>> {
+    let hex = hex.strip_prefix("\\x").unwrap_or(hex);
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(hex.get(i..i + 2).unwrap_or(""), 16)
+                .map_err(|_| GgsqlError::WriterError(format!("invalid hex in WKB at position {i}")))
+        })
+        .collect()
+}
+
+/// Parse a WKT string into a set of polylines (one per LineString). A
+/// MultiLineString flattens to its parts; a bare LineString yields one line;
+/// other geometry types contribute nothing. Used to feed graticule grid lines
+/// to a map's Custom projection.
+pub fn wkt_to_lines(wkt: &str) -> Vec<Vec<Coord>> {
+    match Geometry::from_wkt(wkt) {
+        Ok(Geometry::MultiLineString(lines)) => lines,
+        Ok(Geometry::LineString(line)) => vec![line],
+        _ => Vec::new(),
+    }
+}
+
+/// Parse a WKT boundary string into polygon outlines for a Custom projection's
+/// drawing surface. A Polygon yields one outline (with its holes); a
+/// MultiPolygon yields all its parts; non-areal geometries yield nothing.
+pub fn wkt_to_outline(wkt: &str) -> Vec<GeoPolygon> {
+    match Geometry::from_wkt(wkt) {
+        Ok(Geometry::Polygon(p)) => vec![p],
+        Ok(Geometry::MultiPolygon(polys)) => polys,
+        _ => Vec::new(),
+    }
 }

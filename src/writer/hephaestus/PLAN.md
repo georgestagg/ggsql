@@ -597,6 +597,66 @@ Known limitations (refinements, for upstream / later):
   writer's `build_*_facet_label_expr` are a refinement.
 - Free binned dimensions fall back to a plain continuous per-panel scale.
 
+## Spatial / Map (Phase 5b) — status: implemented
+
+The `spatial` geom and the **Map** coordinate system render, completing the last
+coordinate system (Cartesian + Polar were already done). Full parity with the
+Vega-Lite writer: geometry marks, the projected panel boundary, and graticules —
+for both a `PROJECT map` and a bare `spatial` geom under Cartesian.
+
+The seam is clean because ggsql's executor does **all** SQL-side projection
+renderer-agnostically (`plot/projection/coord/map.rs`, `plot/layer/geom/
+spatial.rs`): by the time the writer runs, geometry is WKB in
+`__ggsql_aes_geometry__`, and `Projection.computed` holds `panel_boundary` (WKT),
+`bbox` (`[xmin,ymin,xmax,ymax]`), and `graticule_lon`/`graticule_lat` (WKT). The
+writer only decodes and frames — no data is recomputed. Mirrors the VL
+`MapProjection` (identity projection) and `SpatialRenderer`.
+
+- **Dep** (`src/Cargo.toml`): hephaestus `features` gains `geom-wkb` (geometry
+  column) + `geom-wkt` (boundary/graticule strings), and the rev is bumped to
+  `d343138` — whose `CustomProjection` outline is a `Vec<GeoPolygon>`, so a
+  multi-part clip boundary passes through whole (`GeometryGeom` already existed).
+- **`channels.rs`**: `column_to_geometry` decodes the WKB `Binary`/`LargeBinary`
+  column (and hex-WKB strings, for ODBC/PostGIS parity) via `Geometry::from_wkb`;
+  nulls → `Geometry::Empty`. `wkt_to_lines` (graticule polylines) and
+  `wkt_to_outline` (boundary → `Vec<GeoPolygon>`: a Polygon → one, a MultiPolygon
+  → all parts, each with holes) feed the map projection.
+- **`geom/spatial.rs`**: a custom builder (like `text`/`boxplot`) — `GeometryGeom`
+  has no x/y channel, so it sets the `geometry` channel and binds x→`pos1`,
+  y→`pos2` (the geom's draw resolves each coordinate through those scales).
+  fill/stroke go through `resolve_color` (data-mapped → shared scale + one
+  collapsed legend, else the mapped literal / ggsql spatial defaults `#747474`
+  fill, black stroke, opacity 0.8, linewidth 0.2, solid linetype).
+- **`mod.rs`**: a spatial layer has no `pos1`/`pos2` in `spec.scales`, so
+  `write` registers continuous `pos1`/`pos2` scales from ggsql's `computed["bbox"]`
+  (else the union geometry extent for a bare spatial geom) — the domain still
+  comes from ggsql. The panel's **aspect ratio is locked to the bbox**
+  (`aspect_mode(Range)`) so the projection isn't distorted (the raster analog of
+  VL's uniform projection scale); hephaestus's Cartesian y-flip already puts north
+  up, so no `reflectY` equivalent.
+  `opacity`/`linewidth`/`linetype` route through the shared `wire_material`
+  (made `pub`), so each is honored as the ggsql literal default, a `SETTING`
+  constant, **or data-mapped** (scale-bound + legend) — full parity with the VL
+  writer's generic encoding path, not fill/stroke-only.
+- **`projection.rs`**: `apply_proj_map` clears the Cartesian rails and builds a
+  `Projection::Custom` from `computed` — `panel_boundary` → the clip/background
+  outline (a full **MultiPolygon**: every part with its holes; needs hephaestus
+  ≥ `d343138`, whose `CustomProjection` outline is `Vec<GeoPolygon>`),
+  `graticule_lon`/`graticule_lat` → the x/y grid lines. Custom's coordinate math
+  equals Cartesian (no reprojection), exactly matching the pre-projected data. A
+  map with no boundary (no CRS/clip) falls back to the bbox-framed Cartesian
+  identity.
+- Verified (eyeballed): orthographic world globe (round — equal aspect held —
+  with boundary + graticules), Mercator choropleth by continent (single collapsed
+  categorical legend, projected proportions), two-polygon bare `spatial` geom with
+  a continuous fill colorbar, and data-mapped `opacity` (per-feature transparency
+  + legend). Tests `renders_spatial`, `renders_spatial_mapped_opacity`,
+  `renders_map` (feature `spatial`); 37 writer tests; feature build, default
+  (hephaestus absent) build, `cargo +1.86` build, fmt, clippy all clean.
+
+Known limitations (deferred, matching VL/PLAN precedent):
+- No writer-side reprojection (by design — ggsql projects in SQL).
+
 ## 8. Key source references
 
 ggsql:

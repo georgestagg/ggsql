@@ -200,8 +200,10 @@ fn wire_positions<G: BuildableGeom>(
 
 /// Set material channels: data-mapped → bind channel to its (globally
 /// registered) scale + record a legend; literal → constant visual value; identity/
-/// annotation → `Raw` per-row values; unmapped → the spec's default.
-fn wire_material<G: BuildableGeom>(
+/// annotation → `Raw` per-row values; unmapped → the spec's default. Public so
+/// custom-builder geoms (e.g. `spatial`) can wire their scalar aesthetics through
+/// the same data-mapped-capable path the generic geoms use.
+pub fn wire_material<G: BuildableGeom>(
     builder: &mut GeomBuilder<G>,
     material: &[MaterialSpec],
     plot: &mut HPlot,

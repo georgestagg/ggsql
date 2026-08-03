@@ -9,6 +9,7 @@ mod point;
 mod polygon;
 mod rect;
 mod segment;
+mod spatial;
 mod text;
 mod violin;
 
@@ -39,6 +40,7 @@ pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
             build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx)
         }
         GeomType::Text => text::build(plot, ctx),
+        GeomType::Spatial => spatial::build(plot, ctx),
         GeomType::Boxplot => boxplot::build(plot, ctx),
         GeomType::Violin => violin::build(plot, ctx),
         other => Err(GgsqlError::WriterError(format!(
@@ -66,6 +68,7 @@ pub fn is_supported(geom: GeomType) -> bool {
             | GeomType::Range
             | GeomType::Rule
             | GeomType::Text
+            | GeomType::Spatial
             | GeomType::Boxplot
             | GeomType::Violin
     )

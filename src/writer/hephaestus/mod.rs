@@ -25,12 +25,15 @@ use std::collections::HashMap;
 use hephaestus::backend::vello::VelloRenderer;
 pub use hephaestus::color::{rgba, Color};
 use hephaestus::geometry::Size;
-use hephaestus::plot::{Plot as HPlot, PlotComposition};
+use hephaestus::plot::{scale, AspectMode, Plot as HPlot, PlotComposition};
 use hephaestus::scales::chrome::AxisSide;
 use hephaestus::shape::ShapeRegistry;
 use hephaestus::Renderer;
 
+use crate::naming;
+use crate::plot::layer::geom::GeomType;
 use crate::plot::layer::is_transposed;
+use crate::plot::ParameterValue;
 use crate::writer::hephaestus::projection::apply_projection;
 use crate::writer::hephaestus::scales::build_scale;
 use crate::writer::Writer;
@@ -118,6 +121,24 @@ impl Writer for HephaestusWriter {
             }
         }
 
+        // A spatial layer positions marks by geometry, not by `pos1`/`pos2`
+        // columns, so ggsql resolves no position scales for it. Register
+        // continuous `pos1`/`pos2` scales spanning the map's bounding box so
+        // `GeometryGeom`'s coordinates map into the panel. The bbox comes from
+        // ggsql (`computed["bbox"]` when projected, else the geometry extent),
+        // keeping the "writer never invents extents" principle.
+        let spatial_bbox = spatial_bbox(spec, data)?;
+        if let Some((xmin, ymin, xmax, ymax)) = spatial_bbox {
+            view.insert_scale(
+                "pos1".to_string(),
+                scale::continuous(nice_range(xmin, xmax)),
+            );
+            view.insert_scale(
+                "pos2".to_string(),
+                scale::continuous(nice_range(ymin, ymax)),
+            );
+        }
+
         // Legends are collected from the first panel only and registered once on
         // the composition's own legend ring, so a faceted plot gets a single shared
         // legend rather than one per panel. Every panel produces the same legends
@@ -186,6 +207,16 @@ impl Writer for HephaestusWriter {
             // Axes are created per coordinate system, edge-only for fixed scales.
             plot = apply_projection(plot, spec, panel, &ps);
 
+            // Lock a spatial panel's aspect to its bounding box so the projected
+            // geometry keeps its proportions (a globe stays round), the raster
+            // analog of the Vega-Lite writer's uniform projection scale.
+            if let Some((xmin, ymin, xmax, ymax)) = spatial_bbox {
+                let (w, h) = (xmax - xmin, ymax - ymin);
+                if w > 0.0 && h > 0.0 {
+                    plot = plot.aspect_ratio(h / w).aspect_mode(AspectMode::Range);
+                }
+            }
+
             // Facet strip labels (Wrap/Grid-column header on top, Grid-row on right).
             if let Some(text) = &panel.strip_top {
                 plot = plot.strip(AxisSide::Top, text.clone());
@@ -216,6 +247,67 @@ impl Writer for HephaestusWriter {
             self.dpi,
             self.background,
         )
+    }
+}
+
+/// The map bounding box `(xmin, ymin, xmax, ymax)` when the plot has a spatial
+/// layer, else `None`. Prefers ggsql's resolved `computed["bbox"]` (set under a
+/// `PROJECT map`); falls back to the union extent of the geometry data for a
+/// bare `spatial` geom with no projection.
+fn spatial_bbox(
+    spec: &Plot,
+    data: &HashMap<String, DataFrame>,
+) -> Result<Option<(f64, f64, f64, f64)>> {
+    let is_spatial = |layer: &Layer| layer.geom.geom_type() == GeomType::Spatial;
+    if !spec.layers.iter().any(is_spatial) {
+        return Ok(None);
+    }
+
+    if let Some(proj) = &spec.project {
+        if let Some(ParameterValue::Array(arr)) = proj.computed.get("bbox") {
+            let nums: Vec<f64> = arr.iter().filter_map(|e| e.to_f64()).collect();
+            if let [xmin, ymin, xmax, ymax] = nums[..] {
+                if [xmin, ymin, xmax, ymax].iter().all(|v| v.is_finite()) {
+                    return Ok(Some((xmin, ymin, xmax, ymax)));
+                }
+            }
+        }
+    }
+
+    let geom_col = naming::aesthetic_column("geometry");
+    let (mut xmin, mut ymin, mut xmax, mut ymax) = (
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    );
+    for layer in spec.layers.iter().filter(|l| is_spatial(l)) {
+        let df = layer_dataframe(layer, data)?;
+        if df.column(&geom_col).is_err() {
+            continue;
+        }
+        for g in channels::column_to_geometry(df, &geom_col)? {
+            if let Some((x0, y0, x1, y1)) = g.bounds() {
+                xmin = xmin.min(x0);
+                ymin = ymin.min(y0);
+                xmax = xmax.max(x1);
+                ymax = ymax.max(y1);
+            }
+        }
+    }
+    Ok(
+        (xmin.is_finite() && ymin.is_finite() && xmax.is_finite() && ymax.is_finite())
+            .then_some((xmin, ymin, xmax, ymax)),
+    )
+}
+
+/// A non-degenerate inclusive range for a continuous position scale, widening a
+/// zero-width or inverted extent so the scale can map it.
+fn nice_range(min: f64, max: f64) -> std::ops::RangeInclusive<f64> {
+    if max - min > f64::EPSILON {
+        min..=max
+    } else {
+        (min - 0.5)..=(max + 0.5)
     }
 }
 
@@ -595,6 +687,44 @@ mod tests {
              ('a','one'),('a','one'),('b','one'),('c','one'),\
              ('a','two'),('b','two'),('b','two'),('b','two'),('c','two')) t(c, panel) \
              VISUALISE c AS fill DRAW bar PROJECT TO polar FACET panel",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_spatial() {
+        // A bare `spatial` geom (no PROJECT): two polygons filled by a value,
+        // framed to the geometry bbox under Cartesian with equal aspect.
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT ST_GeomFromText('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom, \
+             200 AS population \
+             UNION ALL SELECT ST_GeomFromText('POLYGON ((1 0, 2 0, 2 1, 1 1, 1 0))'), 150 \
+             VISUALISE DRAW spatial MAPPING population AS fill",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_spatial_mapped_opacity() {
+        // A data-mapped scalar aesthetic (opacity) must vary per feature and
+        // register a legend, not collapse to a constant.
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT ST_GeomFromText('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom, \
+             10 AS v \
+             UNION ALL SELECT ST_GeomFromText('POLYGON ((1 0, 2 0, 2 1, 1 1, 1 0))'), 90 \
+             VISUALISE DRAW spatial MAPPING v AS opacity",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_map() {
+        // A projected world map: pre-projected geometry + Custom projection
+        // boundary + graticules from `computed`.
+        assert_png_or_skip(render(
+            "VISUALISE FROM ggsql:world DRAW spatial PROJECT TO orthographic",
         ));
     }
 

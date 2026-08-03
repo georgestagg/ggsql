@@ -3,11 +3,12 @@
 //! `PROJECT`) gets bottom/left rails; polar gets angular + radial rings.
 
 use hephaestus::plot::chrome::axis::{Axis, AxisPlacement, PolarRing};
-use hephaestus::plot::projection::{PolarProjection, Projection as HProj};
+use hephaestus::plot::projection::{CustomProjection, PolarProjection, Projection as HProj};
 use hephaestus::plot::AspectMode;
 use hephaestus::plot::Plot as HPlot;
 use hephaestus::scales::chrome::AxisSide;
 
+use super::channels::{wkt_to_lines, wkt_to_outline};
 use super::facet::{Panel, PanelScales};
 use super::wiring::aesthetic_label;
 use crate::plot::projection::{coord::CoordKind, Projection};
@@ -132,6 +133,37 @@ fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelS
     plot
 }
 
-fn apply_proj_map(plot: HPlot, _proj: &Projection) -> HPlot {
+/// Map projection. Coordinates arrive **pre-projected from SQL**, so hephaestus
+/// performs no reprojection: a `Custom` projection uses the projected clip
+/// boundary as its drawing surface (clip + background) and the projected
+/// graticule lines as its grid. Position scales are the bbox-framed `pos1`/`pos2`
+/// registered in `HephaestusWriter::write`. Mirrors the Vega-Lite writer's
+/// identity `MapProjection` (`panel_boundary` + `graticule_*` from `computed`).
+fn apply_proj_map(mut plot: HPlot, proj: &Projection) -> HPlot {
+    // A map has no Cartesian rails; the boundary + graticules are the chrome.
+    plot.clear_axes();
+
+    let computed_str = |key: &str| match proj.computed.get(key) {
+        Some(ParameterValue::String(s)) => Some(s.as_str()),
+        _ => None,
+    };
+
+    // The projected clip boundary becomes the Custom projection's outline (a full
+    // MultiPolygon — every part with its holes); when absent (a map with no
+    // CRS/clip), fall back to the default Cartesian identity over the bbox-framed
+    // scales.
+    let outline = computed_str("panel_boundary")
+        .map(wkt_to_outline)
+        .unwrap_or_default();
+    if !outline.is_empty() {
+        let mut custom = CustomProjection::new(outline);
+        if let Some(lon) = computed_str("graticule_lon") {
+            custom = custom.x_major(wkt_to_lines(lon));
+        }
+        if let Some(lat) = computed_str("graticule_lat") {
+            custom = custom.y_major(wkt_to_lines(lat));
+        }
+        plot = plot.projection(HProj::Custom(custom)).clip(true);
+    }
     plot
 }
