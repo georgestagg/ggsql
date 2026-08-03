@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		// Output goes to out-test, not out, so it never overwrites the esbuild bundle at out/extension.js.
+		"outDir": "out-test",
+		"rootDir": "src",
+		"types": ["node", "mocha"]
+	},
+	// Deliberately all of src/, not just src/test/: unit tests import the extension's own
+	// modules (e.g. `import { parseCells } from '../cellParser'`), which must also be compiled
+	// into out-test/ for those imports to resolve.
+	"include": ["src/**/*"]
+}
