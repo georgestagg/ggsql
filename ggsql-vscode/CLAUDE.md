@@ -13,7 +13,7 @@ ggsql-vscode/
 ├── esbuild.js                Bundler config (builds out/extension.js)
 ├── eslint.config.mjs
 ├── language-configuration.json   Bracket pairs, comment markers
-├── logo.png, icon.png
+├── logo.png                  Marketplace icon
 ├── src/
 │   ├── extension.ts          activate(): registers commands, manager, code lenses
 │   ├── manager.ts            Kernel discovery + Positron language-runtime registration
@@ -27,12 +27,16 @@ ggsql-vscode/
 │   └── ggsql.tmLanguage.json TextMate grammar (used for tokenization in VS Code)
 ├── examples/                 Sample .ggsql files
 ├── resources/                Static assets bundled with the extension
+│   ├── ggsql-icon.svg        Full-colour logo; read by manager.ts for base64EncodedIconSvg
+│   └── ggsql-lang-icon.svg   contributes.languages[].icon; tuned for the 16px file-icon slot
 └── ggsql-0.1.0.vsix          Packaged extension (build artifact, may be stale)
 ```
 
 ## File extensions and language ID
 
-`package.json` registers `id: ggsql` for `.ggsql`, `.ggsql.sql`, and `.gsql`. The TextMate grammar at `syntaxes/ggsql.tmLanguage.json` provides tokenization. Tree-sitter highlights — used by editors that prefer the grammar package directly — live in [`/tree-sitter-ggsql/queries/highlights.scm`](../tree-sitter-ggsql/queries/highlights.scm).
+`package.json` registers `id: ggsql` for `.gsql`, `.ggsql`, and `.ggsql.sql`. **Order matters:** the first entry is the primary extension, and it is what the workbench suggests when saving an untitled ggsql document (`textFileService.suggestFilename` uses `extensions.at(0)`). `.gsql` is first to match the documented extension in [`/doc/get_started/tooling/positron-vscode.qmd`](../doc/get_started/tooling/positron-vscode.qmd).
+
+The TextMate grammar at `syntaxes/ggsql.tmLanguage.json` provides tokenization. Tree-sitter highlights — used by editors that prefer the grammar package directly — live in [`/tree-sitter-ggsql/queries/highlights.scm`](../tree-sitter-ggsql/queries/highlights.scm).
 
 ## Commands and keybindings
 
@@ -45,8 +49,36 @@ Declared in `package.json` and wired up in `extension.ts`:
 | `ggsql.runNextCell` | — | Run the next cell |
 | `ggsql.runCellsAbove` | — | Run all cells above the cursor |
 | `ggsql.sourceCurrentFile` | — | Run the entire file (also exposed as the editor "Run" button) |
+| `ggsql.createNewFile` | — | Open a new untitled ggsql document (also in the New File dialog) |
 
 Cells are detected by `cellParser.ts`; `codelens.ts` puts a CodeLens above each cell.
+
+`ggsql.createNewFile` is contributed to the `file/newFile` menu under its own `ggsql` group, so the New File dialog lists it beneath the built-in File and Notebook sections rather than alongside them. It is registered before the Positron API check in `extension.ts`, since opening an untitled document does not need Positron.
+
+## Attaching to `.sql` files
+
+ggsql is a SQL superset, so the kernel can execute a plain `.sql` file. Rather than claiming the `.sql` file association, the extension attaches its run affordances to documents already tokenized as `sql`:
+
+- [`src/languages.ts`](src/languages.ts) is the single source of truth. `isGgsqlDocument()` decides whether ggsql will act on a document; every command guard, decoration and context key routes through it. Add new language-scoped behaviour there rather than comparing `languageId` inline.
+- `CELL_LANGUAGE_IDS` registers the CodeLens provider for both ids. The provider gates on `isGgsqlDocument()` at request time and fires `onDidChangeCodeLenses` when `ggsql.enableSqlFiles` changes, so the setting takes effect without re-registering.
+- The `editor/title/run` `when` clauses gate on `config.ggsql.enableSqlFiles` directly, so no context key is needed for the buttons.
+
+Why not claim `.sql` in `contributes.languages`: extension-contributed associations are resolved last-registered-wins (`languagesAssociations.ts`), which is not a contract and is fragile against other SQL extensions. It would also replace the richer built-in `source.sql` grammar and break language-scoped features from other SQL tooling.
+
+[`src/sqlAssociation.ts`](src/sqlAssociation.ts) shows a one-time notice pointing at `files.associations`, which is the right mechanism for users who want ggsql highlighting in `.sql` files because user-configured associations sit in the highest precedence tier and so win deterministically.
+
+**It does not write the setting.** Mapping `*.sql` rewrites how every `.sql` file in every workspace is treated, which is not an extension's call, and running SQL in the ggsql console does not need it. An earlier version did write it on a button press, and that turned out to need a reset command, an offer to un-write, and care over which config level to base the update on. None of that is needed now.
+
+Three constraints worth knowing before editing the notice:
+
+- **Notification text is not markdown.** It is parsed by `parseLinkedText`, which matches markdown links and nothing else, so code spans and emphasis render literally. Hrefs are limited to `https:`, `command:` and `file:`, and may contain no spaces or `)`. The setting name is therefore a `command:` link, and the mapping is spelled out in prose rather than backticked.
+- **Any button press dismisses the notification**, so every button has to be a complete answer. The documentation link lives on the `ggsql.enableSqlFiles` setting rather than being a button here.
+- **The notice fires on every `.sql` open, and only "Don't show again" persists.** An Info notification with buttons is *not* sticky (`notifications.ts` makes actions sticky only at Error severity), so it auto-hides after 10 seconds and extensions cannot opt out. A show-once notice is therefore trivially missed, which would defeat the point. A module-level `noticeVisible` guard stops that becoming a pile-up when many `.sql` files open at once. `ggsql: Reset .sql File Association Prompt` clears the persisted flag, the only route back from "Don't show again" short of editing the global storage database.
+
+The `ggsql.enableSqlFiles` description uses `markdownDescription` rather than `description`, which matters for two reasons: only the markdown path runs `fixSettingLinks`, and only it renders links at all. It uses both link forms available there:
+
+- `` `#files.associations#` `` renders as a link to that setting. The backticks (or single quotes) are required; a bare `#files.associations#` is left as literal text.
+- A plain markdown link to [`/doc/get_started/tooling/positron-vscode.qmd`](../doc/get_started/tooling/positron-vscode.qmd), whose `## Using ggsql with .sql files` heading carries an explicit `{#sql-files}` anchor so the URL survives a rewording. Keep the anchor if you edit that heading.
 
 ## Positron integration
 
@@ -56,7 +88,15 @@ The extension declares `contributes.languageRuntimes` for `ggsql` (see `package.
 2. Registers it as a Positron language runtime so `▶ Run` and the Console route to the kernel.
 3. Routes plot output to Positron's Plot pane via metadata coming back from the kernel (`output_location: "plot"`).
 
-Outside Positron, the same commands fall back to writing query output to the active terminal.
+Outside Positron there is no way to execute a query: `activate()` returns early, so every command that runs code stays unregistered. To avoid offering actions that cannot work, everything execution-related gates on Positron's built-in **`isPositron`** context key ([extension development docs](https://positron.posit.co/extension-development.html#option-1-context-keys)):
+
+- the two `editor/title/run` buttons
+- the three keybindings
+- the five run commands, hidden from the Command Palette via a `commandPalette` menu entry
+
+`isPositron` is declared with a default of `true`, so it is correct in Positron from startup with no code and no activation-order window. In VS Code the key is never declared, so it evaluates falsy. Prefer it over a hand-rolled `setContext` key for anything purely declarative; the Positron API (`tryAcquirePositronApi`) is the right check when the code needs the API object itself.
+
+Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSqlAssociationPrompt`, syntax highlighting) is registered before the early return and works in plain VS Code. Add new commands on the correct side of that line, and gate them if they execute code.
 
 ## Settings
 

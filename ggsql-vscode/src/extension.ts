@@ -13,6 +13,8 @@ import { GgsqlCodeLensProvider, registerCellCommands } from './codelens';
 import { activateDecorations } from './decorations';
 import { activateContextKeys } from './context';
 import { parseCells } from './cellParser';
+import { CELL_LANGUAGE_IDS, isGgsqlDocument } from './languages';
+import { activateSqlAssociationPrompt } from './sqlAssociation';
 
 // Output channel for logging
 const outputChannel = vscode.window.createOutputChannel('ggsql');
@@ -28,6 +30,17 @@ export function log(message: string): void {
  */
 export function activate(context: vscode.ExtensionContext): void {
     log('ggsql extension activating...');
+
+    // Register "New ggsql File" for the New File dialog
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ggsql.createNewFile', async () => {
+            const document = await vscode.workspace.openTextDocument({ language: 'ggsql' });
+            await vscode.window.showTextDocument(document);
+        })
+    );
+
+    // Offer to associate .sql files with ggsql
+    activateSqlAssociationPrompt(context);
 
     // Try to acquire the Positron API
     const positronApi = tryAcquirePositronApi();
@@ -61,7 +74,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('ggsql.sourceCurrentFile', async () => {
             const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document.languageId !== 'ggsql') {
+            if (!editor || !isGgsqlDocument(editor.document)) {
                 return;
             }
             const cells = parseCells(editor.document);
@@ -83,7 +96,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // Register code lens provider and cell commands
     context.subscriptions.push(
-        vscode.languages.registerCodeLensProvider('ggsql', new GgsqlCodeLensProvider()),
+        vscode.languages.registerCodeLensProvider(
+            CELL_LANGUAGE_IDS,
+            new GgsqlCodeLensProvider(context.subscriptions),
+        ),
     );
     registerCellCommands(context, (code) => {
         positronApi.runtime.executeCode('ggsql', code, false, true);
