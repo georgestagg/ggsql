@@ -8,12 +8,6 @@ Browse examples of ggsql visualizations. Click any example to see the full code 
 
 Basic scatter plot mapping two numeric variables to position
 
-![](../gallery/examples/thumbnails/line-chart.svg)
-
-##### Line chart
-
-Time series visualization with proper date scaling
-
 ![](../gallery/examples/thumbnails/pie-chart.svg)
 
 ##### Pie chart
@@ -26,11 +20,23 @@ Visualisation of proportions
 
 Re-creating the famous visualisation from Minard.
 
+![](../gallery/examples/thumbnails/line-chart.svg)
+
+##### Line chart
+
+Time series visualization with proper date scaling
+
 ![](../gallery/examples/thumbnails/bar-chart.svg)
 
 ##### Bar chart
 
 Categorical comparisons using bars
+
+![](../gallery/examples/thumbnails/violin-plot.svg)
+
+##### Violin plots
+
+Showing groups of distributions of single numeric variables
 
 ![](../gallery/examples/thumbnails/heatmap.svg)
 
@@ -41,12 +47,6 @@ Arranging tiles on a grid
 ![](../gallery/examples/thumbnails/boxplot.svg)
 
 ##### Box plots
-
-Showing groups of distributions of single numeric variables
-
-![](../gallery/examples/thumbnails/violin-plot.svg)
-
-##### Violin plots
 
 Showing groups of distributions of single numeric variables
 

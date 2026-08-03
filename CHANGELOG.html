@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.10.14">
+<meta name="generator" content="quarto-1.11.1">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -12,10 +12,13 @@
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
 */
-code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
-div.columns{display: flex; gap: min(4vw, 1.5em);}
-div.column{flex: auto; overflow-x: auto;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
 div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
 ul.task-list{list-style: none;}
 ul.task-list li input[type="checkbox"] {
@@ -40,14 +43,14 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-b1d983980b009125f6ea6bd541d625de.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-b1d983980b009125f6ea6bd541d625de.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-b1d983980b009125f6ea6bd541d625de.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-0635d879ab45f52e9bb9ab2a19e4e3eb.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-d0ba2b2515835955e4f1b35f884c9b02.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-0635d879ab45f52e9bb9ab2a19e4e3eb.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-1aee2e77d648057b2d154952fa64afcf.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-622722d5aace4ec1a125de7682190ffa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-1aee2e77d648057b2d154952fa64afcf.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script src="site_libs/quarto-contrib/iconify-3.0.0/iconify-icon.min.js"></script>
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
@@ -242,34 +245,38 @@ gradient teal.
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#unreleased" id="toc-unreleased" class="nav-link active" data-scroll-target="#unreleased">[Unreleased]</a></li>
+  <li><a href="#unreleased" id="toc-unreleased" class="nav-link active" data-scroll-target="#unreleased">[Unreleased]</a>
+  <ul class="collapse">
+  <li><a href="#added" id="toc-added" class="nav-link" data-scroll-target="#added">Added</a></li>
+  <li><a href="#fixed" id="toc-fixed" class="nav-link" data-scroll-target="#fixed">Fixed</a></li>
+  </ul></li>
   <li><a href="#section" id="toc-section" class="nav-link" data-scroll-target="#section">0.4.1 - 2026-06-22</a>
   <ul class="collapse">
   <li><a href="#changed" id="toc-changed" class="nav-link" data-scroll-target="#changed">Changed</a></li>
   </ul></li>
   <li><a href="#section-1" id="toc-section-1" class="nav-link" data-scroll-target="#section-1">0.4.0 - 2026-06-22</a>
   <ul class="collapse">
-  <li><a href="#added" id="toc-added" class="nav-link" data-scroll-target="#added">Added</a></li>
-  <li><a href="#fixed" id="toc-fixed" class="nav-link" data-scroll-target="#fixed">Fixed</a></li>
+  <li><a href="#added-1" id="toc-added-1" class="nav-link" data-scroll-target="#added-1">Added</a></li>
+  <li><a href="#fixed-1" id="toc-fixed-1" class="nav-link" data-scroll-target="#fixed-1">Fixed</a></li>
   <li><a href="#changed-1" id="toc-changed-1" class="nav-link" data-scroll-target="#changed-1">Changed</a></li>
   </ul></li>
   <li><a href="#section-2" id="toc-section-2" class="nav-link" data-scroll-target="#section-2">0.3.3 - 2026-05-27</a>
   <ul class="collapse">
-  <li><a href="#fixed-1" id="toc-fixed-1" class="nav-link" data-scroll-target="#fixed-1">Fixed</a></li>
+  <li><a href="#fixed-2" id="toc-fixed-2" class="nav-link" data-scroll-target="#fixed-2">Fixed</a></li>
   </ul></li>
   <li><a href="#section-3" id="toc-section-3" class="nav-link" data-scroll-target="#section-3">0.3.2 - 2026-05-05</a>
   <ul class="collapse">
-  <li><a href="#fixed-2" id="toc-fixed-2" class="nav-link" data-scroll-target="#fixed-2">Fixed</a></li>
+  <li><a href="#fixed-3" id="toc-fixed-3" class="nav-link" data-scroll-target="#fixed-3">Fixed</a></li>
   <li><a href="#changed-2" id="toc-changed-2" class="nav-link" data-scroll-target="#changed-2">Changed</a></li>
   </ul></li>
   <li><a href="#section-4" id="toc-section-4" class="nav-link" data-scroll-target="#section-4">0.3.1 - 2026-04-30</a>
   <ul class="collapse">
-  <li><a href="#fixed-3" id="toc-fixed-3" class="nav-link" data-scroll-target="#fixed-3">Fixed</a></li>
+  <li><a href="#fixed-4" id="toc-fixed-4" class="nav-link" data-scroll-target="#fixed-4">Fixed</a></li>
   </ul></li>
   <li><a href="#section-5" id="toc-section-5" class="nav-link" data-scroll-target="#section-5">0.3.0 - 2026-04-29</a>
   <ul class="collapse">
-  <li><a href="#added-1" id="toc-added-1" class="nav-link" data-scroll-target="#added-1">Added</a></li>
-  <li><a href="#fixed-4" id="toc-fixed-4" class="nav-link" data-scroll-target="#fixed-4">Fixed</a></li>
+  <li><a href="#added-2" id="toc-added-2" class="nav-link" data-scroll-target="#added-2">Added</a></li>
+  <li><a href="#fixed-5" id="toc-fixed-5" class="nav-link" data-scroll-target="#fixed-5">Fixed</a></li>
   <li><a href="#changed-3" id="toc-changed-3" class="nav-link" data-scroll-target="#changed-3">Changed</a></li>
   <li><a href="#removed" id="toc-removed" class="nav-link" data-scroll-target="#removed">Removed</a></li>
   </ul></li>
@@ -285,6 +292,20 @@ gradient teal.
 
 <section id="unreleased" class="level2">
 <h2 class="anchored" data-anchor-id="unreleased">[Unreleased]</h2>
+<section id="added" class="level3">
+<h3 class="anchored" data-anchor-id="added">Added</h3>
+<ul>
+<li>The VS Code / Positron extension now offers its “Source Current File” button and code cells in plain <code>.sql</code> files, so existing SQL can be run against a ggsql kernel without renaming it. <code>.sql</code> files keep their usual SQL syntax highlighting; to get ggsql highlighting as well, map them to the <code>ggsql</code> language type with <code>files.associations</code>, which the extension points out the first time a <code>.sql</code> file is opened. The new <code>ggsql.enableSqlFiles</code> setting turns the whole behaviour off.</li>
+<li>The VS Code / Positron extension contributes a “ggsql File” entry to the New File dialog.</li>
+</ul>
+</section>
+<section id="fixed" class="level3">
+<h3 class="anchored" data-anchor-id="fixed">Fixed</h3>
+<ul>
+<li>The VS Code / Positron extension now ships a language icon that renders in the session picker, editor tabs and the Explorer. It previously pointed at a file that did not exist, which left the icon blank.</li>
+<li>In plain VS Code, the extension no longer offers run buttons, keybindings or Command Palette entries for commands that need the Positron runtime and so had no handler there.</li>
+</ul>
+</section>
 </section>
 <section id="section" class="level2">
 <h2 class="anchored" data-anchor-id="section">0.4.1 - 2026-06-22</h2>
@@ -297,8 +318,8 @@ gradient teal.
 </section>
 <section id="section-1" class="level2">
 <h2 class="anchored" data-anchor-id="section-1">0.4.0 - 2026-06-22</h2>
-<section id="added" class="level3">
-<h3 class="anchored" data-anchor-id="added">Added</h3>
+<section id="added-1" class="level3">
+<h3 class="anchored" data-anchor-id="added-1">Added</h3>
 <ul>
 <li>New <code>AdbcReader&lt;D: Driver&gt;</code> for connecting to data sources via <a href="https://arrow.apache.org/adbc/">ADBC</a> (Arrow Database Connectivity), behind a new off-by-default <code>adbc</code> feature flag. Generic over any concrete <code>adbc_core::sync::Driver</code>, so concrete drivers (Flight SQL, Snowflake, etc.) compose at the call site. Tested against <code>adbc_datafusion</code> for in-process unit coverage.</li>
 <li>New <code>aggregate</code> SETTING on Identity-stat layers (point, line, area, bar, ribbon, range, segment, arrow, rule, text). By default it collapses each group to a single row by replacing every numeric mapping in place with its aggregated value. See the <code>DRAW</code> documentation for details (#384).</li>
@@ -311,8 +332,8 @@ gradient teal.
 <li>New <code>PROJECT TO &lt;map&gt;</code> family of spatial map projections. For general projections, one can use <code>PROJECT TO crs SETTING target =&gt; '+proj=...'</code>. Several named projections have explicit support using e.g.&nbsp; <code>PROJECT TO mollweide</code>. Works for a subset of layers, notably <code>spatial</code>, <code>point</code>, <code>text</code>, <code>path</code>, <code>polygon</code> and <code>tile</code>. Requires a spatial backend like PostGIS, SpatiaLite, or DuckDB spatial extension (#455).</li>
 </ul>
 </section>
-<section id="fixed" class="level3">
-<h3 class="anchored" data-anchor-id="fixed">Fixed</h3>
+<section id="fixed-1" class="level3">
+<h3 class="anchored" data-anchor-id="fixed-1">Fixed</h3>
 <ul>
 <li>Quoted SQL identifiers (e.g.&nbsp;<code>"variable.dotted"</code>) in <code>VISUALISE</code> column references are now unquoted at parse time, so they correctly match the underlying Arrow schema during validation.</li>
 <li>Dodging of horizontal violin plots were broken due to a bad orientation assumption in the VegaLite writer. We now correctly use the orientation to dodge in the correct dimension (#439).</li>
@@ -331,8 +352,8 @@ gradient teal.
 </section>
 <section id="section-2" class="level2">
 <h2 class="anchored" data-anchor-id="section-2">0.3.3 - 2026-05-27</h2>
-<section id="fixed-1" class="level3">
-<h3 class="anchored" data-anchor-id="fixed-1">Fixed</h3>
+<section id="fixed-2" class="level3">
+<h3 class="anchored" data-anchor-id="fixed-2">Fixed</h3>
 <ul>
 <li>Add CASE expression support to tree-sitter grammar (#432)</li>
 <li>Fix Vega-Lite spec emitted for boxplot (#449)</li>
@@ -342,8 +363,8 @@ gradient teal.
 </section>
 <section id="section-3" class="level2">
 <h2 class="anchored" data-anchor-id="section-3">0.3.2 - 2026-05-05</h2>
-<section id="fixed-2" class="level3">
-<h3 class="anchored" data-anchor-id="fixed-2">Fixed</h3>
+<section id="fixed-3" class="level3">
+<h3 class="anchored" data-anchor-id="fixed-3">Fixed</h3>
 <ul>
 <li>Side effects like <code>CREATE TEMP TABLE</code> before the <code>VISUALISE</code> statement are now separated from directly feeding into the visualisation data (#415)</li>
 <li>Fixed bug where panel axes were unintentionally anchored to zero when using <code>FACET ... SETTING free =&gt; 'x'/'y'</code> (#410).</li>
@@ -359,8 +380,8 @@ gradient teal.
 </section>
 <section id="section-4" class="level2">
 <h2 class="anchored" data-anchor-id="section-4">0.3.1 - 2026-04-30</h2>
-<section id="fixed-3" class="level3">
-<h3 class="anchored" data-anchor-id="fixed-3">Fixed</h3>
+<section id="fixed-4" class="level3">
+<h3 class="anchored" data-anchor-id="fixed-4">Fixed</h3>
 <ul>
 <li>Fixed stacking in faceted plots (#403)</li>
 </ul>
@@ -368,8 +389,8 @@ gradient teal.
 </section>
 <section id="section-5" class="level2">
 <h2 class="anchored" data-anchor-id="section-5">0.3.0 - 2026-04-29</h2>
-<section id="added-1" class="level3">
-<h3 class="anchored" data-anchor-id="added-1">Added</h3>
+<section id="added-2" class="level3">
+<h3 class="anchored" data-anchor-id="added-2">Added</h3>
 <ul>
 <li>Add cell delimiters and code lens actions to the Positron extension (#366)</li>
 <li>ODBC is now turned on for the CLI as well (#344)</li>
@@ -378,8 +399,8 @@ gradient teal.
 <li>The ggsql wasm package is now published on GitHub Releases and NPM (#367)</li>
 </ul>
 </section>
-<section id="fixed-4" class="level3">
-<h3 class="anchored" data-anchor-id="fixed-4">Fixed</h3>
+<section id="fixed-5" class="level3">
+<h3 class="anchored" data-anchor-id="fixed-5">Fixed</h3>
 <ul>
 <li>Rendering of inline plots in Positron had a bad interaction with how we handled auto-resizing in the plot pane. We now have a per-output-location path in the Jupyter kernel (#360)</li>
 <li>Passing the shape aesthetic via <code>SETTING</code> now correctly translates named shapes (#368)</li>
