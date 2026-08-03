@@ -563,10 +563,9 @@ scales). Works under Cartesian, Polar, and Map projections.
   `renders_polar_facet` (34 writer tests pass); hephaestus-absent build compiles;
   fmt + clippy clean.
 - **Single shared legend across panels.** hephaestus `bac7632` added a
-  composition-level legend ring (`PlotComposition::add_legend`, same
-  `(domain_scale, side, title)` dedup + stack-key merge as the per-plot one), so
-  legends live on the composition, never on the per-panel plots. Wiring no longer
-  calls `Plot::add_legend`: `Ctx` carries a `legends` sink (`Option<&RefCell<
+  composition-level legend ring (`PlotComposition::add_legend`), so legends live
+  on the composition, never on the per-panel plots. Wiring no longer calls
+  `Plot::add_legend`: `Ctx` carries a `legends` sink (`Option<&RefCell<
   Vec<Legend>>>`) and `wire_material` / `resolve_color` push through
   `Ctx::push_legend`. `mod.rs` passes the sink only while building the **first**
   panel (every panel produces the same legends — all built from the globally
@@ -577,17 +576,20 @@ scales). Works under Cartesian, Polar, and Map projections.
   non-faceted branch, no register-then-unregister. Verified by eyeballing a
   3-panel wrap colored by a categorical (one legend beside the whole strip) and
   the single-panel equivalent (unchanged).
+- **Equivalent fill+stroke scales collapse to one legend.** A `point` colored by
+  a categorical maps `color` onto **two** ggsql scales — `fill` and `stroke` — so
+  the writer records two legends. hephaestus `f133825`'s `collapse_legends` (run
+  at render) merges legends whose scales are `legend_equivalent_to` (same
+  scale_type / transform / input_range / breaks) even when their names differ, and
+  overlays the merged keys into one swatch. The two `cat` legends therefore render
+  as a single legend with a filled+outlined swatch per category — no writer code
+  needed beyond registering both legends (which it already does) with the default
+  `merge` flag on.
 
 Known limitations (refinements, for upstream / later):
-- **Duplicate fill+stroke legend for `point` colored by a categorical** — a
-  pre-existing single-panel writer issue (not faceting-specific): the point's
-  fill and stroke both bind the color scale and each register a legend
-  (filled-swatch + hollow-swatch), so two identical-titled legends stack. The
-  faceting path faithfully reproduces whatever the single-panel path produces, so
-  fixing this in the material wiring fixes both.
 - **No title/subtitle/caption wired.** This writer doesn't render plot
   title/subtitle/caption yet (true for the single-panel case too). hephaestus
-  `bac7632` exposes `PlotComposition::{title,subtitle,caption,axis_title}` for the
+  exposes `PlotComposition::{title,subtitle,caption,axis_title}` for the
   composition-spanning case, so this is now a straightforward follow-up — read the
   ggsql `Labels` and set them on the composition.
 - **Strip label formatting** uses the facet value's string form (correct for
