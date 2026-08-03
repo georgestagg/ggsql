@@ -40,7 +40,7 @@ adbc_core = { version = "0.23", optional = true }
 geozero = { workspace = true, optional = true, features = ["with-wkb", "with-wkt", "with-geojson"] }
 
 # Hephaestus raster writer (non-default; gated, excluded from the MSRV 1.86 build)
-hephaestus = { git = "https://github.com/posit-dev/hephaestus.git", rev = "5997cdd03cae3036a870d587d1f47caa2b8b195c", optional = true, default-features = false, features = ["vello", "png", "text"] }
+hephaestus = { git = "https://github.com/posit-dev/hephaestus.git", rev = "bac76329ca5e43f305e72d02c8ebc86d707ae1c7", optional = true, default-features = false, features = ["vello", "png", "text"] }
 png = { version = "0.18", optional = true }
 
 # Serialization

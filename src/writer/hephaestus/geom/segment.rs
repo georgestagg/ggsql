@@ -119,7 +119,12 @@ pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         (x0, y0, x1, y1)
     };
 
-    for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2"), ("y2", "pos2")] {
+    for (channel, scale) in [
+        ("x", ctx.pos1_scale),
+        ("x2", ctx.pos1_scale),
+        ("y", ctx.pos2_scale),
+        ("y2", ctx.pos2_scale),
+    ] {
         plot.set_binding(channel, scale);
     }
 

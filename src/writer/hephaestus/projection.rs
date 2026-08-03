@@ -8,24 +8,31 @@ use hephaestus::plot::AspectMode;
 use hephaestus::plot::Plot as HPlot;
 use hephaestus::scales::chrome::AxisSide;
 
+use super::facet::{Panel, PanelScales};
 use super::wiring::aesthetic_label;
 use crate::plot::projection::{coord::CoordKind, Projection};
 use crate::plot::ParameterValue;
 use crate::Plot;
 
-/// Apply the plot's coordinate system. No `PROJECT` clause is treated as
-/// Cartesian.
-pub fn apply_projection(plot: HPlot, spec: &Plot) -> HPlot {
+/// Apply the plot's coordinate system to one panel. No `PROJECT` clause is
+/// treated as Cartesian.
+pub fn apply_projection(plot: HPlot, spec: &Plot, panel: &Panel, ps: &PanelScales) -> HPlot {
     match spec.project.as_ref().map(|p| p.coord.coord_kind()) {
         None | Some(CoordKind::Cartesian) => {
-            apply_proj_cartesian(plot, spec.project.as_ref(), spec)
+            apply_proj_cartesian(plot, spec.project.as_ref(), spec, panel, ps)
         }
-        Some(CoordKind::Polar) => apply_proj_polar(plot, spec.project.as_ref().unwrap(), spec),
+        Some(CoordKind::Polar) => apply_proj_polar(plot, spec.project.as_ref().unwrap(), spec, ps),
         Some(CoordKind::Map) => apply_proj_map(plot, spec.project.as_ref().unwrap()),
     }
 }
 
-fn apply_proj_cartesian(mut plot: HPlot, proj: Option<&Projection>, spec: &Plot) -> HPlot {
+fn apply_proj_cartesian(
+    mut plot: HPlot,
+    proj: Option<&Projection>,
+    spec: &Plot,
+    panel: &Panel,
+    ps: &PanelScales,
+) -> HPlot {
     if let Some(proj) = proj {
         if let Some(ParameterValue::Boolean(false)) = proj.properties.get("clip") {
             plot = plot.clip(false);
@@ -34,8 +41,15 @@ fn apply_proj_cartesian(mut plot: HPlot, proj: Option<&Projection>, spec: &Plot)
             plot = plot.aspect_ratio(*ratio).aspect_mode(AspectMode::Range);
         }
     }
-    add_cartesian_axis(&mut plot, spec, "pos1", AxisSide::Bottom);
-    add_cartesian_axis(&mut plot, spec, "pos2", AxisSide::Left);
+    // Edge-only axes for fixed scales (ggplot2 look): x on the bottom-most panel
+    // of each column, y on the left column. A free dimension has a per-panel
+    // domain, so its axis is drawn on every panel.
+    if panel.last_row || ps.free_x {
+        add_cartesian_axis(&mut plot, spec, "pos1", &ps.pos1, AxisSide::Bottom);
+    }
+    if panel.first_col || ps.free_y {
+        add_cartesian_axis(&mut plot, spec, "pos2", &ps.pos2, AxisSide::Left);
+    }
     plot
 }
 
@@ -47,22 +61,31 @@ fn has_real_axis(spec: &Plot, name: &str) -> bool {
     spec.find_scale(name).is_some_and(|s| !s.is_dummy())
 }
 
-/// Add one bottom/left rail for a position scale, titled from the plot's labels
-/// (or the first layer's mapped column). Skipped for absent or dummy scales.
-fn add_cartesian_axis(plot: &mut HPlot, spec: &Plot, name: &str, side: AxisSide) {
-    if !has_real_axis(spec, name) {
+/// Add one bottom/left rail bound to `scale_name`, titled from the plot's labels
+/// (or the first layer's mapped column, keyed by `aesthetic`). Skipped for absent
+/// or dummy scales. `aesthetic` is the ggsql position name (`pos1`/`pos2`);
+/// `scale_name` is the registered scale the rail reads (they differ only for a
+/// free per-panel scale).
+fn add_cartesian_axis(
+    plot: &mut HPlot,
+    spec: &Plot,
+    aesthetic: &str,
+    scale_name: &str,
+    side: AxisSide,
+) {
+    if !has_real_axis(spec, aesthetic) {
         return;
     }
-    let mut rail = Axis::rail(name, AxisPlacement::Cartesian(side));
+    let mut rail = Axis::rail(scale_name, AxisPlacement::Cartesian(side));
     if let Some(layer) = spec.layers.first() {
-        if let Some(title) = aesthetic_label(spec, layer, name) {
+        if let Some(title) = aesthetic_label(spec, layer, aesthetic) {
             rail = rail.title(title);
         }
     }
     plot.add_axis(rail);
 }
 
-fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot) -> HPlot {
+fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelScales) -> HPlot {
     plot.clear_axes();
     if let Some(ParameterValue::Boolean(false)) = proj.properties.get("clip") {
         plot = plot.clip(false);
@@ -96,13 +119,13 @@ fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot) -> HPlot {
     // radius), same as the Cartesian path.
     if has_real_axis(spec, "pos2") {
         plot.add_axis(Axis::rail(
-            "pos2",
+            ps.pos2.as_str(),
             AxisPlacement::PolarAngular(PolarRing::Outer),
         ));
     }
     if has_real_axis(spec, "pos1") {
         plot.add_axis(Axis::rail(
-            "pos1",
+            ps.pos1.as_str(),
             AxisPlacement::PolarRadius { theta_frac: start },
         ));
     }

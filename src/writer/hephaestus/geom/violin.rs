@@ -46,7 +46,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         order.extend_from_slice(rows);
     }
 
-    for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2")] {
+    for (channel, scale) in [
+        ("x", ctx.pos1_scale),
+        ("x2", ctx.pos1_scale),
+        ("y", ctx.pos2_scale),
+    ] {
         plot.set_binding(channel, scale);
     }
 

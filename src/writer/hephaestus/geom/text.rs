@@ -25,11 +25,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
 
     let mut b = TextGeom::builder();
 
-    // Positions: bind to the global pos1/pos2 scales.
+    // Positions: bind to the panel's pos1/pos2 scales (panel-aware for free).
     let p1 = column_to_channel(df, pos1)?;
     let p2 = column_to_channel(df, pos2)?;
-    plot.set_binding("x", "pos1");
-    plot.set_binding("y", "pos2");
+    plot.set_binding("x", ctx.pos1_scale);
+    plot.set_binding("y", ctx.pos2_scale);
     p1.apply(&mut b, "x");
     p2.apply(&mut b, "y");
 

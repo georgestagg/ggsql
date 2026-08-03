@@ -13,8 +13,11 @@ use hephaestus::plot::geom::linetype::{dashdot, dashed, dotted, solid};
 use hephaestus::plot::scale::{self, Scale as HScale, TransformKind as HTransform};
 use hephaestus::scales::value::{LinetypeStep, Value as HValue};
 
+use super::channels::{column_to_f64, column_to_strings};
+use crate::naming;
 use crate::plot::scale::TransformKind as GTransform;
 use crate::plot::{ArrayElement, OutputRange, Scale as GScale, ScaleTypeKind};
+use crate::DataFrame;
 
 /// What kind of visual output a scale's range produces. Selects how a resolved
 /// `OutputRange::Array` is mapped onto a hephaestus range.
@@ -86,6 +89,94 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
         hs = apply_breaks(hs, scale, Some(type_kind));
     }
     Some(hs)
+}
+
+/// Build a per-panel position scale for a **free** facet dimension, computing
+/// the domain from this panel's own data slices.
+///
+/// This is a deliberate, scoped exception to ggsql owning all scale domains
+/// (fixed dimensions still pass `numeric_domain()` straight through): only free
+/// facet dimensions derive a per-panel domain here. Continuous/binned dimensions
+/// take the numeric extent of the position family (`pos1`, `pos1min/max/end`, …)
+/// present in the slices; discrete/ordinal take the panel's distinct categories.
+/// ggsql's resolved breaks are for the global domain and don't fit a per-panel
+/// one, so ticks are left to hephaestus.
+pub fn free_position_scale(
+    global: Option<&GScale>,
+    dfs: &[&DataFrame],
+    base: &str,
+) -> Option<HScale> {
+    let type_kind = global
+        .and_then(|s| s.scale_type.as_ref())
+        .map(|st| st.scale_type_kind())
+        .unwrap_or(ScaleTypeKind::Continuous);
+    let transform = global
+        .and_then(|s| s.transform.as_ref())
+        .map(|t| t.transform_kind());
+
+    match type_kind {
+        ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal => {
+            let vals: Vec<HValue> = panel_categories(dfs, base)
+                .into_iter()
+                .map(|s| HValue::String(Arc::from(s.as_str())))
+                .collect();
+            Some(if matches!(type_kind, ScaleTypeKind::Ordinal) {
+                scale::ordinal(vals)
+            } else {
+                scale::discrete(vals)
+            })
+        }
+        ScaleTypeKind::Identity => Some(scale::identity()),
+        ScaleTypeKind::Continuous | ScaleTypeKind::Binned => {
+            let (min, max) = panel_extent(dfs, base)?;
+            let (min, max) = pad_degenerate(min, max);
+            let mut c = scale::continuous(min..=max);
+            if let Some(t) = transform.and_then(map_transform) {
+                c = c.with_transform(t);
+            }
+            Some(c)
+        }
+    }
+}
+
+/// The finite numeric extent of a position family across the given slices.
+fn panel_extent(dfs: &[&DataFrame], base: &str) -> Option<(f64, f64)> {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for df in dfs {
+        for suffix in ["", "min", "max", "end"] {
+            let name = naming::aesthetic_column(&format!("{base}{suffix}"));
+            if df.column(&name).is_ok() {
+                if let Ok(values) = column_to_f64(df, &name) {
+                    for v in values.into_iter().filter(|v| v.is_finite()) {
+                        lo = lo.min(v);
+                        hi = hi.max(v);
+                    }
+                }
+            }
+        }
+    }
+    (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
+}
+
+/// The distinct category values of a position column across the given slices,
+/// in first-seen order.
+fn panel_categories(dfs: &[&DataFrame], base: &str) -> Vec<String> {
+    let name = naming::aesthetic_column(base);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for df in dfs {
+        if df.column(&name).is_ok() {
+            if let Ok(values) = column_to_strings(df, &name) {
+                for v in values {
+                    if seen.insert(v.clone()) {
+                        out.push(v);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Domain for a continuous scale. ggsql's resolved `numeric_domain` is

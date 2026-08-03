@@ -38,8 +38,13 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         .collect();
     let out_i = rows_of("outlier");
 
-    // Bind the shared position channels (scales are registered globally).
-    for (channel, scale) in [("x", "pos1"), ("x2", "pos1"), ("y", "pos2"), ("y2", "pos2")] {
+    // Bind the position channels (panel-aware for free facet scales).
+    for (channel, scale) in [
+        ("x", ctx.pos1_scale),
+        ("x2", ctx.pos1_scale),
+        ("y", ctx.pos2_scale),
+        ("y2", ctx.pos2_scale),
+    ] {
         plot.set_binding(channel, scale);
     }
 

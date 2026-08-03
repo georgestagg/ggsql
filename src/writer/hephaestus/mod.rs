@@ -3,17 +3,18 @@
 //! Renders a resolved ggsql `Spec` to PNG bytes via the [`hephaestus`] 2D scene
 //! renderer.
 //!
-//! **Scope** (see `src/writer/hephaestus/PLAN.md`): single-panel, single-layer,
-//! Cartesian plots. All geoms (point/line/path/area/ribbon/bar/histogram/tile/
-//! polygon/segment/rule/range/text/density/smooth/boxplot/violin), all scale
-//! types/transforms, material aesthetics, axis titles, and legends are
-//! supported. Faceting, projections, and multi-layer arrive in later phases;
-//! unsupported specs are rejected by [`HephaestusWriter::validate`].
+//! **Scope** (see `src/writer/hephaestus/PLAN.md`): multi-layer plots under
+//! Cartesian, Polar, and Map projections, with `FACET` faceting (Wrap/Grid,
+//! fixed + free scales). All geoms (point/line/path/area/ribbon/bar/histogram/
+//! tile/polygon/segment/rule/range/text/density/smooth/boxplot/violin), all
+//! scale types/transforms, material aesthetics, axis titles, and legends are
+//! supported. Unsupported geoms are rejected by [`HephaestusWriter::validate`].
 //!
 //! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
 //! (hardware or software, e.g. lavapipe) is required at render time.
 
 mod channels;
+mod facet;
 mod geom;
 mod projection;
 mod scales;
@@ -23,9 +24,9 @@ use std::collections::HashMap;
 
 use hephaestus::backend::vello::VelloRenderer;
 pub use hephaestus::color::{rgba, Color};
-use hephaestus::composition::{Composition, Patch, Span};
 use hephaestus::geometry::Size;
 use hephaestus::plot::{Plot as HPlot, PlotComposition};
+use hephaestus::scales::chrome::AxisSide;
 use hephaestus::shape::ShapeRegistry;
 use hephaestus::Renderer;
 
@@ -36,9 +37,6 @@ use crate::writer::Writer;
 use crate::{DataFrame, GgsqlError, Layer, Plot, Result};
 
 use wiring::Ctx;
-
-/// Internal patch id for the single panel.
-const PANEL_ID: &str = "ggsql_panel";
 
 /// Writer that renders a ggsql plot to a PNG image via hephaestus.
 ///
@@ -73,11 +71,6 @@ impl Writer for HephaestusWriter {
     type Output = Vec<u8>;
 
     fn validate(&self, spec: &Plot) -> Result<()> {
-        if spec.facet.is_some() {
-            return Err(GgsqlError::WriterError(
-                "hephaestus writer does not support FACET yet".into(),
-            ));
-        }
         if spec.layers.is_empty() {
             return Err(GgsqlError::WriterError(
                 "hephaestus writer requires at least one layer".into(),
@@ -96,8 +89,17 @@ impl Writer for HephaestusWriter {
 
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<Self::Output> {
         self.validate(spec)?;
-        let composition = single_panel();
-        let mut view = PlotComposition::new(&composition);
+
+        // FACET → a grid of named panels (a single panel when unfaceted). Each
+        // panel becomes one hephaestus `Plot` sharing the composition's scales.
+        let (composition, panels) = facet::build_panels(spec, data)?;
+        // The composition owns the shape registry backing composition-level legend
+        // glyphs (point markers, line dashes).
+        let mut view =
+            PlotComposition::new(&composition).shape_registry(ShapeRegistry::with_builtins());
+
+        // Register the fixed (shared) scales once, globally. Every panel binds
+        // its position channels to these names, giving fixed-scale faceting.
         for scale in &spec.scales {
             let kind = match scale.aesthetic.as_str() {
                 "fill" | "stroke" | "color" | "colour" => scales::RangeKind::Color,
@@ -116,27 +118,89 @@ impl Writer for HephaestusWriter {
             }
         }
 
-        // Build every layer's geom into one panel; each geom binds its channels
-        // and adds its legends directly onto `plot`. Geoms draw in layer (DRAW)
-        // order = z-order.
-        let mut plot =
-            HPlot::new(&composition, PANEL_ID).shape_registry(ShapeRegistry::with_builtins());
+        // Legends are collected from the first panel only and registered once on
+        // the composition's own legend ring, so a faceted plot gets a single shared
+        // legend rather than one per panel. Every panel produces the same legends
+        // (all built from the globally resolved scales), so one capture suffices.
+        let legend_sink = std::cell::RefCell::new(Vec::new());
+        let mut legends_captured = false;
 
-        for layer in &spec.layers {
-            let df = layer_dataframe(layer, data)?;
-            let ctx = Ctx {
-                spec,
-                layer,
-                df,
-                transposed: is_transposed(layer),
-            };
-            geom::build_into_plot(&mut plot, &ctx)?;
+        for panel in &panels {
+            // Slice each layer's data to this panel. Skip panels with no data in
+            // any layer (e.g. a Grid cell absent under `missing => 'null'`) so the
+            // grid cell stays an empty framed panel rather than erroring.
+            let slices: Vec<(&Layer, DataFrame)> = spec
+                .layers
+                .iter()
+                .map(|layer| {
+                    Ok((
+                        layer,
+                        facet::panel_dataframe(layer_dataframe(layer, data)?, panel)?,
+                    ))
+                })
+                .collect::<Result<_>>()?;
+            if slices.iter().all(|(_, df)| df.height() == 0) {
+                continue;
+            }
+
+            // Fixed dimensions bind the shared `pos1`/`pos2`; free dimensions get
+            // a per-panel scale whose domain is computed from this panel's slices
+            // (the one place the writer computes extents — free facets only).
+            let ps = facet::PanelScales::new(spec, panel);
+            let layer_dfs: Vec<&DataFrame> = slices.iter().map(|(_, df)| df).collect();
+            if ps.free_x {
+                if let Some(hs) =
+                    scales::free_position_scale(spec.find_scale("pos1"), &layer_dfs, "pos1")
+                {
+                    view.insert_scale(ps.pos1.clone(), hs);
+                }
+            }
+            if ps.free_y {
+                if let Some(hs) =
+                    scales::free_position_scale(spec.find_scale("pos2"), &layer_dfs, "pos2")
+                {
+                    view.insert_scale(ps.pos2.clone(), hs);
+                }
+            }
+
+            // Build every layer's geom into this panel; geoms bind channels and
+            // record legends (first panel only) into `legend_sink`, drawing in
+            // layer (DRAW) = z-order.
+            let panel_legends = (!legends_captured).then_some(&legend_sink);
+            let mut plot = HPlot::new(&composition, panel.id.as_str())
+                .shape_registry(ShapeRegistry::with_builtins());
+            for (layer, df) in &slices {
+                let ctx = Ctx {
+                    spec,
+                    layer,
+                    df,
+                    transposed: is_transposed(layer),
+                    pos1_scale: &ps.pos1,
+                    pos2_scale: &ps.pos2,
+                    legends: panel_legends,
+                };
+                geom::build_into_plot(&mut plot, &ctx)?;
+            }
+            legends_captured = true;
+
+            // Axes are created per coordinate system, edge-only for fixed scales.
+            plot = apply_projection(plot, spec, panel, &ps);
+
+            // Facet strip labels (Wrap/Grid-column header on top, Grid-row on right).
+            if let Some(text) = &panel.strip_top {
+                plot = plot.strip(AxisSide::Top, text.clone());
+            }
+            if let Some(text) = &panel.strip_right {
+                plot = plot.strip(AxisSide::Right, text.clone());
+            }
+
+            view.attach_plot(plot);
         }
 
-        // Axes are created per coordinate system (Cartesian rails, polar rings).
-        plot = apply_projection(plot, spec);
-
-        view.attach_plot(plot);
+        // One shared legend for the whole composition (see `legend_sink` above).
+        for legend in legend_sink.into_inner() {
+            view.add_legend(legend);
+        }
 
         let issues = view.validate();
         if !issues.is_empty() {
@@ -153,34 +217,6 @@ impl Writer for HephaestusWriter {
             self.background,
         )
     }
-}
-
-/// The single-panel composition the writer renders into.
-fn single_panel() -> Composition {
-    Composition::empty(1, 1).place(1, 1, Span::cell(), Patch::new(PANEL_ID))
-}
-
-// Scaffolding for faceted (grid) compositions — not wired up yet.
-#[allow(dead_code)]
-fn grid_id(row: usize, col: usize) -> String {
-    format!("{}x{}", row, col)
-}
-
-/// A `rows`×`cols` grid composition, one patch per cell (faceting; not yet used).
-#[allow(dead_code)]
-fn panel_grid(rows: usize, cols: usize) -> Composition {
-    let mut comp = Composition::empty(rows, cols);
-    for row in 1..(rows + 1) {
-        for col in 1..(cols + 1) {
-            comp = comp.place(
-                row.try_into().unwrap(),
-                col.try_into().unwrap(),
-                Span::cell(),
-                Patch::new(grid_id(row, col)),
-            );
-        }
-    }
-    comp
 }
 
 /// Look up the DataFrame backing a layer by its execution-assigned data key.
@@ -511,6 +547,54 @@ mod tests {
         assert_png_or_skip(render(
             "SELECT c FROM (VALUES ('a'),('a'),('a'),('b'),('b'),('c')) t(c) \
              VISUALISE c AS fill DRAW bar PROJECT TO polar SETTING inner => 0.5",
+        ));
+    }
+
+    #[test]
+    fn renders_wrap_facet() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS g UNION ALL SELECT 2, 3, 'b' \
+             UNION ALL SELECT 3, 1, 'a' UNION ALL SELECT 4, 5, 'c' \
+             VISUALISE x AS x, y AS y DRAW point FACET g",
+        ));
+    }
+
+    #[test]
+    fn renders_grid_facet() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS r, 'p' AS c UNION ALL SELECT 2, 3, 'b', 'p' \
+             UNION ALL SELECT 3, 1, 'a', 'q' UNION ALL SELECT 4, 5, 'b', 'q' \
+             VISUALISE x AS x, y AS y DRAW point FACET r BY c",
+        ));
+    }
+
+    #[test]
+    fn renders_faceted_bar_with_color() {
+        assert_png_or_skip(render(
+            "SELECT g, k FROM (VALUES ('a','x'),('a','y'),('b','x'),('b','y'),('a','x')) t(g, k) \
+             VISUALISE k AS x, k AS fill DRAW bar FACET g",
+        ));
+    }
+
+    #[test]
+    fn renders_free_scale_facet() {
+        // Panels with very different data ranges: free scales give each panel its
+        // own per-panel domain and axes.
+        assert_png_or_skip(render(
+            "SELECT x, y, g FROM (VALUES (1,1,'a'),(2,2,'a'),(3,3,'a'),\
+             (100,100,'b'),(200,200,'b'),(300,300,'b')) t(x,y,g) \
+             VISUALISE x AS x, y AS y DRAW point FACET g SETTING free => ['x','y']",
+        ));
+    }
+
+    #[test]
+    fn renders_polar_facet() {
+        // A pie per panel, sharing the fill scale; proportions differ per panel.
+        assert_png_or_skip(render(
+            "SELECT c, panel FROM (VALUES \
+             ('a','one'),('a','one'),('b','one'),('c','one'),\
+             ('a','two'),('b','two'),('b','two'),('b','two'),('c','two')) t(c, panel) \
+             VISUALISE c AS fill DRAW bar PROJECT TO polar FACET panel",
         ));
     }
 

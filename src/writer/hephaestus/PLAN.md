@@ -478,9 +478,8 @@ position scale (`__ggsql_stat_dummy` — a pie's radius, or a bar with no x) is
 given no axis, in every projection, via the shared `has_real_axis` predicate,
 mirroring the VL writer's `AxisInfo::suppress`.
 
-Two hephaestus fixes were required (in `~/GitHub/hephaestus`, pending push + rev
-bump — a temporary path `[patch]` in the root `Cargo.toml` wires the local clone
-meanwhile):
+Two hephaestus fixes were required (landed upstream on `main` as `5997cdd`; ggsql
+pins that rev in `src/Cargo.toml`):
 1. `angle_channel`/`radius_channel` are now honored by **geom geometry**, not
    just chrome: `project_to_panel_px` / `interpolate_segment_with_t` route a
    geom's positional `[x, y]` to theta/radius via `PolarProjection::theta_r_from_xy`
@@ -517,6 +516,84 @@ hits the same wall (`bandwidth('x')` is 0 on a continuous scale). A `bar` is
 meant to have a discrete primary axis; this looks like ggsql not coercing a
 numeric bar axis to discrete. (`histogram` is unaffected — it carries real
 `pos1`/`pos1end` bin edges and renders correctly.)
+
+## Faceting (Phase 4) — status: implemented
+
+`FACET` now renders as small multiples. The writer builds a hephaestus
+`Composition` of named panels and attaches one `Plot` per panel to the shared
+`PlotComposition`, so all panels resolve through one scale registry (fixed
+scales). Works under Cartesian, Polar, and Map projections.
+
+- **New module `facet.rs`.** ggsql resolves faceting fully (layout, `free` bools,
+  Wrap `ncol`, per-row `__ggsql_aes_facet1__`/`facet2__`), so the writer only
+  lays it out. `build_panels` returns a `(Composition, Vec<Panel>)` — a 1×1 grid +
+  one `Panel` when unfaceted, else `composition::grid(nrow, ncol, cells)` (Wrap
+  flows row-major into the resolved `ncol`, padding the partial last row with
+  `spacer()`; Grid is facet1 rows × facet2 columns). Panel **ordering** mirrors
+  the VL writer's `resolve_facet_ordering` (facet scale `input_range`, then
+  `reverse`; numeric-aware ascending otherwise). Per-panel **data slicing** reuses
+  `DataFrame::take` on the row indices matching the panel's facet value(s); a
+  layer with no facet column is used whole. Grid cells with no data (e.g.
+  `missing => 'null'`) are skipped, leaving an empty framed panel.
+- **The write loop is now panel-based** (`mod.rs`): unfaceted and faceted share
+  one path (`Vec<Panel>`, length 1 when there's no FACET). Fixed scales are
+  registered once globally; each panel builds one `HPlot`, applies the
+  projection, and sets strip labels.
+- **Strip labels** via hephaestus `Plot::strip`: Wrap/Grid-column headers on
+  `AxisSide::Top`, Grid-row headers on `AxisSide::Right`.
+- **Edge-only axes** (ggplot2 look): for a fixed dimension the x-axis is drawn
+  only on the bottom-most present panel of each column and the y-axis only on the
+  left column (`Panel::{first_col,last_row}`, honored in
+  `projection::apply_proj_cartesian`).
+- **Free scales** (`free => 'x' | 'y' | ['x','y']`): a **deliberate, scoped
+  exception** to "ggsql owns all scale domains" — fixed dimensions still use
+  `numeric_domain()`, but a free dimension gets a per-panel scale
+  (`pos1__p{idx}`) whose domain the writer computes from that panel's slices
+  (`scales::free_position_scale`: family numeric extent for continuous/binned,
+  per-panel distinct categories for discrete). `PanelScales` carries the
+  per-panel position scale names; `Ctx` threads them so every geom (generic +
+  composite) binds positions to the panel scale. A free dimension forces its axis
+  onto every panel. The clean long-term home is ggsql resolving per-panel domains,
+  which would let the writer drop this computation.
+- Verified (eyeballed): 3×2 wrap (partial last row, correct per-column x-axis),
+  2×2 grid (top + right strips), free-x/y (each panel its own domain/axes vs the
+  squashed fixed comparison), polar facet (one pie per panel, per-panel
+  proportions). Tests: `renders_wrap_facet`, `renders_grid_facet`,
+  `renders_faceted_bar_with_color`, `renders_free_scale_facet`,
+  `renders_polar_facet` (34 writer tests pass); hephaestus-absent build compiles;
+  fmt + clippy clean.
+- **Single shared legend across panels.** hephaestus `bac7632` added a
+  composition-level legend ring (`PlotComposition::add_legend`, same
+  `(domain_scale, side, title)` dedup + stack-key merge as the per-plot one), so
+  legends live on the composition, never on the per-panel plots. Wiring no longer
+  calls `Plot::add_legend`: `Ctx` carries a `legends` sink (`Option<&RefCell<
+  Vec<Legend>>>`) and `wire_material` / `resolve_color` push through
+  `Ctx::push_legend`. `mod.rs` passes the sink only while building the **first**
+  panel (every panel produces the same legends — all built from the globally
+  resolved scales — and each legend reflects the global scale domain regardless of
+  a panel's data slice), then registers the captured set once on the composition
+  (which also carries a `shape_registry` for the legend glyphs). This uniformly
+  covers the single-panel case (a 1×1 composition legend ring) — no faceted/
+  non-faceted branch, no register-then-unregister. Verified by eyeballing a
+  3-panel wrap colored by a categorical (one legend beside the whole strip) and
+  the single-panel equivalent (unchanged).
+
+Known limitations (refinements, for upstream / later):
+- **Duplicate fill+stroke legend for `point` colored by a categorical** — a
+  pre-existing single-panel writer issue (not faceting-specific): the point's
+  fill and stroke both bind the color scale and each register a legend
+  (filled-swatch + hollow-swatch), so two identical-titled legends stack. The
+  faceting path faithfully reproduces whatever the single-panel path produces, so
+  fixing this in the material wiring fixes both.
+- **No title/subtitle/caption wired.** This writer doesn't render plot
+  title/subtitle/caption yet (true for the single-panel case too). hephaestus
+  `bac7632` exposes `PlotComposition::{title,subtitle,caption,axis_title}` for the
+  composition-spanning case, so this is now a straightforward follow-up — read the
+  ggsql `Labels` and set them on the composition.
+- **Strip label formatting** uses the facet value's string form (correct for
+  discrete). Binned range labels and discrete RENAMING parity with the VL
+  writer's `build_*_facet_label_expr` are a refinement.
+- Free binned dimensions fall back to a plain continuous per-panel scale.
 
 ## 8. Key source references
 
