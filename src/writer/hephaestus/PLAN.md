@@ -381,20 +381,21 @@ Closing the audit gaps in implemented geoms, most-visible first.
   a point — instead of always a point glyph.
 - **boxplot/violin styling**: honor a constant `stroke` (box/whisker/median
   outline, both ribbon edges) and `opacity` (box fill / ribbon alpha) via
-  `wiring::{constant_color, constant_number}`, instead of hardcoded grey.
+  `wiring`'s constant-value helpers, instead of hardcoded grey.
 - **tile linetype**: `linetype` wired on the rect material (dashed tile borders).
 - **diagonal rule (abline)**: a rule with a non-zero `slope` (ggsql sets
-  `parameters["diagonal"] = true`) renders as a single `SegmentGeom` spanning the
+  `parameters["diagonal"] = true`) renders as `SegmentGeom`s spanning the
   position scales' resolved range — `segment::build_diagonal` grabs each pos
   domain from `spec.find_scale("pos1"/"pos2").numeric_domain()`, computes
   `secondary = slope·primary + intercept` over it (intercept from the `pos2`/`pos1`
-  literal, slope from the `slope` literal/SETTING), registers both axes from the
+  mapping, slope from the `slope` mapping/SETTING), registers both axes from the
   endpoints, and binds x/x2→pos1, y/y2→pos2. The user supplies the ranges via
   `SCALE x/y FROM (..)`; when a scale is unresolved it falls back to 0..1. No
   DRAW/PLACE or multi-layer distinction — the writer just reads the scale ranges.
-  Required teaching `wiring::{constant_color, constant_number}` to read bare
-  `Literal` aesthetic values (not only annotation columns), since `slope`,
-  `stroke`, etc. arrive as `AestheticValue::Literal`.
+  Required teaching `wiring::constant_number` to read bare `Literal` aesthetic
+  values (not only annotation columns), since `slope`, `stroke`, etc. arrive as
+  `AestheticValue::Literal`. (Per-row slopes/intercepts and full material styling
+  landed later — see the Chrome + composite polish section.)
 - **constant (`Literal`) material aesthetics across all geoms**: ggsql delivers
   every geom default *and* every `SETTING` constant (`color => 'red'`,
   `linetype => 'dashed'`, `size => 8`, …) as `AestheticValue::Literal` in the
@@ -413,7 +414,7 @@ Closing the audit gaps in implemented geoms, most-visible first.
   shared-encoding model): `wiring::resolve_color(aesthetic, channel)` generalizes
   the old `resolve_fill` — a data-mapped color registers a scale, binds the
   channel, and adds one legend (returning the column for components to select);
-  otherwise the mapped literal (via `constant_color`) or default. Boxplot and
+  otherwise the mapped literal (via `constant_material`) or default. Boxplot and
   violin resolve **fill and stroke** this way and apply the same resolved color to
   every component (box/whisker/median/outlier; both ribbon edges), so a
   `stroke AS group` colors the whole mark per group under one collapsed legend.
@@ -723,6 +724,21 @@ outlines, composite outline styling, and facet strip labelling.
   positions a binned break linearly in the domain instead of through `binned_map`
   (which still sends *data* to bin centres, as it should). Edge labels now sit on
   their boundaries with no collision.
+- **Diagonal rules are per-row, and styled like any segment**
+  (`geom/segment.rs::build_diagonal`). The writer used to collapse an abline to a
+  *single* segment carrying the first row's slope/intercept and only
+  stroke/linewidth/opacity, so `linetype` was dropped and `MAPPING slope AS slope,
+  y AS y` (N lines) drew one. It now mirrors the Vega-Lite writer, whose
+  `calculate` transforms evaluate `secondary = slope · primary + intercept` **per
+  row**: `slope_values`/`intercept_values` read the mapped column when there is one
+  (else the literal / SETTING, repeated), so N rows give N lines, each with its own
+  slope and intercept. Materials go through the shared `wiring::wire_material` with
+  the segment family's now-extracted `material()` table, so a data-mapped `stroke` /
+  `linetype` / `linewidth` is scaled + legended exactly as on a plain segment —
+  verified byte-for-byte against VL's `strokeDash` scale range for the same query.
+  Positions are still computed (the spanning range comes from the pos scales'
+  resolved domain), which is why this keeps its own builder rather than
+  `build_and_add`. An empty data slice draws nothing, matching VL's zero-row layer.
 - Verified: 62 writer tests (10 exact-text `facet_strips_*` assertions that need no
   GPU, 5 `binned_bins`/`bin_at_centre` unit tests, and `renders_*` smoke tests for
   titles, text stroke, composite widths/dashes, binned + free-binned facets);
@@ -771,6 +787,58 @@ surfaced (both reported upstream with standalone repros, both verified here):
 Newly found, **not** fixed here (see §9): a data-mapped `linewidth` on a
 boxplot/violin is rejected by ggsql itself.
 
+## Densified geoms under `PROJECT` — status: implemented
+
+Projecting a straight edge onto a curved surface bends it, so ggsql densifies
+the edge **in SQL** rather than leaving each writer to approximate it: each
+original row becomes a run of vertex rows along the projected edge, the extent
+aesthetics are remapped onto plain `pos1`/`pos2`, `__ggsql_densify_id__` is
+appended to the layer's `partition_by` to tie one row's vertices together, and
+the layer is flagged `parameters["densified"] = true`. Four geoms do this
+(`apply_projection` in `plot/layer/geom/{segment,rule,ribbon,tile}.rs`):
+
+| geom | expansion | remap | shape |
+| --- | --- | --- | --- |
+| `segment` | 2 endpoints → N vertices | `pos1end`/`pos2end` → the `pos1`/`pos2` **columns** | open |
+| `rule` | spans the clip bbox → N vertices | synthesizes the missing axis; forces `orientation => aligned` | open |
+| `ribbon` | upper edge forward + lower edge backward → 2n vertices | `pos2min`/`pos2max` → the `pos2` column | closed |
+| `tile` (continuous) | 4 corners → N vertices | drops `pos1min/max`,`pos2min/max`; adds `pos1`/`pos2` | closed |
+
+Because the remap points the extent aesthetic at the *same* column rather than
+deleting it, each geom failed silently in its own way instead of erroring: a
+segment drew `x2 == x` (zero-length), a ribbon `y == y2` (zero-height), a rule a
+fan of straight full-height lines (one per vertex), and a tile fell into
+`rect::tile`'s discrete branch and drew a full-band rect per vertex. (`area` was
+listed in §9 as having the same hole; it does not — it has no `apply_projection`
+and never densifies.)
+
+- **`geom/densified.rs`** dispatches ahead of the `GeomType` match in
+  `geom/mod.rs::build_into_plot` (as the Vega-Lite renderers check `densified`
+  first, so a densified rule takes this path over the diagonal-abline one). The
+  vertices are exactly what `line` and `polygon` already draw — same columns,
+  same `partition_by` grouping, same material tables — so `line::spec` /
+  `polygon::spec` are reused whole rather than duplicated: `LineGeom` for the
+  open pair, `PolygonGeom` for the closed pair. The VL writer makes the same
+  swap, to a `line` mark with `interpolate: linear-closed` when closed. Vertex
+  order is source order in both writers (VL's `order` is the row index).
+- **Map framing is no longer spatial-only** (`mod.rs`): `spatial_bbox` became
+  `map_bbox`, which takes ggsql's `computed["bbox"]` for **any** map projection
+  and only falls back to the geometry extent for a bare `spatial` geom. Under a
+  map every mark, the clip boundary and the graticules share one pre-projected
+  data space, and hephaestus's `CustomProjection` outline is in *data space* — so
+  with the old gate a non-spatial map (`DRAW segment … PROJECT TO robinson`) framed
+  its position scales to the marks' own extent and got no aspect lock: the data
+  drifted off the boundary and the map was stretched. The VL writer frames from
+  the bbox unconditionally.
+- Verified (eyeballed): curved firebrick segments on Robinson; a filled ribbon
+  whose edges follow the meridians; dashed curving rule meridians; four
+  projection-following tile quads under one colorbar; and a `ggsql:world` base map
+  with route segments landing on the right countries. The pre-existing spatial /
+  orthographic-globe renders are unchanged. Tests `renders_densified_{segment,
+  ribbon,rule,tile}` and `renders_map_over_spatial_base` (feature `spatial`); 71
+  writer tests; feature, default (hephaestus absent) and `cargo +1.86` builds,
+  fmt, clippy all clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -816,9 +884,6 @@ here so it survives between efforts.
 
 ### Correctness risks
 
-- **Transparent backgrounds are probably wrong.** `HephaestusWriter::background()`
-  accepts any color, but `render_to_buffer` returns **premultiplied** RGBA and the
-  PNG encode path has no un-premultiply step.
 - **Legends are captured from the first panel only**, assuming every panel yields
   identical legends. True under fixed scales; unverified for a free-scale facet
   that also maps a material aesthetic.
@@ -837,13 +902,6 @@ here so it survives between efforts.
   exposes no selection.
 - Calendar-native temporal axes (numeric axes with ggsql's formatted break labels
   work today).
-- Diagonal rules ignore `linetype` (`geom/segment.rs::build_diagonal` sets only
-  stroke/linewidth/opacity).
-- **`densified` segment/ribbon under `PROJECT`**: ggsql expands a projected
-  segment into per-vertex rows and remaps `pos1end`→`pos1`, which the VL writer
-  handles by switching to a `line` mark (`vegalite/layer.rs:1589-1624`). The
-  hephaestus path would draw zero-length segments; `area`/`ribbon` have the same
-  hole.
 - boxplot `side` and `hinge` parameters are unimplemented (the VL writer has both).
 - A `linewidth` aesthetic on ggsql's Text geom would let text outline width be set
   (a core + doc change; the outline itself works).
@@ -883,7 +941,6 @@ resolved per-panel domains and spatial position scales:
 
 - `png::write_png` is file-only — no in-memory encode, so every host
   re-implements byte encoding.
-- `render_to_buffer` returns premultiplied RGBA (see Correctness risks).
 - No scale-level domain expansion / "nice" padding.
 - Binned scales keep bin edges in the output range, so they can't also carry a
   color/size range (see the binned-material bug above).

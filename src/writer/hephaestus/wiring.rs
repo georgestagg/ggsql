@@ -339,26 +339,6 @@ pub fn band_half_width(layer: &Layer, default: f64) -> f64 {
     layer.adjusted_width.unwrap_or(width).abs() / 2.0
 }
 
-/// A constant color from an aesthetic, or `default` when unmapped. Reads an
-/// annotation column first, then a bare `Literal` string (e.g. `stroke =>
-/// 'black'`). Composite geoms use this for uniform styling like a box outline.
-pub fn constant_color(ctx: &Ctx, aesthetic: &str, default: Color) -> Color {
-    if let Some(c) = aesthetic_column_name(ctx.layer, aesthetic)
-        .and_then(|c| column_to_colors(ctx.df, c).ok())
-        .and_then(|v| v.first().copied())
-    {
-        return c;
-    }
-    if let Some(AestheticValue::Literal(ParameterValue::String(s))) =
-        ctx.layer.mappings.aesthetics.get(aesthetic)
-    {
-        if let Some(c) = super::scales::parse_color(s) {
-            return c;
-        }
-    }
-    default
-}
-
 /// A constant number from an aesthetic, or `default` when unmapped. Reads an
 /// annotation column first, then a bare `Literal` number (e.g. `slope => 1`).
 pub fn constant_number(ctx: &Ctx, aesthetic: &str, default: f64) -> f64 {

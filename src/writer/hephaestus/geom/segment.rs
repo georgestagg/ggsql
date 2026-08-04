@@ -9,11 +9,11 @@
 use hephaestus::color::rgb8;
 use hephaestus::plot::{Plot as HPlot, SegmentGeom};
 
-use super::super::channels::aesthetic_column_name;
+use super::super::channels::{aesthetic_column_name, column_to_f64};
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_color, constant_number, Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec,
-    PanelAxis, PositionSpec,
+    constant_number, wire_material, Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec, PanelAxis,
+    PositionSpec,
 };
 use crate::plot::layer::geom::GeomType;
 use crate::plot::ParameterValue;
@@ -54,40 +54,46 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
 
     GeomSpec {
         positions,
-        material: vec![
-            MaterialSpec::new(
-                "stroke",
-                "stroke",
-                RangeKind::Color,
-                MatDefault::Color(rgb8(0, 0, 0)),
-            ),
-            MaterialSpec::new("color", "stroke", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("colour", "stroke", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new(
-                "linewidth",
-                "linewidth",
-                RangeKind::Number,
-                MatDefault::Number(1.0),
-            ),
-            MaterialSpec::new(
-                "opacity",
-                "stroke_opacity",
-                RangeKind::Number,
-                MatDefault::None,
-            ),
-            MaterialSpec::new(
-                "linetype",
-                "linetype",
-                RangeKind::Linetype,
-                MatDefault::None,
-            ),
-        ],
+        material: material(),
         raw_strings: &[],
         raw_numbers,
         data_channels: vec![],
         legend_key: LegendKind::Line,
         grouped: false,
     }
+}
+
+/// The stroke material table shared by every segment-family geom, including the
+/// diagonal rule (which builds its positions itself but styles them the same).
+fn material() -> Vec<MaterialSpec> {
+    vec![
+        MaterialSpec::new(
+            "stroke",
+            "stroke",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(0, 0, 0)),
+        ),
+        MaterialSpec::new("color", "stroke", RangeKind::Color, MatDefault::None),
+        MaterialSpec::new("colour", "stroke", RangeKind::Color, MatDefault::None),
+        MaterialSpec::new(
+            "linewidth",
+            "linewidth",
+            RangeKind::Number,
+            MatDefault::Number(1.0),
+        ),
+        MaterialSpec::new(
+            "opacity",
+            "stroke_opacity",
+            RangeKind::Number,
+            MatDefault::None,
+        ),
+        MaterialSpec::new(
+            "linetype",
+            "linetype",
+            RangeKind::Linetype,
+            MatDefault::None,
+        ),
+    ]
 }
 
 /// Whether this rule is a diagonal (abline): has a non-zero `slope`.
@@ -98,25 +104,47 @@ pub fn is_diagonal(layer: &Layer) -> bool {
     )
 }
 
-/// A diagonal rule (abline): a single line spanning the position scales'
-/// resolved range, with `secondary = slope * primary + intercept`. The range
-/// comes straight from the scales (explicit `FROM` or data-trained); when a
-/// scale is unresolved it falls back to 0..1 like any continuous scale.
+/// A diagonal rule (abline): **one line per data row**, each spanning the
+/// position scales' resolved range with `secondary = slope * primary +
+/// intercept`. Mirrors the Vega-Lite writer, whose `calculate` transforms compute
+/// that expression per row from `datum.__ggsql_aes_slope__` and the intercept
+/// field — so `MAPPING slope AS slope, y AS y` draws a line per row (with its own
+/// slope, intercept, and material aesthetics), while `SETTING slope => 1, y => 0`
+/// gives one row of literals and hence one line.
+///
+/// The spanning range comes straight from the scales (explicit `FROM` or
+/// data-trained); when a scale is unresolved it falls back to 0..1 like any
+/// continuous scale. Positions are computed rather than read from a column, so
+/// this builds its own geom, but materials go through the shared `wire_material`
+/// so a data-mapped `stroke`/`linetype`/`linewidth` is scaled and legended
+/// exactly as on a plain segment.
 pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
-    let slope = slope_value(ctx);
+    let n = ctx.df.height();
+    if n == 0 {
+        return Ok(());
+    }
+    let slopes = slope_values(ctx, n)?;
 
-    let (x0, y0, x1, y1) = if !ctx.transposed {
+    let (x, x2, y, y2) = if !ctx.transposed {
         // y-intercept (`pos2`); x is the spanning axis.
-        let intercept = constant_number(ctx, "pos2", 0.0);
+        let intercepts = intercept_values(ctx, "pos2", n)?;
         let (x0, x1) = primary_range(ctx, "pos1");
-        let (y0, y1) = (slope * x0 + intercept, slope * x1 + intercept);
-        (x0, y0, x1, y1)
+        (
+            vec![x0; n],
+            vec![x1; n],
+            secondary(&slopes, &intercepts, x0),
+            secondary(&slopes, &intercepts, x1),
+        )
     } else {
         // x-intercept (`pos1`); y is the spanning axis.
-        let intercept = constant_number(ctx, "pos1", 0.0);
+        let intercepts = intercept_values(ctx, "pos1", n)?;
         let (y0, y1) = primary_range(ctx, "pos2");
-        let (x0, x1) = (slope * y0 + intercept, slope * y1 + intercept);
-        (x0, y0, x1, y1)
+        (
+            secondary(&slopes, &intercepts, y0),
+            secondary(&slopes, &intercepts, y1),
+            vec![y0; n],
+            vec![y1; n],
+        )
     };
 
     for (channel, scale) in [
@@ -129,15 +157,22 @@ pub fn build_diagonal(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     }
 
     let mut b = SegmentGeom::builder();
-    b.set("x", vec![x0]);
-    b.set("x2", vec![x1]);
-    b.set("y", vec![y0]);
-    b.set("y2", vec![y1]);
-    b.set("stroke", constant_color(ctx, "stroke", rgb8(0, 0, 0)));
-    b.set("linewidth", constant_number(ctx, "linewidth", 1.0));
-    b.set("stroke_opacity", constant_number(ctx, "opacity", 1.0));
+    b.set("x", x);
+    b.set("x2", x2);
+    b.set("y", y);
+    b.set("y2", y2);
+    wire_material(&mut b, &material(), plot, ctx, LegendKind::Line)?;
     plot.add_geom(b.build());
     Ok(())
+}
+
+/// `slope * primary + intercept` at one end of the spanning range.
+fn secondary(slopes: &[f64], intercepts: &[f64], primary: f64) -> Vec<f64> {
+    slopes
+        .iter()
+        .zip(intercepts)
+        .map(|(s, i)| s * primary + i)
+        .collect()
 }
 
 /// Resolved (min, max) for a position scale, or 0..1 when unresolved.
@@ -148,13 +183,26 @@ fn primary_range(ctx: &Ctx, aesthetic: &str) -> (f64, f64) {
         .unwrap_or((0.0, 1.0))
 }
 
-/// Slope from the `slope` aesthetic (literal/annotation) or the SETTING param.
-fn slope_value(ctx: &Ctx) -> f64 {
+/// Per-row slopes: the mapped `slope` column, else the literal or SETTING
+/// parameter repeated for every row.
+fn slope_values(ctx: &Ctx, n: usize) -> Result<Vec<f64>> {
+    if let Some(col) = aesthetic_column_name(ctx.layer, "slope") {
+        return column_to_f64(ctx.df, col);
+    }
     let param = match ctx.layer.parameters.get("slope") {
-        Some(ParameterValue::Number(n)) => *n,
+        Some(ParameterValue::Number(v)) => *v,
         _ => 0.0,
     };
-    constant_number(ctx, "slope", param)
+    Ok(vec![constant_number(ctx, "slope", param); n])
+}
+
+/// Per-row intercepts from the position aesthetic holding them (`pos2` for a
+/// y-intercept, `pos1` when transposed): its column, else the literal value.
+fn intercept_values(ctx: &Ctx, aesthetic: &str, n: usize) -> Result<Vec<f64>> {
+    if let Some(col) = aesthetic_column_name(ctx.layer, aesthetic) {
+        return column_to_f64(ctx.df, col);
+    }
+    Ok(vec![constant_number(ctx, aesthetic, 0.0); n])
 }
 
 /// A non-diagonal rule is a reference line spanning the whole panel on its free

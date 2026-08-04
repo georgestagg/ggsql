@@ -17,6 +17,18 @@
 
 ### Fixed
 
+- `segment`, `rule`, `ribbon` and `tile` layers under a map `PROJECT` now render
+  in the hephaestus writer. ggsql expands these into per-vertex rows so the edges
+  follow the projection's curvature, which the writer ignored — segments came out
+  zero-length, ribbons zero-height, a rule became a fan of straight lines, and
+  tiles a box per vertex. A non-spatial map is also framed to the map's bounding
+  box now, so its marks land on the clip boundary and keep the projection's
+  proportions, as they already did for `spatial` layers.
+- The hephaestus writer drew a diagonal `rule` (abline) as a single solid line: it
+  ignored `linetype`, and a rule mapping several rows of slopes/intercepts
+  (`MAPPING slope AS slope, y AS y`) rendered only the first. It now draws one line
+  per row, honoring per-line `stroke`/`linetype`/`linewidth` — constant or
+  data-mapped, with a legend — like the Vega-Lite writer.
 - The hephaestus writer's `size`, `shape` and `linetype` legends drew empty
   swatches next to their labels; the key glyphs are now painted (in the layer's
   constant color, or a neutral grey when the color aesthetic is itself mapped).

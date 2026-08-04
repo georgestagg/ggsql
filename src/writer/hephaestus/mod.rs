@@ -135,14 +135,17 @@ impl Writer for HephaestusWriter {
             }
         }
 
-        // A spatial layer positions marks by geometry, not by `pos1`/`pos2`
-        // columns, so ggsql resolves no position scales for it. Register
-        // continuous `pos1`/`pos2` scales spanning the map's bounding box so
-        // `GeometryGeom`'s coordinates map into the panel. The bbox comes from
-        // ggsql (`computed["bbox"]` when projected, else the geometry extent),
-        // keeping the "writer never invents extents" principle.
-        let spatial_bbox = spatial_bbox(spec, data)?;
-        if let Some((xmin, ymin, xmax, ymax)) = spatial_bbox {
+        // Frame a map to its bounding box. Under a `PROJECT map` every mark, the
+        // clip boundary and the graticules share one pre-projected data space, so
+        // the position scales must span the map's extent rather than the marks'
+        // — otherwise the data is zoomed in and drifts off the boundary. A
+        // spatial layer additionally has no `pos1`/`pos2` columns at all (it
+        // positions by geometry), so ggsql resolves no position scales for it and
+        // these are the only ones. The bbox comes from ggsql
+        // (`computed["bbox"]` when projected, else the geometry extent), keeping
+        // the "writer never invents extents" principle.
+        let map_bbox = map_bbox(spec, data)?;
+        if let Some((xmin, ymin, xmax, ymax)) = map_bbox {
             view.insert_scale(
                 "pos1".to_string(),
                 scale::continuous(nice_range(xmin, xmax)),
@@ -221,10 +224,10 @@ impl Writer for HephaestusWriter {
             // Axes are created per coordinate system, edge-only for fixed scales.
             plot = apply_projection(plot, spec, panel, &ps);
 
-            // Lock a spatial panel's aspect to its bounding box so the projected
-            // geometry keeps its proportions (a globe stays round), the raster
-            // analog of the Vega-Lite writer's uniform projection scale.
-            if let Some((xmin, ymin, xmax, ymax)) = spatial_bbox {
+            // Lock a map panel's aspect to its bounding box so the projection
+            // keeps its proportions (a globe stays round), the raster analog of
+            // the Vega-Lite writer's uniform projection scale.
+            if let Some((xmin, ymin, xmax, ymax)) = map_bbox {
                 let (w, h) = (xmax - xmin, ymax - ymin);
                 if w > 0.0 && h > 0.0 {
                     plot = plot.aspect_ratio(h / w).aspect_mode(AspectMode::Range);
@@ -264,19 +267,14 @@ impl Writer for HephaestusWriter {
     }
 }
 
-/// The map bounding box `(xmin, ymin, xmax, ymax)` when the plot has a spatial
-/// layer, else `None`. Prefers ggsql's resolved `computed["bbox"]` (set under a
-/// `PROJECT map`); falls back to the union extent of the geometry data for a
-/// bare `spatial` geom with no projection.
-fn spatial_bbox(
+/// The map bounding box `(xmin, ymin, xmax, ymax)`, or `None` when the plot is
+/// not a map. ggsql's resolved `computed["bbox"]` (set under a `PROJECT map`)
+/// wins; a bare `spatial` geom with no projection falls back to the union extent
+/// of its geometry data.
+fn map_bbox(
     spec: &Plot,
     data: &HashMap<String, DataFrame>,
 ) -> Result<Option<(f64, f64, f64, f64)>> {
-    let is_spatial = |layer: &Layer| layer.geom.geom_type() == GeomType::Spatial;
-    if !spec.layers.iter().any(is_spatial) {
-        return Ok(None);
-    }
-
     if let Some(proj) = &spec.project {
         if let Some(ParameterValue::Array(arr)) = proj.computed.get("bbox") {
             let nums: Vec<f64> = arr.iter().filter_map(|e| e.to_f64()).collect();
@@ -286,6 +284,11 @@ fn spatial_bbox(
                 }
             }
         }
+    }
+
+    let is_spatial = |layer: &Layer| layer.geom.geom_type() == GeomType::Spatial;
+    if !spec.layers.iter().any(is_spatial) {
+        return Ok(None);
     }
 
     let geom_col = naming::aesthetic_column("geometry");
@@ -593,6 +596,32 @@ mod tests {
             "SELECT 0 AS i VISUALISE i AS y DRAW rule \
              SETTING slope => 1 SCALE x FROM (0, 10) SCALE y FROM (0, 10)",
         ));
+        // The dash pattern is honored on the computed segment.
+        assert_png_or_skip(render(
+            "SELECT 0 AS i VISUALISE i AS y DRAW rule \
+             SETTING slope => 1, linetype => 'dashed', linewidth => 2 \
+             SCALE x FROM (0, 10) SCALE y FROM (0, 10)",
+        ));
+        // One line per row: three intercepts → three parallel lines.
+        assert_png_or_skip(render(
+            "SELECT * FROM (VALUES (0),(2),(4)) t(i) VISUALISE i AS y DRAW rule \
+             SETTING slope => 1 SCALE x FROM (0, 10) SCALE y FROM (0, 15)",
+        ));
+    }
+
+    #[test]
+    fn renders_multiple_diagonal_rules() {
+        // Per-row slope + intercept + a data-mapped material aesthetic: three
+        // differently-sloped, differently-colored ablines over a scatter (the
+        // Vega-Lite writer's `test_rule_renderer_multiple_diagonal_lines` query).
+        assert_png_or_skip(render(
+            "WITH points AS (SELECT * FROM (VALUES (0, 5), (5, 15), (10, 25)) t(x, y)), \
+                  lines AS (SELECT * FROM (VALUES (2, 5, 'A'), (1, 10, 'B'), (3, 0, 'C')) \
+                            t(slope, y, line_id)) \
+             SELECT * FROM points VISUALISE \
+             DRAW point MAPPING x AS x, y AS y \
+             DRAW rule MAPPING slope AS slope, y AS y, line_id AS color FROM lines",
+        ));
     }
 
     #[test]
@@ -788,6 +817,71 @@ mod tests {
         // boundary + graticules from `computed`.
         assert_png_or_skip(render(
             "VISUALISE FROM ggsql:world DRAW spatial PROJECT TO orthographic",
+        ));
+    }
+
+    /// Under a map `PROJECT`, ggsql expands these layers into per-vertex rows and
+    /// remaps the extent aesthetics onto `pos1`/`pos2`, so each must draw as a
+    /// polyline or a polygon rather than as its usual mark — otherwise a segment
+    /// is zero-length, a ribbon zero-height, a rule a fan of straight lines, and
+    /// a tile a box per vertex.
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_densified_segment() {
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT * FROM (VALUES (-100,30,20,60),(-50,-20,100,10)) t(x1,y1,x2,y2) \
+             VISUALISE x1 AS x, y1 AS y, x2 AS xend, y2 AS yend DRAW segment \
+             SETTING stroke => 'firebrick', linewidth => 2 PROJECT x, y TO robinson",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_densified_ribbon() {
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT * FROM (VALUES (-160,-20,20),(-80,0,40),(0,10,50),(80,-10,30)) t(x,lo,hi) \
+             VISUALISE x AS x, lo AS ymin, hi AS ymax DRAW ribbon \
+             SETTING fill => 'steelblue' PROJECT x, y TO robinson",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_densified_rule() {
+        // A rule spans the clip bbox, so its meridians curve with the projection.
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT * FROM (VALUES (-100),(0),(100)) t(x) VISUALISE x AS x DRAW rule \
+             SETTING stroke => 'darkgreen', linetype => 'dashed' PROJECT x, y TO robinson",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_densified_tile() {
+        assert_png_or_skip(render(
+            "INSTALL spatial; LOAD spatial; \
+             SELECT * FROM (VALUES (-120,-30,5),(-40,20,9),(40,-10,3)) t(x,y,v) \
+             VISUALISE x AS x, y AS y, v AS fill DRAW tile \
+             SETTING width => 40, height => 30 PROJECT x, y TO robinson",
+        ));
+    }
+
+    #[cfg(feature = "spatial")]
+    #[test]
+    fn renders_map_over_spatial_base() {
+        // A non-spatial layer over a spatial base map: both must frame to ggsql's
+        // bbox so the segments land on the boundary, not on their own extent.
+        assert_png_or_skip(render(
+            "WITH routes AS (SELECT * FROM (VALUES (-74,40,2,48,'a'),(151,-34,18,-34,'b')) \
+             t(x1,y1,x2,y2,route)) \
+             VISUALISE \
+             DRAW spatial MAPPING * FROM ggsql:world \
+             DRAW segment MAPPING x1 AS x, y1 AS y, x2 AS xend, y2 AS yend, route AS stroke \
+             FROM routes \
+             PROJECT x, y TO robinson",
         ));
     }
 
