@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use hephaestus::color::Color;
+use hephaestus::color::{rgb8, Color};
 use hephaestus::plot::chrome::legend::{Legend, LegendKeySpec};
 use hephaestus::plot::geom::{BuildableGeom, Geom, GeomBuilder, Raw};
 use hephaestus::plot::Plot as HPlot;
@@ -246,6 +246,7 @@ pub fn wire_material<G: BuildableGeom>(
             // records across layers for the same scale merge at registration.
             plot.set_binding(m.channel, m.aesthetic);
             ctx.push_legend(material_legend(
+                ctx,
                 m.aesthetic,
                 m.channel,
                 m.kind,
@@ -423,17 +424,27 @@ pub fn aesthetic_label(spec: &Plot, layer: &Layer, aesthetic: &str) -> Option<St
     }
 }
 
-/// A resolved color aesthetic for a composite geom, mirroring the Vega-Lite
-/// writer's shared-encoding model: either a data-mapped color column (scaled
-/// through a registered scale that is bound + legended once, carrying that
-/// scale's name) or a constant. Components select the rows they cover and apply
-/// it to a channel.
-pub enum ColorSource {
-    Data { data: ChannelData, scale: String },
-    Constant(Color),
+/// Resolve a plot-level label (`title`, `subtitle`, `caption`) from the `LABEL`
+/// clause. `None` covers both "not set" and `LABEL <key> => NULL` (suppressed).
+///
+/// Literal `\n` in the SQL string literal becomes a real newline, matching the
+/// Vega-Lite writer's `split_label_on_newlines`.
+pub fn plot_label(spec: &Plot, key: &str) -> Option<String> {
+    let text = spec.labels.as_ref()?.labels.get(key)?.as_ref()?;
+    Some(text.replace("\\n", "\n"))
 }
 
-impl ColorSource {
+/// A resolved material aesthetic for a composite geom, mirroring the Vega-Lite
+/// writer's shared-encoding model: either a data-mapped column (scaled through a
+/// registered scale that is bound + legended once, carrying that scale's name) or
+/// a constant visual value. Components select the rows they cover and apply it to
+/// a channel, so one resolved aesthetic styles every part of the composite.
+pub enum MaterialSource {
+    Data { data: ChannelData, scale: String },
+    Constant(HValue),
+}
+
+impl MaterialSource {
     /// Set `channel` for the `idx` rows: the scaled data subset, or the constant.
     pub fn apply<G: BuildableGeom>(
         &self,
@@ -442,9 +453,9 @@ impl ColorSource {
         idx: &[usize],
     ) {
         match self {
-            ColorSource::Data { data, .. } => data.select(idx).apply(builder, channel),
-            ColorSource::Constant(c) => {
-                builder.set(channel, *c);
+            MaterialSource::Data { data, .. } => data.select(idx).apply(builder, channel),
+            MaterialSource::Constant(v) => {
+                builder.set(channel, v.clone());
             }
         }
     }
@@ -453,18 +464,14 @@ impl ColorSource {
     /// e.g. a ribbon's far edge, to the same scale).
     pub fn scale_name(&self) -> Option<&str> {
         match self {
-            ColorSource::Data { scale, .. } => Some(scale),
-            ColorSource::Constant(_) => None,
+            MaterialSource::Data { scale, .. } => Some(scale),
+            MaterialSource::Constant(_) => None,
         }
     }
 }
 
-/// Resolve a color aesthetic (`fill`, `stroke`, …) for a composite geom. A
-/// data-mapped non-identity scale binds `channel` to the aesthetic's (globally
-/// registered) scale and records a legend; the full color-domain column is returned
-/// for components to select. Otherwise the constant value (the mapped literal,
-/// else `default`). hephaestus collapses compatible legends, so repeated binds
-/// across a geom's components merge at registration.
+/// Resolve a color aesthetic (`fill`, `stroke`, …) for a composite geom, falling
+/// back to `default` when unmapped. See [`resolve_material`].
 pub fn resolve_color(
     ctx: &Ctx,
     plot: &mut HPlot,
@@ -472,37 +479,149 @@ pub fn resolve_color(
     channel: &'static str,
     default: Color,
     legend_kind: LegendKind,
-) -> Result<ColorSource> {
-    let scale = ctx.spec.find_scale(aesthetic);
-    let kind = scale
+) -> Result<MaterialSource> {
+    Ok(
+        resolve_material(ctx, plot, aesthetic, channel, RangeKind::Color, legend_kind)?
+            .unwrap_or(MaterialSource::Constant(HValue::Color(default))),
+    )
+}
+
+/// Like [`resolve_color`] but with no fallback. For aesthetics whose ggsql
+/// default is `Null` (e.g. a text geom's `stroke`), where "unmapped" must leave
+/// the channel unset rather than substitute a color.
+pub fn resolve_optional_color(
+    ctx: &Ctx,
+    plot: &mut HPlot,
+    aesthetic: &'static str,
+    channel: &'static str,
+    legend_kind: LegendKind,
+) -> Result<Option<MaterialSource>> {
+    resolve_material(ctx, plot, aesthetic, channel, RangeKind::Color, legend_kind)
+}
+
+/// Resolve a material aesthetic for a composite geom, dispatching the same three
+/// ways as [`wire_material`] does for simple geoms, but returning a value the
+/// caller can apply to a row subset (which `wire_material`, being whole-column,
+/// cannot).
+///
+/// A data-mapped non-identity scale binds `channel` to the aesthetic's (globally
+/// registered) scale and records one legend; the full column is returned for
+/// components to select. Otherwise the constant visual value: an identity /
+/// annotation column's first value, else the mapped literal (`SETTING linewidth
+/// => 3`). `None` when the aesthetic isn't mapped at all.
+///
+/// hephaestus collapses compatible legends, so repeated binds across a
+/// composite's components merge at registration.
+pub fn resolve_material(
+    ctx: &Ctx,
+    plot: &mut HPlot,
+    aesthetic: &'static str,
+    channel: &'static str,
+    kind: RangeKind,
+    legend_kind: LegendKind,
+) -> Result<Option<MaterialSource>> {
+    let type_kind = ctx
+        .spec
+        .find_scale(aesthetic)
         .and_then(|s| s.scale_type.as_ref())
         .map(|st| st.scale_type_kind());
-    let col = aesthetic_column_name(ctx.layer, aesthetic);
-    let data_mapped = col.is_some() && scale.is_some() && kind != Some(ScaleTypeKind::Identity);
-    if !data_mapped {
-        return Ok(ColorSource::Constant(constant_color(
-            ctx, aesthetic, default,
-        )));
+    if is_data_mapped(ctx, aesthetic) {
+        let col = aesthetic_column_name(ctx.layer, aesthetic);
+        plot.set_binding(channel, aesthetic);
+        ctx.push_legend(material_legend(
+            ctx,
+            aesthetic,
+            channel,
+            kind,
+            type_kind,
+            aesthetic_label(ctx.spec, ctx.layer, aesthetic),
+            legend_kind,
+        ));
+        return Ok(Some(MaterialSource::Data {
+            data: column_to_channel(ctx.df, col.unwrap())?,
+            scale: aesthetic.to_string(),
+        }));
     }
-    plot.set_binding(channel, aesthetic);
-    ctx.push_legend(material_legend(
-        aesthetic,
-        channel,
-        RangeKind::Color,
-        kind,
-        aesthetic_label(ctx.spec, ctx.layer, aesthetic),
-        legend_kind,
-    ));
-    Ok(ColorSource::Data {
-        data: column_to_channel(ctx.df, col.unwrap())?,
-        scale: aesthetic.to_string(),
-    })
+    Ok(constant_material(ctx, aesthetic, kind).map(MaterialSource::Constant))
+}
+
+/// Whether an aesthetic maps a data column through a scale that actually
+/// transforms it — i.e. it is scaled and legended, rather than carrying
+/// visual-space values (an identity scale / annotation column) or a constant.
+fn is_data_mapped(ctx: &Ctx, aesthetic: &str) -> bool {
+    let scale = ctx.spec.find_scale(aesthetic);
+    let type_kind = scale
+        .and_then(|s| s.scale_type.as_ref())
+        .map(|st| st.scale_type_kind());
+    aesthetic_column_name(ctx.layer, aesthetic).is_some()
+        && scale.is_some()
+        && type_kind != Some(ScaleTypeKind::Identity)
+}
+
+/// The constant visual value of an unscaled material aesthetic: an identity /
+/// annotation column's first value, else a bare `Literal`, converted by the
+/// channel's `RangeKind` (hephaestus takes widths in points, as ggsql resolves
+/// them, so numbers pass through). `None` when unmapped or inapplicable.
+fn constant_material(ctx: &Ctx, aesthetic: &str, kind: RangeKind) -> Option<HValue> {
+    let col = aesthetic_column_name(ctx.layer, aesthetic);
+    let literal = match ctx.layer.mappings.aesthetics.get(aesthetic) {
+        Some(AestheticValue::Literal(lit)) => Some(lit),
+        _ => None,
+    };
+    match kind {
+        RangeKind::Color => {
+            if let Some(c) = col
+                .and_then(|c| column_to_colors(ctx.df, c).ok())
+                .and_then(|v| v.first().copied())
+            {
+                return Some(HValue::Color(c));
+            }
+            match literal {
+                Some(ParameterValue::String(s)) => parse_color(s).map(HValue::Color),
+                _ => None,
+            }
+        }
+        RangeKind::Number | RangeKind::Position => {
+            if let Some(n) = col
+                .and_then(|c| column_to_f64(ctx.df, c).ok())
+                .and_then(|v| v.first().copied())
+                .filter(|x| x.is_finite())
+            {
+                return Some(HValue::Number(n));
+            }
+            match literal {
+                Some(ParameterValue::Number(n)) if n.is_finite() => Some(HValue::Number(*n)),
+                _ => None,
+            }
+        }
+        RangeKind::Linetype => {
+            let name = col
+                .and_then(|c| column_to_strings(ctx.df, c).ok())
+                .and_then(|v| v.first().cloned())
+                .or_else(|| match literal {
+                    Some(ParameterValue::String(s)) => Some(s.clone()),
+                    _ => None,
+                })?;
+            Some(HValue::Linetype(map_linetype(&name)))
+        }
+        RangeKind::Shape => {
+            let name = col
+                .and_then(|c| column_to_strings(ctx.df, c).ok())
+                .and_then(|v| v.first().cloned())
+                .or_else(|| match literal {
+                    Some(ParameterValue::String(s)) => Some(s.clone()),
+                    _ => None,
+                })?;
+            Some(HValue::String(name.into()))
+        }
+    }
 }
 
 /// Build a legend for a data-mapped material scale. Continuous color uses a
 /// colorbar; everything else a keyed legend (swatch per `legend_kind`) at the
 /// scale's breaks.
 pub fn material_legend(
+    ctx: &Ctx,
     scale_name: &str,
     channel: &str,
     kind: RangeKind,
@@ -518,17 +637,50 @@ pub fn material_legend(
     let mut legend = if continuous_color {
         Legend::colorbar(scale_name).side(LegendSide::Right)
     } else {
-        let key = match legend_kind {
+        let mut key = match legend_kind {
             LegendKind::Point => LegendKeySpec::point(),
             LegendKind::Line => LegendKeySpec::line(),
             LegendKind::Rect => LegendKeySpec::rect(),
-        };
-        Legend::new(scale_name)
-            .side(LegendSide::Right)
-            .key(key.scaled(channel, scale_name))
+        }
+        .scaled(channel, scale_name);
+        // A key only paints what it is told to paint, so when the scaled channel
+        // isn't itself a color the glyph needs one — otherwise the swatch is
+        // invisible next to its label. Use the layer's constant color, matching
+        // the marks the legend describes.
+        if kind != RangeKind::Color {
+            let body = match legend_kind {
+                LegendKind::Line => "stroke",
+                LegendKind::Point | LegendKind::Rect => "fill",
+            };
+            key = key.fixed(body, HValue::Color(key_color(ctx, legend_kind)));
+        }
+        Legend::new(scale_name).side(LegendSide::Right).key(key)
     };
     if let Some(title) = title {
         legend = legend.title(title);
     }
     legend
+}
+
+/// The color a non-color legend key paints its glyph with: the layer's constant
+/// color for the aesthetic carrying the glyph's body, the other color aesthetic
+/// as a fallback (a stroke-only geom has no fill, and vice versa), else a neutral
+/// grey. A data-mapped color aesthetic has no single constant, so it falls through
+/// to the grey — that scale gets its own legend anyway.
+fn key_color(ctx: &Ctx, legend_kind: LegendKind) -> Color {
+    let order = match legend_kind {
+        LegendKind::Line => ["stroke", "fill"],
+        LegendKind::Point | LegendKind::Rect => ["fill", "stroke"],
+    };
+    for aesthetic in order {
+        // A data-mapped color has no constant to borrow — its column holds domain
+        // values, not colors — and it carries its own legend anyway.
+        if is_data_mapped(ctx, aesthetic) {
+            continue;
+        }
+        if let Some(HValue::Color(c)) = constant_material(ctx, aesthetic, RangeKind::Color) {
+            return c;
+        }
+    }
+    rgb8(64, 64, 64)
 }

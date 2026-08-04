@@ -12,7 +12,7 @@ use hephaestus::plot::{Plot as HPlot, TextGeom};
 use super::super::channels::{
     aesthetic_column_name, column_to_bool, column_to_channel, column_to_f64, column_to_strings,
 };
-use super::super::wiring::{resolve_color, Ctx, LegendKind};
+use super::super::wiring::{resolve_color, resolve_optional_color, Ctx, LegendKind};
 use crate::{GgsqlError, Result};
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
@@ -36,12 +36,22 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // Label string.
     b.set("text", Raw(column_to_strings(df, label)?));
 
+    let rows: Vec<usize> = (0..n).collect();
+
     // Color: data-mapped (color-by-group) or constant black.
-    resolve_color(ctx, plot, "fill", "fill", rgb8(0, 0, 0), LegendKind::Point)?.apply(
-        &mut b,
-        "fill",
-        &(0..n).collect::<Vec<_>>(),
-    );
+    resolve_color(ctx, plot, "fill", "fill", rgb8(0, 0, 0), LegendKind::Point)?
+        .apply(&mut b, "fill", &rows);
+
+    // Glyph outline, drawn under the fill. Only set when `stroke` is actually
+    // mapped: ggsql's default for a text geom's `stroke` is Null, and hephaestus
+    // skips the outline pass entirely while `text_stroke` is unset. The outline
+    // width is hephaestus's theme default — ggsql's text geom has no `linewidth`
+    // aesthetic, and neither does the Vega-Lite writer's text mark.
+    if let Some(stroke) =
+        resolve_optional_color(ctx, plot, "stroke", "text_stroke", LegendKind::Point)?
+    {
+        stroke.apply(&mut b, "text_stroke", &rows);
+    }
 
     // Scalar styling (unscaled visual values).
     b.set("fill_opacity", Raw(numeric_or(ctx, "opacity", 1.0)));

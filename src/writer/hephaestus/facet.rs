@@ -11,14 +11,15 @@
 //! facet aesthetic's `SCALE` (its `input_range`, then `reverse`) drives the
 //! order, falling back to a numeric-aware ascending sort of the present values.
 
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use arrow::array::UInt32Array;
+use arrow::array::{Array, UInt32Array};
 use hephaestus::composition::{grid, spacer, Composition, Element, Patch};
 
-use super::channels::column_to_strings;
+use super::channels::{column_to_f64, column_to_strings};
 use crate::naming;
-use crate::plot::{ArrayElement, FacetLayout, ParameterValue, Scale};
+use crate::plot::{ArrayElement, FacetLayout, ParameterValue, Scale, ScaleTypeKind};
 use crate::{DataFrame, Plot, Result};
 
 /// Patch id for the single (unfaceted) panel.
@@ -99,9 +100,9 @@ fn build_wrap(
         panels.push(Panel {
             id: format!("facet_{idx}"),
             index: idx,
-            facet1: Some(level.clone()),
+            facet1: Some(level.key.clone()),
             facet2: None,
-            strip_top: Some(level.clone()),
+            strip_top: Some(level.label.clone()),
             strip_right: None,
             first_col: col == 0,
             last_row,
@@ -137,10 +138,10 @@ fn build_grid(spec: &Plot, layer0: &DataFrame) -> Result<(Composition, Vec<Panel
             panels.push(Panel {
                 id: id.clone(),
                 index,
-                facet1: Some(rowv.clone()),
-                facet2: Some(colv.clone()),
-                strip_top: (r == 0).then(|| colv.clone()),
-                strip_right: (c == ncol - 1).then(|| rowv.clone()),
+                facet1: Some(rowv.key.clone()),
+                facet2: Some(colv.key.clone()),
+                strip_top: (r == 0).then(|| colv.label.clone()),
+                strip_right: (c == ncol - 1).then(|| rowv.label.clone()),
                 first_col: c == 0,
                 last_row: r == nrow - 1,
             });
@@ -160,24 +161,55 @@ fn wrap_ncol(facet: &crate::plot::Facet, n: usize) -> usize {
     }
 }
 
-/// Distinct facet levels present in the data, ordered per the facet scale.
-fn ordered_levels(spec: &Plot, df: &DataFrame, internal_aes: &str) -> Result<Vec<String>> {
-    let col = naming::aesthetic_column(internal_aes);
-    let values = column_to_strings(df, &col)?;
-    let mut seen = HashSet::new();
-    let mut distinct: Vec<String> = Vec::new();
-    for v in values {
-        if seen.insert(v.clone()) {
-            distinct.push(v);
-        }
-    }
-    Ok(order_by_scale(distinct, spec.find_scale(internal_aes)))
+/// One distinct facet level: the data-space key selecting its rows, the numeric
+/// form of the same cell (the bin-join key for a binned facet), whether the cell
+/// was NULL, and the strip text to display.
+struct Level {
+    key: String,
+    value: f64,
+    is_null: bool,
+    label: String,
 }
 
-/// Order distinct facet values by the scale's `input_range` (then any
-/// present-but-unlisted values, sorted), or a numeric-aware ascending sort when
-/// there is no scale/range. Reversed when the scale sets `reverse => true`.
-fn order_by_scale(mut distinct: Vec<String>, scale: Option<&Scale>) -> Vec<String> {
+/// Distinct facet levels present in the data, ordered per the facet scale and
+/// labelled for the strip.
+fn ordered_levels(spec: &Plot, df: &DataFrame, internal_aes: &str) -> Result<Vec<Level>> {
+    let col = naming::aesthetic_column(internal_aes);
+    let keys = column_to_strings(df, &col)?;
+    // The numeric form of the same column, for the binned join. A text facet
+    // column can't cast; `value` is only read for binned scales.
+    let values = column_to_f64(df, &col).unwrap_or_else(|_| vec![f64::NAN; keys.len()]);
+    // `column_to_strings` renders NULL as "", indistinguishable from a genuine
+    // empty category, so read the null bitmap directly.
+    let array = df.column(&col)?;
+
+    let mut seen = HashSet::new();
+    let mut distinct: Vec<Level> = Vec::new();
+    for (i, key) in keys.iter().enumerate() {
+        if seen.insert(key.clone()) {
+            distinct.push(Level {
+                key: key.clone(),
+                value: values[i],
+                is_null: array.is_null(i),
+                label: String::new(),
+            });
+        }
+    }
+
+    let scale = spec.find_scale(internal_aes);
+    let mut ordered = order_levels(distinct, scale);
+    for level in &mut ordered {
+        level.label = facet_label(scale, level);
+    }
+    Ok(ordered)
+}
+
+/// Order distinct facet levels, mirroring the Vega-Lite writer's
+/// `resolve_facet_ordering`: a binned facet sorts by its (numeric) bin centre;
+/// everything else follows the scale's `input_range`, then any present-but-unlisted
+/// values sorted numeric-aware ascending. Reversed when the scale sets
+/// `reverse => true`.
+fn order_levels(mut distinct: Vec<Level>, scale: Option<&Scale>) -> Vec<Level> {
     let reverse = scale
         .map(|s| {
             matches!(
@@ -187,25 +219,34 @@ fn order_by_scale(mut distinct: Vec<String>, scale: Option<&Scale>) -> Vec<Strin
         })
         .unwrap_or(false);
 
-    let mut ordered = match scale.and_then(|s| s.input_range.as_ref()) {
-        Some(range) => {
-            let order: Vec<String> = range.iter().map(element_to_string).collect();
-            let mut ranked: Vec<String> = order
-                .iter()
-                .filter(|o| distinct.contains(o))
-                .cloned()
-                .collect();
-            let mut extra: Vec<String> = distinct
-                .into_iter()
-                .filter(|d| !order.contains(d))
-                .collect();
-            sort_values(&mut extra);
-            ranked.extend(extra);
-            ranked
-        }
-        None => {
-            sort_values(&mut distinct);
-            distinct
+    let mut ordered = if is_binned(scale) {
+        // Bin centres sort naturally; NULL (censored) panels go last.
+        distinct.sort_by(|a, b| match (a.value.is_finite(), b.value.is_finite()) {
+            (true, true) => a.value.total_cmp(&b.value),
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => Ordering::Equal,
+        });
+        distinct
+    } else {
+        match scale.and_then(|s| s.input_range.as_ref()) {
+            Some(range) => {
+                let order: Vec<String> = range.iter().map(element_to_string).collect();
+                let (mut ranked, mut extra): (Vec<Level>, Vec<Level>) = (Vec::new(), Vec::new());
+                for key in &order {
+                    if let Some(pos) = distinct.iter().position(|l| &l.key == key) {
+                        ranked.push(distinct.remove(pos));
+                    }
+                }
+                extra.extend(distinct);
+                sort_levels(&mut extra);
+                ranked.extend(extra);
+                ranked
+            }
+            None => {
+                sort_levels(&mut distinct);
+                distinct
+            }
         }
     };
     if reverse {
@@ -214,18 +255,95 @@ fn order_by_scale(mut distinct: Vec<String>, scale: Option<&Scale>) -> Vec<Strin
     ordered
 }
 
-/// Numeric-aware ascending sort: numeric when every value parses as `f64`,
+/// Numeric-aware ascending sort by key: numeric when every key parses as `f64`,
 /// otherwise lexical.
-fn sort_values(values: &mut [String]) {
-    if values.iter().all(|s| s.parse::<f64>().is_ok()) {
-        values.sort_by(|a, b| {
-            a.parse::<f64>()
-                .unwrap()
-                .partial_cmp(&b.parse::<f64>().unwrap())
-                .unwrap_or(std::cmp::Ordering::Equal)
+fn sort_levels(levels: &mut [Level]) {
+    if levels.iter().all(|l| l.key.parse::<f64>().is_ok()) {
+        levels.sort_by(|a, b| {
+            let (a, b) = (a.key.parse::<f64>().unwrap(), b.key.parse::<f64>().unwrap());
+            a.partial_cmp(&b).unwrap_or(Ordering::Equal)
         });
     } else {
-        values.sort();
+        levels.sort_by(|a, b| a.key.cmp(&b.key));
+    }
+}
+
+/// Whether a facet scale is binned (numeric/temporal facet columns default to it).
+fn is_binned(scale: Option<&Scale>) -> bool {
+    scale
+        .and_then(|s| s.scale_type.as_ref())
+        .map(|st| st.scale_type_kind())
+        == Some(ScaleTypeKind::Binned)
+}
+
+/// Strip text for one facet level, mirroring the Vega-Lite writer's
+/// `build_indexed_facet_label_expr` (discrete + `RENAMING`) and
+/// `build_binned_facet_label_expr` (bin ranges). Computed here from typed values
+/// rather than as a Vega expression over serialized data, so a temporal binned
+/// facet — which Vega-Lite silently fails to match — labels correctly.
+fn facet_label(scale: Option<&Scale>, level: &Level) -> String {
+    // NULL keys as the literal string "null", matching ggsql's RENAMING key for
+    // a null level (`RENAMING null => 'The rest'`).
+    if level.is_null {
+        return match scale.and_then(|s| s.label_mapping.as_ref()) {
+            Some(mapping) => match mapping.get("null") {
+                Some(Some(label)) => label.clone(),
+                Some(None) => String::new(),
+                None => "null".to_string(),
+            },
+            None => "null".to_string(),
+        };
+    }
+    if is_binned(scale) {
+        // The column carries the bin centre; label it with the bin's range.
+        let bins = scale.map(super::scales::binned_bins).unwrap_or_default();
+        if let Some(i) = super::scales::bin_at_centre(&bins, level.value) {
+            return bins[i].label.clone();
+        }
+        return level.key.clone();
+    }
+    discrete_label(scale, level)
+}
+
+/// A discrete/ordinal level's label: the `RENAMING` override for its domain
+/// value, an empty strip when suppressed, else the raw value.
+fn discrete_label(scale: Option<&Scale>, level: &Level) -> String {
+    let Some(scale) = scale else {
+        return level.key.clone();
+    };
+    let Some(mapping) = scale.label_mapping.as_ref() else {
+        return level.key.clone();
+    };
+    // `label_mapping` is keyed on the domain element's `to_key_string()`, which
+    // can differ from the column's arrow-cast text (e.g. "5" vs "5.0"), so find
+    // the matching domain element first.
+    let key = scale
+        .input_range
+        .as_ref()
+        .and_then(|range| {
+            range
+                .iter()
+                .find(|e| element_matches(e, level))
+                .map(|e| e.to_key_string())
+        })
+        .unwrap_or_else(|| level.key.clone());
+    match mapping.get(&key) {
+        Some(Some(label)) => label.clone(),
+        Some(None) => String::new(),
+        None => level.key.clone(),
+    }
+}
+
+/// Whether a domain element denotes the same value as this level: by data-space
+/// string form first, then numerically (a `DOUBLE` column's `"5.0"` still matches
+/// `Number(5.0)`).
+fn element_matches(element: &ArrayElement, level: &Level) -> bool {
+    if element_to_string(element) == level.key {
+        return true;
+    }
+    match element.to_f64() {
+        Some(n) => level.value.is_finite() && n == level.value,
+        None => false,
     }
 }
 

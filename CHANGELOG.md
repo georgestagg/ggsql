@@ -1,5 +1,37 @@
 ## [Unreleased]
 
+### Added
+
+- New `HephaestusWriter` renders a plot to a PNG raster image via
+  [hephaestus](https://github.com/posit-dev/hephaestus), behind a new
+  off-by-default `hephaestus` feature (`--writer hephaestus` in the CLI). Covers
+  every layer type except `arrow`, all scale types and transforms, multi-layer
+  plots, `FACET` (Wrap/Grid, fixed and free scales), Cartesian/polar/map
+  projections, spatial geometry, and plot chrome (axes, legends, facet strips,
+  title/subtitle/caption). Requires a working GPU adapter — hardware or software,
+  e.g. lavapipe — at render time.
+- `LABEL caption => '...'` now renders. It has no Vega-Lite equivalent and is
+  ignored by that writer, but the hephaestus writer places it below the plot.
+- `LABEL title`/`subtitle` are rendered by the hephaestus writer, spanning the
+  whole figure for faceted plots.
+
+### Fixed
+
+- The hephaestus writer's `size`, `shape` and `linetype` legends drew empty
+  swatches next to their labels; the key glyphs are now painted (in the layer's
+  constant color, or a neutral grey when the color aesthetic is itself mapped).
+
+### Changed
+
+- The hephaestus writer draws a boxplot's median line at the layer's resolved
+  `linewidth` (default 1.0) instead of a fixed 1.5, matching the Vega-Lite
+  writer's median tick. `linewidth` and `linetype` now style every part of a
+  `boxplot` (box, whiskers, median, outlier markers) and both edges of a
+  `violin`, so `SETTING linewidth => 3, linetype => 'dashed'` is honored.
+- The hephaestus writer labels binned facet strips with the bin's range
+  (`2500 – 3500`, or `≥ 5500` for a squished terminal bin) instead of the raw bin
+  midpoint, and applies `RENAMING` to discrete facet strips.
+
 ## 0.4.1 - 2026-06-22
 
 ### Changed

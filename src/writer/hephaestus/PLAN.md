@@ -6,8 +6,11 @@ backend-agnostic 2D scene renderer with a high-level grammar-of-graphics plot
 API. Intended as the eventual default writer, replacing the Vega-Lite JSON
 writer.
 
-Status: **planning**. No code written yet. This document is the design of
-record; update it as decisions land.
+Status: **implemented** behind the non-default `hephaestus` feature — all geoms
+except `arrow`, all scale types, multi-layer, faceting (fixed + free), Cartesian
+/ Polar / Map projections, spatial, and plot chrome (titles, axes, legends,
+strips). This document is the design of record and the phase log; §9 lists the
+work deliberately deferred.
 
 ## 1. Why this is a good fit
 
@@ -345,9 +348,8 @@ geoms sharing the `pos1`/`pos2` scales.
   categories); all eyeballed. 16 writer tests pass; default + 1.86 builds, fmt,
   clippy clean.
 
-Known limitations: boxplot stroke/linewidth/linetype/opacity are constant (only
-`fill` maps); outliers/edge points clip at the panel boundary (standing
-no-expansion gap). Composite geoms remain single-panel/Cartesian.
+Known limitations: outliers/edge points clip at the panel boundary (standing
+no-expansion gap).
 
 ## Gap-closing — status: implemented
 
@@ -430,15 +432,15 @@ Closing the audit gaps in implemented geoms, most-visible first.
   grouped-line/dodged-bar legends, expanded point plot eyeballed; 23 writer tests;
   default + 1.86 builds, fmt, clippy clean.
 
-Remaining geom gaps: text `stroke` (no hephaestus text-outline channel — upstream
-deficiency); calendar-native temporal axes (numeric axes with ggsql's formatted
-break labels work today; date-native ticks are a larger follow-up, not niche).
+Remaining geom gap: calendar-native temporal axes (numeric axes with ggsql's
+formatted break labels work today; date-native ticks are a larger follow-up, not
+niche).
 
 ## Multi-layer — status: implemented
 
 The writer renders **N layers** into one shared panel (`validate` allows ≥1
-layer; FACET still rejected, non-Cartesian projections now supported — see
-below). `write` loops over `spec.layers`, building each layer's geom into one
+layer; non-Cartesian projections supported — see below; faceting landed in the
+Phase 4 section). `write` loops over `spec.layers`, building each layer's geom into one
 `HPlot`; geoms draw in DRAW order (= z-order).
 
 The enabling change is a principle correction: **the writer never computes its
@@ -469,7 +471,8 @@ writer too.
 
 Projections (Phase 5): `projection.rs` dispatches on `CoordKind` — Cartesian
 (clip/aspect-ratio + rails), Polar (`HProj::Polar` with start/end/inner + angular/
-radial rings), Map (stub). Polar renders **truthfully**: pos1→radius, pos2→theta
+radial rings), and Map (implemented in the Phase 5b section below). Polar renders
+**truthfully**: pos1→radius, pos2→theta
 (matching the VL writer), so a stacked bar becomes a correct pie/donut with the
 right slice proportions, fills, and angular axis. `start`/`end` are degrees
 clockwise from 12 o'clock (`end` defaults to `start + 360°`, so setting only
@@ -495,12 +498,10 @@ Minor cosmetic (deferred): a plain pie shows a tiny centre hole because the dumm
 bar occupies a `width` band (radius ~0.05–0.95) rather than the full 0–1 radius;
 proportions/angles are unaffected.
 
-Known issue (deferred): `color AS <var>` maps **both** fill and stroke to the
-variable → two separate scales (`fill`, `stroke`) whose legends no longer merge
-(different `domain_scale`), so a filled-dot legend and a hollow-dot legend both
-show. The old `Wiring.shared_scales` collapsed these; recovering it needs either
-a hephaestus legend-merge across scales with equal domains, or reintroducing a
-small shared-source map.
+Resolved since: `color AS <var>` maps **both** fill and stroke to the variable →
+two separate scales (`fill`, `stroke`) whose legends used to render twice. This is
+now collapsed upstream by hephaestus's `collapse_legends` (see the Faceting
+section) — no writer-side shared-source map needed.
 
 **Confirmed shared with the VL writer (not a regression here):** ggsql's range
 expansion runs in linear data space then clips to the transform's valid domain,
@@ -586,16 +587,7 @@ scales). Works under Cartesian, Polar, and Map projections.
   needed beyond registering both legends (which it already does) with the default
   `merge` flag on.
 
-Known limitations (refinements, for upstream / later):
-- **No title/subtitle/caption wired.** This writer doesn't render plot
-  title/subtitle/caption yet (true for the single-panel case too). hephaestus
-  exposes `PlotComposition::{title,subtitle,caption,axis_title}` for the
-  composition-spanning case, so this is now a straightforward follow-up — read the
-  ggsql `Labels` and set them on the composition.
-- **Strip label formatting** uses the facet value's string form (correct for
-  discrete). Binned range labels and discrete RENAMING parity with the VL
-  writer's `build_*_facet_label_expr` are a refinement.
-- Free binned dimensions fall back to a plain continuous per-panel scale.
+Known limitations (refinements, for upstream / later): see §9.
 
 ## Spatial / Map (Phase 5b) — status: implemented
 
@@ -657,6 +649,128 @@ writer only decodes and frames — no data is recomputed. Mirrors the VL
 Known limitations (deferred, matching VL/PLAN precedent):
 - No writer-side reprojection (by design — ggsql projects in SQL).
 
+## Chrome + composite polish — status: implemented
+
+Closing the named feature gaps left by the phases above: plot titles, text
+outlines, composite outline styling, and facet strip labelling.
+
+- **Plot title / subtitle / caption** (`mod.rs`, `wiring::plot_label`): read from
+  the `LABEL` clause and set on the **`PlotComposition`**, not the per-panel plots
+  — one label spans the whole figure, and the unfaceted 1×1 case needs no branch
+  (a plot-level title would resolve to the same layout row and be painted over).
+  `Some(None)` (`LABEL title => NULL`) suppresses; literal `\n` becomes a real
+  newline, mirroring the VL writer's `split_label_on_newlines`. `caption` is new
+  capability — the VL writer never implemented it (`doc/syntax/clause/label.qmd`
+  updated accordingly).
+- **Text outlines** (`geom/text.rs`): ggsql's `stroke` → hephaestus
+  `"text_stroke"`, via the new `wiring::resolve_optional_color` so an unmapped
+  `stroke` (the ggsql default for text is `Null`) leaves the channel unset and
+  draws no outline. Outline *width* is hephaestus's theme default (1pt): ggsql's
+  text geom has no `linewidth` aesthetic and neither does VL's text mark, so this
+  is exact parity.
+- **`MaterialSource`** (`wiring.rs`) generalizes the old `ColorSource` over
+  `RangeKind::{Color, Number, Linetype}`, dispatching the same three ways as
+  `wire_material` (Literal / data-mapped column + scale + legend / identity-or-
+  annotation raw) but returning a value that can be applied to a **row subset** —
+  which whole-column `wire_material` can't do, and composites need.
+  `resolve_color` is now a thin wrapper over it.
+- **boxplot / violin outline styling**: `linewidth` and `linetype` are resolved
+  once per layer and applied to every component (box rect, whiskers, median;
+  both ribbon edges via the `2`-suffixed far-edge channels), matching the VL
+  writer, which puts `strokeWidth`/`strokeDash` in the boxplot's *shared*
+  encoding. The median's hardcoded `linewidth = 1.5` is gone — VL's median tick
+  carries no explicit thickness, so the resolved `linewidth` (default 1.0) is
+  parity. `PointGeom` has no dash channel, so outliers take width only.
+  `opacity` stays retargeted to the box's fill, mirroring VL's `opacity` →
+  `fillOpacity` for a fill-bearing geom.
+- **Facet strip labels** (`facet.rs`) now match the VL writer. `ordered_levels`
+  returns a `Level { key, value, is_null, label }`: `key` is the arrow-cast string
+  that selects the panel's rows (so `Panel.facet1`/`facet2` and `panel_dataframe`
+  are unchanged and self-consistent), `label` is the strip text.
+  - *Discrete*: `label_mapping` (`RENAMING`) applied per
+    `build_indexed_facet_label_expr` — renamed / suppressed → empty strip /
+    absent → raw value. A NULL level keys as the literal `"null"`, so
+    `RENAMING null => 'The rest'` works. The domain element is matched by
+    data-space string first, then numerically, because `label_mapping` is keyed on
+    `to_key_string()` (`"5"`) which can differ from the column's cast text (`"5.0"`).
+  - *Binned*: the facet column carries the **bin centre**, so
+    `scales::{binned_bins, bin_at_centre}` join it back to its bin and label it
+    with the bin's range — `"lower – upper"` (en dash), per-edge `RENAMING`
+    overrides, and `"< upper"` / `"≥ lower"` (or `≤` / `>` when
+    `closed => 'right'`) for a terminal bin whose outer edge label is suppressed
+    by `oob => 'squish'`. Verified byte-identical to the VL writer's `labelExpr`
+    for the same queries. The join is numeric (`column_to_f64`, whose arrow cast
+    bridges `Date32`/`Timestamp` in exactly `ArrayElement::to_f64`'s units), which
+    is why the temporal case works here while **VL silently fails it** (its
+    midpoint-string comparison never matches the serialized form).
+  - Ordering mirrors VL: a binned facet sorts by bin centre (VL's
+    `resolve_facet_ordering` early-returns for Binned), everything else by
+    `input_range` then numeric-aware ascending, then `reverse`.
+  - A suppressed label is `Some("")`, not `None`, so hephaestus still reserves the
+    strip slot and sibling panels stay aligned.
+- **Free binned facet dimensions** (`scales::free_binned_scale`): a free binned
+  dimension now gets a real `scale::binned` per panel instead of degrading to
+  continuous. It keeps **ggsql's** global bin edges, narrowed to the window of bins
+  the panel's data occupies, labelled with ggsql's own edge labels for that window.
+  Edges and domain narrow *together* because a hephaestus binned scale keeps its
+  edges in the output range and derives band width as `1/(edges-1)` — shrinking only
+  the domain would leave every bar a global bin-width wide, hanging off the panel.
+- **Binned axis ticks stay hephaestus's job.** `apply_breaks` hands a binned scale
+  ggsql's break **edges** with ggsql's edge labels — composite `"lower – upper"`
+  range labels belong to keyed legends and facet strips, not axes (the same split
+  the VL writer makes). Placing an edge break correctly is hephaestus's
+  responsibility, and it now does: `486390b` added `Scale::map_break`, which
+  positions a binned break linearly in the domain instead of through `binned_map`
+  (which still sends *data* to bin centres, as it should). Edge labels now sit on
+  their boundaries with no collision.
+- Verified: 62 writer tests (10 exact-text `facet_strips_*` assertions that need no
+  GPU, 5 `binned_bins`/`bin_at_centre` unit tests, and `renders_*` smoke tests for
+  titles, text stroke, composite widths/dashes, binned + free-binned facets);
+  eyeballed titles (1×1 and faceted), red/white text outlines, dashed+thick
+  boxplot and violin, binned facet strips (`2500 – 3500`, plus a `null` panel),
+  free binned panels, and the collision-free fixed binned axis. fmt + clippy clean;
+  feature, default (hephaestus absent) and `cargo +1.86` builds all pass.
+
+**hephaestus dep bumped** to rev `9c2462e`, which fixes two bugs this work
+surfaced (both reported upstream with standalone repros, both verified here):
+
+1. `486390b` — a binned scale's breaks (its bin **edges**) were positioned through
+   `binned_map`, so they rendered at bin *centres* and edges sharing a bin collided
+   (for edges `2500…6500` the axis showed `2500 3500 4500 6500`, losing `5500`).
+   Fixed by the new `Scale::map_break`, used by axis chrome.
+2. `9c2462e` — a `Binned` scale kept its bin edges in the **output range**, so
+   attaching a palette destroyed them: `range_colors` made every `map` return
+   `Null` (marks silently vanished — `SCALE BINNED color` drew an empty panel) and
+   `range_numbers` silently reinterpreted the palette as the edge list. Fixed by
+   giving bins their own field (`Scale::{with_bins, set_bins, bins}`), so a binned
+   scale is now usable as a material scale, its palette indexed by bin.
+
+3. `a90dc84` — `collapse_legends` only merged `LegendBody::Stack` bodies, so two
+   colorbars never collapsed. ggsql maps `color AS <var>` onto both `fill` and
+   `stroke`, so every continuous *or* binned color scale drew **two identical
+   colorbars**. Now merged when both bodies paint the same gradient
+   (`colorbar_gradients_agree` + `Scale::visual_equivalent_to`); genuinely distinct
+   legends (e.g. a `color` colorbar beside a `size` legend) still stay separate.
+   No writer change needed — collapse runs at render.
+
+- **Non-color legend keys paint.** A hephaestus legend key only draws what it is
+  told to draw, so `LegendKeySpec::point().scaled("size", …)` with no color
+  rendered *empty swatches* beside correct labels — every `size` / `shape` /
+  `linetype` legend was blank (found while verifying the colorbar merge; it long
+  predated it). `material_legend` now adds `.fixed("fill", …)` (`"stroke"` for a
+  line key) whenever the scaled channel isn't itself a color, using
+  `wiring::key_color`: the layer's constant `fill` (or `stroke`), else a neutral
+  grey — mirroring hephaestus's own `examples/legends.rs`.
+  The subtlety worth remembering: a *data-mapped* color aesthetic must be skipped,
+  not read. Its column holds domain values, and `column_to_colors` maps an
+  unparseable cell to `Color::BLACK`… except a continuous fill column's first row
+  parsed as a **transparent** color (alpha 0), so the key stayed invisible in
+  exactly the colorbar-plus-size case. `wiring::is_data_mapped` (extracted from
+  `resolve_material`, now shared by both) is the guard.
+
+Newly found, **not** fixed here (see §9): a data-mapped `linewidth` on a
+boxplot/violin is rejected by ggsql itself.
+
 ## 8. Key source references
 
 ggsql:
@@ -678,7 +792,125 @@ hephaestus (`~/GitHub/hephaestus`):
 - `src/plot/projection.rs` — `Projection::{Cartesian, Polar, Custom}`.
 - `src/composition/` — `Composition`, `Patch`, `grid`/`beside`/`stack`, `Slot`.
 - `src/backend/vello/` — `VelloRenderer`; `src/png.rs` — PNG writer.
-</content>
-</invoke>
-<invoke name="AskUserQuestion">
-<parameter name="questions">[{"question":"How should ggsql depend on hephaestus while both are pre-1.0?","header":"Dependency mode","multiSelect":false,"options":[{"label":"Path dep (../hephaestus)","description":"Easiest for co-development; both crates evolve together locally. Not reproducible on CI/other machines without the sibling checkout."},{"label":"Pinned git rev","description":"Reproducible everywhere, CI-friendly. Requires bumping the rev to pick up hephaestus changes."}]},{"question":"What should the writer's Output type be?","header":"Output type","multiSelect":false,"options":[{"label":"PNG bytes only (Vec<u8>)","description":"Simplest; matches the existing text/bytes Writer pattern. Callers decode if they need pixels."},{"label":"Also expose raw RGBA8","description":"A RasterImage { width, height, rgba } struct so wasm/embedders can present without re-decoding a PNG."}]},{"question":"What's the right first deliverable to build after this plan?","header":"First milestone","multiSelect":false,"options":[{"label":"Phase 1 spike only","description":"Single point layer, Cartesian, fixed scale → PNG. Proves the dep/MSRV/GPU path before investing further."},{"label":"Through Phase 3","description":"Full single-panel coverage: all scales, axes, legends, and all geoms. Bigger first chunk, no faceting/projections yet."}]},{"question":"What's the ambition for this effort?","header":"Ambition","multiSelect":false,"options":[{"label":"Land gated alternative, promote later","description":"Ship behind the hephaestus feature, iterate to parity over time, flip the default in a later effort."},{"label":"Drive to parity + flip default","description":"Treat full Vega-Lite parity and becoming the default writer as the goal of this effort."}]}]
+
+## 9. Deferred
+
+Everything known to be missing or wrong, deliberately not being worked on. Kept
+here so it survives between efforts.
+
+### Release plumbing (blocks publishing)
+
+- **`hephaestus` is a pinned git dep** (`src/Cargo.toml`) on an unpublished
+  `0.0.1` crate. crates.io rejects git dependencies **even when optional**, so
+  ggsql cannot be published while this dep exists in that form. This is the one
+  item that blocks a release rather than polish.
+- No `src/writer/hephaestus/CLAUDE.md` (planned in §5). This document is doing
+  that job and is a phase log, not an architecture doc.
+- `src/CLAUDE.md` is stale: no `hephaestus` row in the feature table, and the
+  `writer/` section still says "Only Vega-Lite is implemented today".
+- CLI: `--writer` help text only advertises `vegalite`; no output-extension
+  routing; no flags for width/height/dpi/background, so only one hardcoded size
+  is reachable.
+- `doc/` doesn't mention raster output at all.
+- Default-writer switchover criteria still undecided (Decision 4).
+
+### Correctness risks
+
+- **Transparent backgrounds are probably wrong.** `HephaestusWriter::background()`
+  accepts any color, but `render_to_buffer` returns **premultiplied** RGBA and the
+  PNG encode path has no un-premultiply step.
+- **Legends are captured from the first panel only**, assuming every panel yields
+  identical legends. True under fixed scales; unverified for a free-scale facet
+  that also maps a material aesthetic.
+- **Log scales get no domain expansion** — under a non-identity transform the
+  writer deliberately falls back to the raw data extent (see the ggsql-core item
+  below).
+- **No axis label thinning or rotation.** hephaestus's `Axis` is
+  `rail(scale, placement)` + `title` only, with ticks coming solely from the
+  scale, so long tick labels overlap in narrow facet panels (visible with binned
+  range labels, and equally with long categorical labels).
+
+### Feature gaps
+
+- `arrow` geom — the only unsupported `GeomType` (deliberate).
+- Theming: ggsql has no theme concept; the writer uses hephaestus's default and
+  exposes no selection.
+- Calendar-native temporal axes (numeric axes with ggsql's formatted break labels
+  work today).
+- Diagonal rules ignore `linetype` (`geom/segment.rs::build_diagonal` sets only
+  stroke/linewidth/opacity).
+- **`densified` segment/ribbon under `PROJECT`**: ggsql expands a projected
+  segment into per-vertex rows and remaps `pos1end`→`pos1`, which the VL writer
+  handles by switching to a `line` mark (`vegalite/layer.rs:1589-1624`). The
+  hephaestus path would draw zero-length segments; `area`/`ribbon` have the same
+  hole.
+- boxplot `side` and `hinge` parameters are unimplemented (the VL writer has both).
+- A `linewidth` aesthetic on ggsql's Text geom would let text outline width be set
+  (a core + doc change; the outline itself works).
+
+### Architectural debt — writer doing work ggsql should own
+
+The principle is "ggsql owns all scale domains; the writer never computes
+extents". Two scoped exceptions remain, both of which would disappear if ggsql
+resolved per-panel domains and spatial position scales:
+
+- **Free facet scales**: `scales::{free_position_scale, free_binned_scale}` compute
+  per-panel domains (and select the per-panel bin window).
+- **Spatial `pos1`/`pos2`**: synthesized in `mod.rs` from `computed["bbox"]` (or
+  the geometry extent) because ggsql resolves no position scales for a spatial
+  layer.
+
+### Upstream ggsql-core (each also fixes the Vega-Lite writer)
+
+- **Range expansion runs in linear data space then clips** to the transform's
+  valid domain, so a log domain collapses to `[f64::MIN_POSITIVE, max]` and its
+  breaks explode. Fix: expand in transform space.
+- **`bar` on a numeric primary axis stays continuous** (no `pos1end`), so
+  band-fraction bars get no width; VL hits the same wall (`bandwidth('x')` is 0).
+- **A data-mapped `linewidth` on a boxplot/violin is rejected by ggsql**: the stat
+  drops the column, so `linewidth AS w` fails validation for *both* writers
+  ("Column `linewidth` … does not exist"). Grouping aesthetics (fill/stroke)
+  survive; scalar ones don't.
+- `Scale::break_labels()` misses `label_mapping` for numeric discrete/ordinal
+  domains (`to_json()` `"5.0"` vs `to_key_string()` `"5"`).
+- VL's `build_discrete_facet_label_expr` is unreachable dead code and iterates a
+  `HashMap` nondeterministically — deletion candidate.
+- VL's DateTime/Time binned facet strips are broken (its midpoint-string
+  comparison never matches the serialized data); the hephaestus writer computes
+  these from typed values and is correct.
+
+### Upstream hephaestus
+
+- `png::write_png` is file-only — no in-memory encode, so every host
+  re-implements byte encoding.
+- `render_to_buffer` returns premultiplied RGBA (see Correctness risks).
+- No scale-level domain expansion / "nice" padding.
+- Binned scales keep bin edges in the output range, so they can't also carry a
+  color/size range (see the binned-material bug above).
+- Range labels (`"lower – upper"`) would be the right presentation for a binned
+  scale driving a **keyed** legend (size / shape), where the writer currently passes
+  ggsql's edge labels. Not urgent: binned color renders as a colorbar, where edge
+  labels on the band boundaries are correct.
+- Chrome text (titles, axis labels, strip labels) can't be outlined:
+  `TextElement` has no stroke field; `text_stroke` is a geom channel only.
+- The `text` feature's parley shaper is documented as scaffolding "meant to be
+  replaced by the host".
+- `src/scales/` docs still claim transforms are Identity-only — stale.
+
+### Standing constraints (accepted)
+
+- **Raster only.** `vello`/wgpu is the sole working backend; `svg`/`pdf`/`blend2d`
+  are declared placeholders. No vector output.
+- **Needs a GPU adapter at render time.** CI installs lavapipe; this operational
+  footgun isn't documented anywhere a user would find it.
+- **MSRV split** (hephaestus 1.88 vs ggsql's CRAN-locked 1.86) — handled by
+  gating, but it means this writer is not viable for the R/CRAN target and is not
+  the wasm default.
+- hephaestus is pre-1.0; the pinned rev needs periodic bumping.
+
+### Testing
+
+The writer's tests are render-succeeds smoke tests plus exact-text assertions for
+strip labels and bin labelling, backed by manual eyeballing. §6 planned
+**snapshot PNG tests** and they don't exist — there is no automated protection
+against visual regression, which matters with a moving pinned rev.

@@ -14,7 +14,10 @@ use hephaestus::plot::{Plot as HPlot, RibbonGeom};
 use super::super::channels::{
     aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
 };
-use super::super::wiring::{constant_number, dodge_offsets, resolve_color, Ctx, LegendKind};
+use super::super::scales::RangeKind;
+use super::super::wiring::{
+    constant_number, dodge_offsets, resolve_color, resolve_material, Ctx, LegendKind,
+};
 use crate::{GgsqlError, Result};
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
@@ -80,9 +83,33 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         rgb8(60, 60, 60),
         LegendKind::Rect,
     )?;
-    // The ribbon's two edges share the stroke scale (`stroke2` is the far edge).
-    if let Some(name) = stroke.scale_name() {
-        plot.set_binding("stroke2", name);
+    // Outline width + dash pattern, applied to both ribbon edges.
+    let linewidth = resolve_material(
+        ctx,
+        plot,
+        "linewidth",
+        "linewidth",
+        RangeKind::Number,
+        LegendKind::Line,
+    )?;
+    let linetype = resolve_material(
+        ctx,
+        plot,
+        "linetype",
+        "linetype",
+        RangeKind::Linetype,
+        LegendKind::Line,
+    )?;
+    // The ribbon's two edges share each outline scale (the `2` suffix is the far
+    // edge), so a data-mapped stroke/width/dash styles both sides alike.
+    for (source, channel) in [
+        (Some(&stroke), "stroke2"),
+        (linewidth.as_ref(), "linewidth2"),
+        (linetype.as_ref(), "linetype2"),
+    ] {
+        if let Some(name) = source.and_then(|s| s.scale_name()) {
+            plot.set_binding(channel, name);
+        }
     }
 
     let mut b = RibbonGeom::builder();
@@ -95,6 +122,18 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     fill.apply(&mut b, "fill", &order);
     stroke.apply(&mut b, "stroke", &order);
     stroke.apply(&mut b, "stroke2", &order);
+    // `RibbonGeom` resolves its outline channels once per mark (from the mark's
+    // first row), so a data-mapped width/dash varies per violin, not per vertex.
+    for (source, channels) in [
+        (linewidth.as_ref(), ["linewidth", "linewidth2"]),
+        (linetype.as_ref(), ["linetype", "linetype2"]),
+    ] {
+        if let Some(source) = source {
+            for channel in channels {
+                source.apply(&mut b, channel, &order);
+            }
+        }
+    }
     b.set("alpha", constant_number(ctx, "opacity", 1.0));
     plot.add_geom(b.build());
 

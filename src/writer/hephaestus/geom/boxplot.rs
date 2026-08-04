@@ -5,14 +5,16 @@
 //! and outliers (`PointGeom`). All components share the `pos1`/`pos2` scales.
 
 use hephaestus::color::rgb8;
+use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
 use hephaestus::plot::{Plot as HPlot, PointGeom, RectGeom, SegmentGeom};
 
 use super::super::channels::{
     aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
 };
+use super::super::scales::RangeKind;
 use super::super::wiring::{
-    band_half_width, constant_number, constant_string, dodge_offsets, resolve_color, Ctx,
-    LegendKind,
+    band_half_width, constant_number, constant_string, dodge_offsets, resolve_color,
+    resolve_material, Ctx, LegendKind, MaterialSource,
 };
 use crate::{GgsqlError, Result};
 
@@ -67,6 +69,28 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         rgb8(60, 60, 60),
         LegendKind::Rect,
     )?;
+    // Outline width + dash pattern, resolved the same way and applied to every
+    // component — the Vega-Lite writer puts `strokeWidth`/`strokeDash` in the
+    // boxplot's shared encoding, so all five marks pick them up.
+    let linewidth = resolve_material(
+        ctx,
+        plot,
+        "linewidth",
+        "linewidth",
+        RangeKind::Number,
+        LegendKind::Line,
+    )?;
+    let linetype = resolve_material(
+        ctx,
+        plot,
+        "linetype",
+        "linetype",
+        RangeKind::Linetype,
+        LegendKind::Line,
+    )?;
+    // `opacity` retargets to the box's fill, mirroring the Vega-Lite writer
+    // (`opacity` → `fillOpacity` for a fill-bearing geom); the stroke-only
+    // components have no fill to fade.
     let alpha = constant_number(ctx, "opacity", 1.0);
     // Box width (band fraction, dodge-aware) + per-row dodge offsets.
     let offsets = dodge_offsets(df, "pos1offset");
@@ -83,6 +107,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set("x2_band", shift(&offsets, &box_i, half));
         fill.apply(&mut b, "fill", &box_i);
         stroke.apply(&mut b, "stroke", &box_i);
+        outline(&mut b, &linewidth, linetype.as_ref(), &box_i);
         b.set("fill_opacity", alpha);
         plot.add_geom(b.build());
     }
@@ -97,6 +122,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set("x_band", shift(&offsets, &whisk_i, 0.0));
         b.set("x2_band", shift(&offsets, &whisk_i, 0.0));
         stroke.apply(&mut b, "stroke", &whisk_i);
+        outline(&mut b, &linewidth, linetype.as_ref(), &whisk_i);
         plot.add_geom(b.build());
     }
 
@@ -110,7 +136,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set("x_band", shift(&offsets, &med_i, -half));
         b.set("x2_band", shift(&offsets, &med_i, half));
         stroke.apply(&mut b, "stroke", &med_i);
-        b.set("linewidth", 1.5_f64);
+        outline(&mut b, &linewidth, linetype.as_ref(), &med_i);
         plot.add_geom(b.build());
     }
 
@@ -122,12 +148,30 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set("y", pick(&p2, &out_i));
         b.set("x_band", shift(&offsets, &out_i, 0.0));
         stroke.apply(&mut b, "stroke", &out_i);
+        // `PointGeom` has no dash pattern — a marker outline can't be dashed.
+        outline(&mut b, &linewidth, None, &out_i);
         b.set("size", constant_number(ctx, "size", 3.0));
         b.set("shape", constant_string(ctx, "shape", "circle"));
         plot.add_geom(b.build());
     }
 
     Ok(())
+}
+
+/// Apply the layer's resolved outline width and dash pattern to one component's
+/// rows. `linetype` is `None` for geoms with no dash channel.
+fn outline<G: BuildableGeom>(
+    b: &mut GeomBuilder<G>,
+    linewidth: &Option<MaterialSource>,
+    linetype: Option<&MaterialSource>,
+    idx: &[usize],
+) {
+    if let Some(lw) = linewidth {
+        lw.apply(b, "linewidth", idx);
+    }
+    if let Some(lt) = linetype {
+        lt.apply(b, "linetype", idx);
+    }
 }
 
 fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {

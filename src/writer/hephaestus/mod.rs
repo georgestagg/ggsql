@@ -101,6 +101,20 @@ impl Writer for HephaestusWriter {
         let mut view =
             PlotComposition::new(&composition).shape_registry(ShapeRegistry::with_builtins());
 
+        // Plot title/subtitle/caption from the LABEL clause. These live on the
+        // composition, not the per-panel plots, so one label spans the whole
+        // figure — which is also correct for the unfaceted 1x1 case (a plot-level
+        // title would resolve to the same layout row and be painted over).
+        if let Some(text) = wiring::plot_label(spec, "title") {
+            view = view.title(text);
+        }
+        if let Some(text) = wiring::plot_label(spec, "subtitle") {
+            view = view.subtitle(text);
+        }
+        if let Some(text) = wiring::plot_label(spec, "caption") {
+            view = view.caption(text);
+        }
+
         // Register the fixed (shared) scales once, globally. Every panel binds
         // its position channels to these names, giving fixed-scale faceting.
         for scale in &spec.scales {
@@ -373,6 +387,26 @@ mod tests {
         HephaestusWriter::new(640, 480, 96.0).render(&spec)
     }
 
+    /// The panels' `(top, right)` strip labels, in panel order. Exercises the
+    /// facet layout and labelling without rendering, so it needs no GPU.
+    fn strips(query: &str) -> Vec<(Option<String>, Option<String>)> {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let spec = reader.execute(query).unwrap();
+        let (_, panels) = facet::build_panels(spec.plot(), spec.data()).unwrap();
+        panels
+            .iter()
+            .map(|p| (p.strip_top.clone(), p.strip_right.clone()))
+            .collect()
+    }
+
+    /// Just the top strip labels, in panel order.
+    fn top_strips(query: &str) -> Vec<String> {
+        strips(query)
+            .into_iter()
+            .map(|(top, _)| top.unwrap_or_default())
+            .collect()
+    }
+
     /// Assert a PNG was produced, tolerating headless CI with no GPU adapter.
     fn assert_png_or_skip(result: Result<Vec<u8>>) {
         match result {
@@ -410,6 +444,35 @@ mod tests {
             "SELECT 1 AS x, 2 AS y, 10 AS w UNION ALL SELECT 2, 3, 40 \
              UNION ALL SELECT 3, 1, 90 \
              VISUALISE x AS x, y AS y, w AS size DRAW point",
+        ));
+    }
+
+    #[test]
+    fn renders_shape_legend() {
+        // A non-color legend key must be given a color to paint, else the
+        // swatches come out empty next to their labels.
+        assert_png_or_skip(render(
+            "SELECT x, y, g FROM (VALUES (1,2,'a'),(2,3,'b'),(3,1,'c')) t(x,y,g) \
+             VISUALISE x AS x, y AS y, g AS shape DRAW point",
+        ));
+    }
+
+    #[test]
+    fn renders_linetype_legend() {
+        assert_png_or_skip(render(
+            "SELECT x, y, g FROM (VALUES (1,2,'a'),(2,3,'a'),(1,1,'b'),(2,2,'b')) t(x,y,g) \
+             VISUALISE x AS x, y AS y, g AS linetype DRAW line",
+        ));
+    }
+
+    #[test]
+    fn renders_colorbar_beside_size_legend() {
+        // Two distinct scales: a merged colorbar for `color` plus a keyed size
+        // legend whose glyphs fall back to a neutral color (the mapped `fill`
+        // column holds domain values, not a constant to borrow).
+        assert_png_or_skip(render(
+            "SELECT x, y, c, w FROM (VALUES (1,2,10,100),(2,3,50,200),(3,1,90,300)) t(x,y,c,w) \
+             VISUALISE x AS x, y AS y, c AS color, w AS size DRAW point",
         ));
     }
 
@@ -725,6 +788,257 @@ mod tests {
         // boundary + graticules from `computed`.
         assert_png_or_skip(render(
             "VISUALISE FROM ggsql:world DRAW spatial PROJECT TO orthographic",
+        ));
+    }
+
+    /// A 6-row fixture whose `g` is categorical and `v` numeric.
+    const FACET_DATA: &str = "SELECT g, v, y FROM (VALUES \
+         ('a',5,1),('a',7,2),('b',15,3),('b',18,1),('c',25,2),('c',28,3)) t(g,v,y)";
+
+    #[test]
+    fn facet_strips_rename_discrete() {
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET g \
+                 SCALE panel RENAMING 'a' => 'Alpha'"
+            )),
+            vec!["Alpha", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_suppress_discrete() {
+        // A suppressed label leaves an empty strip, keeping panel heights aligned.
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET g \
+                 SCALE panel RENAMING 'b' => NULL"
+            )),
+            vec!["a", "", "c"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_null_level() {
+        // A NULL facet level keys as "null" and is renamable under that key.
+        let data = "SELECT g, v FROM (VALUES ('a',1),(NULL,2)) t(g,v)";
+        assert_eq!(
+            top_strips(&format!(
+                "{data} VISUALISE v AS x, v AS y DRAW point FACET g \
+                 SCALE panel FROM ('a', null)"
+            )),
+            vec!["a", "null"]
+        );
+        assert_eq!(
+            top_strips(&format!(
+                "{data} VISUALISE v AS x, v AS y DRAW point FACET g \
+                 SCALE panel FROM ('a', null) RENAMING null => 'The rest'"
+            )),
+            vec!["a", "The rest"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_ranges() {
+        // A numeric facet is binned; strips show the bin range, not the midpoint.
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+                 SCALE panel SETTING breaks => (0, 10, 20, 30)"
+            )),
+            vec!["0 – 10", "10 – 20", "20 – 30"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_squish() {
+        // `oob => 'squish'` opens the terminal bins: "< upper" / "≥ lower".
+        // Two breaks-interior bins here, both terminal — matches the Vega-Lite
+        // writer's labelExpr for the same query.
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+                 SCALE panel SETTING breaks => (10, 20, 30), oob => 'squish'"
+            )),
+            vec!["< 20", "≥ 20"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_closed_right() {
+        // `closed => 'right'` flips the open-ended terminal symbols.
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+                 SCALE panel SETTING breaks => (10, 20, 30), oob => 'squish', \
+                 closed => 'right'"
+            )),
+            vec!["≤ 20", "> 20"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_edge_renaming() {
+        // RENAMING applies per break edge, before the range label is built.
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+                 SCALE panel SETTING breaks => (0, 10, 20, 30) RENAMING 20 => 'twenty'"
+            )),
+            vec!["0 – 10", "10 – twenty", "twenty – 30"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_reverse() {
+        assert_eq!(
+            top_strips(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+                 SCALE panel SETTING breaks => (0, 10, 20, 30), reverse => true"
+            )),
+            vec!["20 – 30", "10 – 20", "0 – 10"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_binned_temporal() {
+        // Temporal binned facets label as date ranges. Vega-Lite silently fails
+        // this case (its midpoint-string comparison never matches); computing the
+        // label from typed values here avoids that whole class of bug.
+        let data = "SELECT CAST(d AS DATE) AS d, v FROM (VALUES \
+             ('1973-05-04', 1), ('1973-05-20', 2), ('1973-06-08', 3)) t(d, v)";
+        assert_eq!(
+            top_strips(&format!(
+                "{data} VISUALISE v AS x, v AS y DRAW point FACET d \
+                 SCALE panel SETTING breaks => 'month'"
+            )),
+            vec!["1973-05-01 – 1973-06-01", "1973-06-01 – 1973-07-01"]
+        );
+    }
+
+    #[test]
+    fn facet_strips_grid_row_column() {
+        // Grid: renamed column labels on the top row only, renamed row labels on
+        // the right column only.
+        let data = "SELECT r, c, v FROM (VALUES \
+             ('r1','c1',1),('r1','c2',2),('r2','c1',3),('r2','c2',4)) t(r,c,v)";
+        assert_eq!(
+            strips(&format!(
+                "{data} VISUALISE v AS x, v AS y DRAW point FACET r BY c \
+                 SCALE row RENAMING 'r1' => 'Row one' \
+                 SCALE column RENAMING 'c2' => 'Col two'"
+            )),
+            vec![
+                (Some("c1".into()), None),
+                (Some("Col two".into()), Some("Row one".into())),
+                (None, None),
+                (None, Some("r2".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn renders_binned_facet() {
+        assert_png_or_skip(render(&format!(
+            "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET v \
+             SCALE panel SETTING breaks => (0, 10, 20, 30)"
+        )));
+    }
+
+    #[test]
+    fn renders_free_binned_facet() {
+        // A free binned position dimension: each panel keeps ggsql's global bin
+        // edges but shows only the bins its own data occupies.
+        assert_png_or_skip(render(
+            "VISUALISE body_mass AS x FROM ggsql:penguins DRAW bar \
+             SCALE BINNED x SETTING breaks => (2500, 3500, 4500, 5500, 6500) \
+             FACET species SETTING free => 'x'",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_linewidth() {
+        // `linewidth` thickens box, whiskers and median alike (VL puts
+        // strokeWidth in the boxplot's shared encoding).
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',3),('a',9),\
+             ('b',2),('b',3),('b',4),('b',5)) t(g,v) \
+             VISUALISE g AS x, v AS y DRAW boxplot SETTING linewidth => 3",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_dashed() {
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',3),('b',2),('b',3),('b',5)) t(g,v) \
+             VISUALISE g AS x, v AS y DRAW boxplot \
+             SETTING linetype => 'dashed', linewidth => 2",
+        ));
+    }
+
+    #[test]
+    fn renders_violin_linewidth() {
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',2),('a',3),('a',4),\
+             ('b',2),('b',3),('b',3),('b',4),('b',6)) t(g,v) \
+             VISUALISE g AS x, v AS y DRAW violin \
+             SETTING linewidth => 3, linetype => 'dashed'",
+        ));
+    }
+
+    #[test]
+    fn renders_text_stroke() {
+        // A constant `stroke` outlines the glyphs; white-on-dark legibility.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'peak' AS lbl UNION ALL SELECT 2, 3, 'trough' \
+             VISUALISE x AS x, y AS y, lbl AS label DRAW text \
+             SETTING fontsize => 28, fontweight => 'bold', color => 'black', \
+             stroke => 'white'",
+        ));
+    }
+
+    #[test]
+    fn renders_text_stroke_by_group() {
+        // A data-mapped outline color: one scale + legend, per-row outline.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS lbl, 'one' AS g \
+             UNION ALL SELECT 2, 3, 'b', 'two' \
+             VISUALISE x AS x, y AS y, lbl AS label, g AS stroke DRAW text \
+             SETTING fontsize => 30, fontweight => 'bold'",
+        ));
+    }
+
+    #[test]
+    fn renders_titled_plot() {
+        // Title, subtitle and caption all sit on the composition, above/below the
+        // single panel.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 3 UNION ALL SELECT 3, 1 \
+             VISUALISE x AS x, y AS y DRAW point \
+             LABEL title => 'Sales by Region', subtitle => 'FY 2024', \
+             caption => 'Source: internal'",
+        ));
+    }
+
+    #[test]
+    fn renders_suppressed_title() {
+        // `LABEL title => NULL` suppresses; the subtitle still renders.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 3 \
+             VISUALISE x AS x, y AS y DRAW point \
+             LABEL title => NULL, subtitle => 'no title above me'",
+        ));
+    }
+
+    #[test]
+    fn renders_titled_facet() {
+        // One composition-spanning title over the whole 3-panel strip, not one
+        // title per panel.
+        assert_png_or_skip(render(
+            "SELECT x, y, g FROM (VALUES (1,1,'a'),(2,2,'a'),(1,2,'b'),(2,3,'b'),\
+             (1,3,'c'),(2,1,'c')) t(x,y,g) \
+             VISUALISE x AS x, y AS y DRAW point FACET g \
+             LABEL title => 'One title for all panels'",
         ));
     }
 

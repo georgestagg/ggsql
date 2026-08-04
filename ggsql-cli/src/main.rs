@@ -47,7 +47,8 @@ pub enum Commands {
         #[arg(long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format (vegalite)
+        /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
+        /// `hephaestus` feature and a GPU adapter)
         #[arg(long, default_value = "vegalite")]
         writer: String,
 
@@ -69,7 +70,8 @@ pub enum Commands {
         #[arg(long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format (vegalite)
+        /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
+        /// `hephaestus` feature and a GPU adapter)
         #[arg(long, default_value = "vegalite")]
         writer: String,
 
