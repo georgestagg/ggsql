@@ -65,7 +65,7 @@ The pipeline that takes a parsed `Plot` plus a `Reader` and produces a fully-res
 
 ### `writer/`
 
-`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes). Two implementations:
+`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes, and `from_options` for configuration a frontend collects as key–value pairs — `options.rs`'s `WriterOptions`, parsed from the CLI's `--writer-option`). Two implementations:
 
 - **Vega-Lite** (`vegalite` feature, default) — emits Vega-Lite JSON. Deep-dive: [`writer/vegalite/CLAUDE.md`](writer/vegalite/CLAUDE.md).
 - **hephaestus** (`hephaestus` feature, non-default) — renders PNG bytes via a GPU (wgpu/vello) backend. Deep-dive: [`writer/hephaestus/CLAUDE.md`](writer/hephaestus/CLAUDE.md); design + phase log + deferred work (§9) in [`writer/hephaestus/PLAN.md`](writer/hephaestus/PLAN.md). Excluded from the MSRV 1.86 build (hephaestus needs 1.88) and needs a GPU adapter at render time.

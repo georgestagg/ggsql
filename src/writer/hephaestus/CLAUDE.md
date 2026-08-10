@@ -39,6 +39,27 @@ PLAN.md §9 as debt that would disappear if ggsql resolved more:
 | Free facet dimensions | `scales::{free_position_scale, free_binned_scale}` | ggsql resolves one global domain; a `free` panel needs its own. Only the *extent* is computed — the padding around it is still ggsql's, via `Scale::expand_range`. |
 | Spatial `pos1`/`pos2` | `mod.rs::map_bbox` | A spatial layer positions by geometry, so ggsql resolves no position scales. The bbox still comes from ggsql (`Projection.computed["bbox"]`), falling back to the geometry extent only for a bare `spatial` geom. |
 
+## Configuration
+
+Raster output needs concrete dimensions, so unlike the Vega-Lite writer this one
+carries state: `width`, `height` (both pixels), `dpi`, and `background`.
+`HephaestusWriter::new` + `.background()` set them directly;
+`Writer::from_options` builds the same thing from the frontend-agnostic
+key–value [`WriterOptions`](../options.rs) (`-D width=1600` on the CLI). The user-facing table of keys lives in the struct's rustdoc and in
+[`/doc/get_started/tooling/cli.qmd`](../../../doc/get_started/tooling/cli.qmd);
+what matters here:
+
+- **`units` interprets supplied dimensions only.** `to_pixels` converts a
+  physical unit through inches at `dpi`, so a figure given in inches grows with
+  resolution. The defaults are pixel counts and so are unit-independent.
+- **DPI is not just print resolution.** hephaestus converts the theme's physical
+  sizes (text, strokes, spacing — all points) at render DPI, so `dpi` also sets
+  how large the chrome is relative to a pixel canvas.
+- **Every option is validated, none is ignored.** `reject_unknown` first, then a
+  per-key error naming the option; `whole_pixels` rejects a dimension outside
+  `1..=MAX_DIMENSION` so a slipped unit conversion fails with a message rather
+  than by exhausting GPU memory.
+
 ## Render flow
 
 Unlike the Vega-Lite writer, which emits a declarative document and lets the VL
@@ -78,7 +99,7 @@ Layers draw in `spec.layers` order, which is DRAW order, which is z-order.
 
 | File | Role |
 | --- | --- |
-| [`mod.rs`](mod.rs) | `HephaestusWriter` (size / dpi / background), `Writer` impl, the orchestration above, `map_bbox`, `render_png`, and the writer's test suite. |
+| [`mod.rs`](mod.rs) | `HephaestusWriter` (size / dpi / background), `Writer` impl including `from_options`, the orchestration above, `map_bbox`, `render_png`, and the writer's test suite. |
 | [`wiring.rs`](wiring.rs) | The shared, geom-generic machinery: `Ctx`, `GeomSpec` + its parts, `build_and_add`, `wire_positions`, `wire_material`, `MaterialSource`/`resolve_material`, `BandAxes`, `side`/band helpers, `material_legend`, label resolution. |
 | [`scales.rs`](scales.rs) | ggsql `Scale` → hephaestus `Scale`. `RangeKind`, transform + palette + break mapping, temporal scales, free-panel scales, `binned_bins`/`bin_at_centre`. |
 | [`channels.rs`](channels.rs) | DataFrame column → typed channel data (`ChannelData`, `column_to_*`), group keys, WKB/WKT geometry decoding. |

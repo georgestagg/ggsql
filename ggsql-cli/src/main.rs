@@ -7,7 +7,7 @@ Provides commands for executing ggsql queries with various data sources and outp
 use clap::{Parser, Subcommand, ValueEnum};
 use ggsql::reader::{Reader, Spec};
 use ggsql::validate::validate;
-use ggsql::writer::Writer;
+use ggsql::writer::{Writer, WriterOptions};
 use ggsql::{parser, VERSION};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use ggsql::writer::VegaLiteWriter;
 
 #[cfg(feature = "hephaestus")]
-use ggsql::writer::{rgba, HephaestusWriter};
+use ggsql::writer::HephaestusWriter;
 
 mod docs {
     include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
@@ -33,7 +33,28 @@ pub struct Cli {
 
 enum Output {
     Text(String),
+    /// Only a raster writer produces bytes, so nothing constructs this when no
+    /// such writer is compiled in.
+    #[cfg_attr(not(feature = "hephaestus"), allow(dead_code))]
     Bin(Vec<u8>),
+}
+
+/// The writer to render with, plus the `--writer-option` settings for it.
+struct WriterSpec {
+    name: String,
+    options: WriterOptions,
+}
+
+impl WriterSpec {
+    /// Build from the raw flags, exiting with the parse error if an option is
+    /// not `key=value`.
+    fn new(name: String, options: Vec<String>) -> Self {
+        let options = WriterOptions::parse(options).unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+        Self { name, options }
+    }
 }
 
 #[derive(Subcommand)]
@@ -44,16 +65,29 @@ pub enum Commands {
         query: String,
 
         /// Data source connection string (duckdb://, sqlite://, odbc://)
-        #[arg(long, default_value = "duckdb://memory")]
+        #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
         /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
         /// `hephaestus` feature and a GPU adapter)
-        #[arg(long, default_value = "vegalite")]
+        #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
+        /// Settings for the chosen writer, as `key=value`. Repeatable, and one
+        /// flag may carry several settings separated by `;` (quote it, as most
+        /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
+        /// hephaestus writer takes width, height, units, dpi, and background;
+        /// the vegalite writer takes none.
+        #[arg(
+            short = 'D',
+            long = "writer-option",
+            visible_alias = "writer-options",
+            value_name = "KEY=VALUE[;...]"
+        )]
+        writer_options: Vec<String>,
+
         /// Output file path
-        #[arg(long)]
+        #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Show verbose output (execution details, statistics)
@@ -67,16 +101,29 @@ pub enum Commands {
         file: PathBuf,
 
         /// Data source connection string (duckdb://, sqlite://, odbc://)
-        #[arg(long, default_value = "duckdb://memory")]
+        #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
         /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
         /// `hephaestus` feature and a GPU adapter)
-        #[arg(long, default_value = "vegalite")]
+        #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
+        /// Settings for the chosen writer, as `key=value`. Repeatable, and one
+        /// flag may carry several settings separated by `;` (quote it, as most
+        /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
+        /// hephaestus writer takes width, height, units, dpi, and background;
+        /// the vegalite writer takes none.
+        #[arg(
+            short = 'D',
+            long = "writer-option",
+            visible_alias = "writer-options",
+            value_name = "KEY=VALUE[;...]"
+        )]
+        writer_options: Vec<String>,
+
         /// Output file path
-        #[arg(long)]
+        #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Show verbose output (execution details, statistics)
@@ -100,7 +147,7 @@ pub enum Commands {
         query: String,
 
         /// Data source connection string for column validation (duckdb://, sqlite://, polars://)
-        #[arg(long)]
+        #[arg(short, long)]
         reader: Option<String>,
     },
 
@@ -159,26 +206,30 @@ fn main() -> anyhow::Result<()> {
             query,
             reader,
             writer,
+            writer_options,
             output,
             verbose,
         } => {
             if verbose {
                 eprintln!("Executing query: {}", query);
             }
-            cmd_exec(query, reader, writer, output, verbose);
+            let writer = WriterSpec::new(writer, writer_options);
+            cmd_exec(query, reader, &writer, output, verbose);
         }
 
         Commands::Run {
             file,
             reader,
             writer,
+            writer_options,
             output,
             verbose,
         } => {
             if verbose {
                 eprintln!("Running query from file: {}", file.display());
             }
-            cmd_run(file, reader, writer, output, verbose);
+            let writer = WriterSpec::new(writer, writer_options);
+            cmd_run(file, reader, &writer, output, verbose);
         }
 
         Commands::Parse { query, format } => {
@@ -205,7 +256,13 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_run(file: PathBuf, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+fn cmd_run(
+    file: PathBuf,
+    reader: String,
+    writer: &WriterSpec,
+    output: Option<PathBuf>,
+    verbose: bool,
+) {
     match std::fs::read_to_string(&file) {
         Ok(query) => cmd_exec(query, reader, writer, output, verbose),
         Err(e) => {
@@ -215,10 +272,16 @@ fn cmd_run(file: PathBuf, reader: String, writer: String, output: Option<PathBuf
     }
 }
 
-fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+fn cmd_exec(
+    query: String,
+    reader: String,
+    writer: &WriterSpec,
+    output: Option<PathBuf>,
+    verbose: bool,
+) {
     if verbose {
         eprintln!("Reader: {}", reader);
-        eprintln!("Writer: {}", writer);
+        eprintln!("Writer: {}", writer.name);
         if let Some(ref output_file) = output {
             eprintln!("Output: {}", output_file.display());
         }
@@ -234,7 +297,7 @@ fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBu
                     std::process::exit(1);
                 }
             };
-            exec_with_reader(&query, &r, &writer, output, verbose);
+            exec_with_reader(&query, &r, writer, output, verbose);
         }
         #[cfg(not(feature = "duckdb"))]
         {
@@ -251,7 +314,7 @@ fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBu
                     std::process::exit(1);
                 }
             };
-            exec_with_reader(&query, &r, &writer, output, verbose);
+            exec_with_reader(&query, &r, writer, output, verbose);
         }
         #[cfg(not(feature = "sqlite"))]
         {
@@ -268,7 +331,7 @@ fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBu
                     std::process::exit(1);
                 }
             };
-            exec_with_reader(&query, &r, &writer, output, verbose);
+            exec_with_reader(&query, &r, writer, output, verbose);
         }
         #[cfg(not(feature = "odbc"))]
         {
@@ -287,7 +350,7 @@ fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBu
 fn exec_with_reader<R: Reader>(
     query: &str,
     reader: &R,
-    writer: &str,
+    writer: &WriterSpec,
     output: Option<PathBuf>,
     verbose: bool,
 ) {
@@ -320,7 +383,7 @@ fn exec_with_reader<R: Reader>(
     render_spec(spec, writer, output, verbose);
 }
 
-fn render_spec(spec: Spec, writer: &str, output: Option<PathBuf>, verbose: bool) {
+fn render_spec(spec: Spec, writer: &WriterSpec, output: Option<PathBuf>, verbose: bool) {
     if verbose {
         let metadata = spec.metadata();
         eprintln!("\nQuery executed:");
@@ -334,11 +397,11 @@ fn render_spec(spec: Spec, writer: &str, output: Option<PathBuf>, verbose: bool)
         std::process::exit(1);
     }
 
-    let render = match writer {
-        "vegalite" => render_vegalite(&spec),
-        "hephaestus" => render_hephaestus(&spec),
+    let render = match writer.name.as_str() {
+        "vegalite" => render_vegalite(&spec, &writer.options),
+        "hephaestus" => render_hephaestus(&spec, &writer.options),
         _ => {
-            eprintln!("\nNote: Writer '{}' not yet implemented", writer);
+            eprintln!("\nNote: Writer '{}' not yet implemented", writer.name);
             std::process::exit(1)
         }
     };
@@ -727,49 +790,54 @@ fn cmd_skill(format: Option<DocsFormat>) {
     }
 }
 
-fn render_vegalite(spec: &Spec) -> Output {
-    #[cfg(not(feature = "vegalite"))]
-    {
-        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
-        std::process::exit(1)
-    }
-
-    let json_output;
+fn render_vegalite(spec: &Spec, options: &WriterOptions) -> Output {
     #[cfg(feature = "vegalite")]
     {
-        // Render
-        let vl_writer = VegaLiteWriter::new();
-        json_output = match vl_writer.render(spec) {
-            Ok(r) => r,
+        // Configure from --writer-option, then render
+        let vl_writer = unwrap_writer(VegaLiteWriter::from_options(options));
+        match vl_writer.render(spec) {
+            Ok(json) => Output::Text(json),
             Err(e) => {
                 eprintln!("Failed to generate Vega-Lite output: {}", e);
                 std::process::exit(1);
             }
-        };
-    };
-    Output::Text(json_output)
-}
-
-fn render_hephaestus(spec: &Spec) -> Output {
-    #[cfg(not(feature = "hephaestus"))]
+        }
+    }
+    #[cfg(not(feature = "vegalite"))]
     {
-        eprintln!("Hephaestus writer not compiled in. Rebuild with --features hephaestus");
+        let _ = (spec, options);
+        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
         std::process::exit(1)
     }
+}
 
-    let png_output;
+fn render_hephaestus(spec: &Spec, options: &WriterOptions) -> Output {
     #[cfg(feature = "hephaestus")]
     {
-        // Render
-        let hs_writer =
-            HephaestusWriter::new(1500, 1000, 300.0).background(rgba(0.0, 0.0, 0.0, 0.0));
-        png_output = match hs_writer.render(spec) {
-            Ok(r) => r,
+        // Configure from --writer-option, then render
+        let hs_writer = unwrap_writer(HephaestusWriter::from_options(options));
+        match hs_writer.render(spec) {
+            Ok(png) => Output::Bin(png),
             Err(e) => {
                 eprintln!("Failed to generate Hephaestus output: {}", e);
                 std::process::exit(1);
             }
-        };
-    };
-    Output::Bin(png_output)
+        }
+    }
+    #[cfg(not(feature = "hephaestus"))]
+    {
+        let _ = (spec, options);
+        eprintln!("Hephaestus writer not compiled in. Rebuild with --features hephaestus");
+        std::process::exit(1)
+    }
+}
+
+/// A writer built from its options, or the option error on stderr and a
+/// non-zero exit — an unusable setting is the user's mistake, not a warning.
+#[cfg(any(feature = "vegalite", feature = "hephaestus"))]
+fn unwrap_writer<W>(writer: ggsql::Result<W>) -> W {
+    writer.unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    })
 }

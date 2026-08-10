@@ -1113,6 +1113,54 @@ plus `SETTING minor_breaks => 3` (three gridlines per interval), `=> 0` (none), 
 of each setting form, and the rejection; full suite 1793 tests + 24 doctests pass;
 fmt, clippy clean.
 
+## Writer options — status: implemented
+
+The writer's canvas was only reachable through Rust: the CLI hardcoded
+`HephaestusWriter::new(1500, 1000, 300.0)` with a transparent background, so no
+user could pick a size, a resolution, or a background. Fixed generically rather
+than with four hephaestus-specific flags, because "a writer takes settings" is a
+property of the `Writer` abstraction, not of this writer.
+
+- **`WriterOptions`** (`src/writer/options.rs`) is a normalised key–value bag —
+  keys trimmed, lowercased, `-` folded to `_` — built by `parse` from
+  `key=value` strings and read through accessors that produce the user-facing
+  error themselves: `number`, `one_of`, `get`, and `reject_unknown`. One string
+  may carry several options separated by **`;`**, so a caller can spell them out
+  or collapse them, and mix the two. `;` is the only separator: `,` is common
+  *inside* a value and `background=rgba(0,0,0,0)` has to survive. Values
+  otherwise keep everything after the first `=`.
+- **`Writer::from_options`** is a required trait method, so every writer answers
+  the question and a frontend needs no compile-time knowledge of which one was
+  chosen. Vega-Lite's implementation is `reject_unknown(&[])` — its output is
+  resolution-independent, so size, DPI and background belong to whoever renders
+  the spec.
+- **hephaestus's** implementation takes `width`, `height`, `units`, `dpi`, and
+  `background`, documented in [`CLAUDE.md`](CLAUDE.md#configuration). Two
+  decisions worth keeping: `units` interprets only the dimensions the caller
+  supplies (the defaults stay pixel counts, so `units=in` with no `height` is
+  coherent), and the default background is now **white**, matching the writer's
+  own `new()` and `ggsave`'s default rather than the CLI's old transparent
+  canvas — `background=transparent` (or `none`) gets it back.
+- **The CLI** collects a repeatable `--writer-option key=value` on `exec` and
+  `run` — short `-D`, visible alias `--writer-options` — into a
+  `WriterSpec { name, options }`, so the writer name and its settings travel
+  together through `cmd_exec` → `exec_with_reader` → `render_spec`. An option
+  error exits non-zero with the message; nothing is ignored. `-D` follows the
+  gcc / java / cmake convention for a pass-through key=value, which also leaves
+  `-r`, `-w` and `-o` to mean `--reader`, `--writer` and `--output` — the shorts
+  a single letter next to those flags would otherwise be misread as, and all
+  three now exist.
+
+Verified: `width`/`height` in each unit render at the expected pixel dimensions
+(6×4 in at 150 dpi → 900×600, 2.54 cm / 25.4 mm / 72 pt at 96 dpi → 96 px),
+`background` accepts hex, names, `rgb()`, `hsl()`, `transparent`; unknown keys,
+non-numeric values, a zero or absurd dimension, a bad unit and a bad color each
+report the offending option. The collapsed form renders identically to the
+spelled-out one under single quotes, double quotes and `\;`, and mixes with
+repeated flags; unquoted in zsh the shell splits the command, which is why the
+docs lead with the quoting. Eighteen new tests (twelve on `WriterOptions`, six on
+`from_options`, neither needing a reader or a GPU); fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1146,11 +1194,11 @@ here so it survives between efforts.
   `0.0.1` crate. crates.io rejects git dependencies **even when optional**, so
   ggsql cannot be published while this dep exists in that form. This is the one
   item that blocks a release rather than polish.
-- CLI: `--writer hephaestus` reaches the writer, but there is no
-  output-extension routing and no flags for width/height/dpi/background, so only
-  the one hardcoded `HephaestusWriter::new(1500, 1000, 300.0)` with a transparent
-  background is reachable.
-- `doc/` doesn't mention raster output at all.
+- CLI: `--writer hephaestus` plus `--writer-option` reach the writer and
+  configure it, but there is still no output-extension routing — `--output
+  chart.png` does not by itself select the raster writer.
+- `doc/` covers raster output only in the CLI page's writer-options section; the
+  gallery and the rest of the site are Vega-Lite throughout.
 - Default-writer switchover criteria still undecided (Decision 4).
 
 ### Correctness risks

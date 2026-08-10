@@ -13,6 +13,19 @@
   `minor_breaks` setting have no Vega-Lite equivalent and render only here.
   Requires a working GPU adapter — hardware or software, e.g. lavapipe — at
   render time.
+- Writers can be configured from key–value options: `Writer::from_options` takes
+  a `WriterOptions` set, and the CLI collects them from a repeatable
+  `--writer-option key=value` flag on `exec` and `run` (short `-D`, also
+  spellable `--writer-options`). Several settings can be collapsed into one flag
+  separated by `;` — `-D 'width=1600;dpi=150'`, quoted because shells read `;`
+  themselves — and the two forms mix. The hephaestus writer
+  takes `width`, `height`, `units` (`px`, `in`, `cm`, `mm`, `pt`), `dpi`, and
+  `background` (any CSS color, including `transparent`), defaulting to a
+  1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An
+  unknown key or unusable value is an error naming the option, not a silently
+  ignored setting.
+- `--reader`, `--writer`, and `--output` gained the short forms `-r`, `-w`, and
+  `-o` on `exec` and `run`; `validate --reader` also takes `-r`.
 - New `minor_breaks` setting on continuous scales, controlling the unlabelled
   subdivisions between breaks: a whole number of minor breaks *per interval between
   two breaks* (`0` removes them), an array of exact positions, or — for temporal

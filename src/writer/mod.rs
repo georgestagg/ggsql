@@ -23,10 +23,18 @@
 //! let json = writer.render(&spec)?;
 //! println!("{}", json);
 //! ```
+//!
+//! Writers are configured by their own constructors, or generically from
+//! key–value [`WriterOptions`] when a frontend collects settings from a user
+//! without knowing which writer they picked.
 
 use crate::reader::Spec;
 use crate::{DataFrame, Plot, Result};
 use std::collections::HashMap;
+
+pub mod options;
+
+pub use options::WriterOptions;
 
 #[cfg(feature = "vegalite")]
 pub mod vegalite;
@@ -52,6 +60,22 @@ pub use hephaestus::{rgba, Color, HephaestusWriter};
 pub trait Writer {
     /// The output type produced by this writer.
     type Output;
+
+    /// Construct the writer from free-form key–value options.
+    ///
+    /// This is the entry point for a frontend that collects settings from a
+    /// user (`--writer-option width=1600`) and has no compile-time knowledge of
+    /// the chosen writer. Implementations start by calling
+    /// [`WriterOptions::reject_unknown`] so a mistyped key is reported instead
+    /// of ignored, then fall back to their own defaults for anything unset.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GgsqlError::WriterError` if an option is unknown to this writer
+    /// or its value cannot be interpreted.
+    fn from_options(options: &WriterOptions) -> Result<Self>
+    where
+        Self: Sized;
 
     /// Generate output from a visualization specification and data sources
     ///

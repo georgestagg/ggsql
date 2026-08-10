@@ -40,15 +40,46 @@ use crate::plot::layer::is_transposed;
 use crate::plot::ParameterValue;
 use crate::writer::hephaestus::projection::apply_projection;
 use crate::writer::hephaestus::scales::build_scale;
-use crate::writer::Writer;
+use crate::writer::{Writer, WriterOptions};
 use crate::{DataFrame, GgsqlError, Layer, Plot, Result};
 
 use wiring::Ctx;
+
+/// Default canvas width in pixels.
+const DEFAULT_WIDTH: u32 = 1500;
+/// Default canvas height in pixels.
+const DEFAULT_HEIGHT: u32 = 1000;
+/// Default resolution. DPI converts the theme's physical sizes (text, stroke
+/// widths, spacing — all in points) to pixels, so it sets how large the chrome
+/// is relative to the canvas as well as the print size of a physical figure.
+const DEFAULT_DPI: f64 = 300.0;
+
+/// Largest canvas dimension accepted, in pixels. Far beyond any real figure, but
+/// small enough that a slipped unit conversion fails with a message instead of
+/// exhausting GPU memory.
+const MAX_DIMENSION: f64 = 32_768.0;
+
+/// Option keys [`HephaestusWriter::from_options`] understands.
+const OPTIONS: &[&str] = &["width", "height", "units", "dpi", "background"];
+
+/// Units a `width` / `height` option may be given in.
+const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
 
 /// Writer that renders a ggsql plot to a PNG image via hephaestus.
 ///
 /// Configured with a target pixel size and DPI because raster rendering needs
 /// concrete dimensions, unlike the resolution-independent Vega-Lite writer.
+/// [`HephaestusWriter::from_options`] builds the same configuration from
+/// key–value [`WriterOptions`]:
+///
+/// | Option | Value | Default |
+/// | --- | --- | --- |
+/// | `width` | Canvas width, in `units` | 1500 px |
+/// | `height` | Canvas height, in `units` | 1000 px |
+/// | `units` | `px`, `in`, `cm`, `mm`, or `pt` — how `width`/`height` are read | `px` |
+/// | `dpi` | Pixels per inch; converts physical sizes, including `units` | 300 |
+/// | `background` | Any CSS color, e.g. `white`, `#ff0000`, `transparent` | `white` |
+#[derive(Debug, Clone, PartialEq)]
 pub struct HephaestusWriter {
     width: u32,
     height: u32,
@@ -74,8 +105,55 @@ impl HephaestusWriter {
     }
 }
 
+impl Default for HephaestusWriter {
+    fn default() -> Self {
+        Self::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI)
+    }
+}
+
 impl Writer for HephaestusWriter {
     type Output = Vec<u8>;
+
+    fn from_options(options: &WriterOptions) -> Result<Self> {
+        options.reject_unknown(OPTIONS)?;
+
+        let dpi = match options.number("dpi")? {
+            Some(dpi) if dpi > 0.0 => dpi,
+            Some(dpi) => {
+                return Err(GgsqlError::WriterError(format!(
+                    "writer option 'dpi' expects a positive number, got '{dpi}'"
+                )))
+            }
+            None => DEFAULT_DPI,
+        };
+        // `units` interprets the dimensions the caller supplies; the defaults are
+        // pixel counts, so they stand whatever the unit is.
+        let units = options.one_of("units", UNITS)?.unwrap_or("px");
+        let width = match options.number("width")? {
+            Some(width) => to_pixels(width, units, dpi, "width")?,
+            None => DEFAULT_WIDTH,
+        };
+        let height = match options.number("height")? {
+            Some(height) => to_pixels(height, units, dpi, "height")?,
+            None => DEFAULT_HEIGHT,
+        };
+
+        let mut writer = Self::new(width, height, dpi);
+        if let Some(raw) = options.get("background") {
+            // `none` is a familiar spelling of a transparent canvas that CSS
+            // itself doesn't accept as a color.
+            let color = match raw.trim().to_lowercase().as_str() {
+                "none" => rgba(0.0, 0.0, 0.0, 0.0),
+                _ => scales::parse_color(raw).ok_or_else(|| {
+                    GgsqlError::WriterError(format!(
+                        "writer option 'background' expects a CSS color, got '{raw}'"
+                    ))
+                })?,
+            };
+            writer = writer.background(color);
+        }
+        Ok(writer)
+    }
 
     fn validate(&self, spec: &Plot) -> Result<()> {
         if spec.layers.is_empty() {
@@ -271,6 +349,32 @@ impl Writer for HephaestusWriter {
     }
 }
 
+/// Convert a canvas dimension given in `units` to whole pixels at `dpi`.
+///
+/// A physical unit goes through inches, so the same figure grows with DPI; `px`
+/// is already the canvas unit, where DPI only scales the chrome.
+fn to_pixels(value: f64, units: &str, dpi: f64, key: &str) -> Result<u32> {
+    let per_inch = match units {
+        "in" => 1.0,
+        "cm" => 2.54,
+        "mm" => 25.4,
+        "pt" => 72.0,
+        _ => return whole_pixels(value, key),
+    };
+    whole_pixels(value / per_inch * dpi, key)
+}
+
+/// Round a pixel count and reject one outside the renderable range.
+fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
+    let rounded = pixels.round();
+    if !(1.0..=MAX_DIMENSION).contains(&rounded) {
+        return Err(GgsqlError::WriterError(format!(
+            "writer option '{key}' resolves to {rounded} px, outside the supported range 1–{MAX_DIMENSION} px"
+        )));
+    }
+    Ok(rounded as u32)
+}
+
 /// The map bounding box `(xmin, ymin, xmax, ymax)`, or `None` when the plot is
 /// not a map. ggsql's resolved `computed["bbox"]` (set under a `PROJECT map`)
 /// wins; a bare `spatial` geom with no projection falls back to the union extent
@@ -367,6 +471,103 @@ fn render_png(
     // exactly what PNG stores, so the buffer encodes as-is.
     encode_png(width, height, &pixels)
         .map_err(|e| GgsqlError::WriterError(format!("PNG encode failed: {e}")))
+}
+
+/// `from_options` tests. Separate from the render suite below because they need
+/// neither a reader nor a GPU.
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    fn writer(pairs: &[&str]) -> Result<HephaestusWriter> {
+        HephaestusWriter::from_options(&WriterOptions::parse(pairs)?)
+    }
+
+    /// The writer's canvas as `(width, height, dpi)`.
+    fn canvas(pairs: &[&str]) -> (u32, u32, f64) {
+        let writer = writer(pairs).unwrap();
+        (writer.width, writer.height, writer.dpi)
+    }
+
+    #[test]
+    fn no_options_gives_the_defaults() {
+        assert_eq!(canvas(&[]), (DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI));
+        let default = HephaestusWriter::default();
+        assert_eq!(canvas(&[]), (default.width, default.height, default.dpi));
+        // White, as `new()` sets it.
+        let background = writer(&[]).unwrap().background;
+        assert_eq!(background.components, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn pixel_dimensions_are_taken_verbatim() {
+        assert_eq!(canvas(&["width=1600", "height=1200"]).0, 1600);
+        assert_eq!(canvas(&["width=1600", "height=1200"]).1, 1200);
+        // `units=px` is the default, and DPI does not rescale a pixel canvas.
+        assert_eq!(
+            canvas(&["width=800", "units=px", "dpi=72"]),
+            (800, 1000, 72.0)
+        );
+    }
+
+    #[test]
+    fn physical_dimensions_scale_with_dpi() {
+        assert_eq!(
+            canvas(&["width=8", "height=6", "units=in", "dpi=100"]).0,
+            800
+        );
+        assert_eq!(
+            canvas(&["width=8", "height=6", "units=in", "dpi=100"]).1,
+            600
+        );
+        // 2.54 cm = 1 in; 25.4 mm = 1 in; 72 pt = 1 in.
+        assert_eq!(canvas(&["width=2.54", "units=cm", "dpi=96"]).0, 96);
+        assert_eq!(canvas(&["width=25.4", "units=mm", "dpi=96"]).0, 96);
+        assert_eq!(canvas(&["width=72", "units=pt", "dpi=96"]).0, 96);
+        // Defaults stay pixel counts even when the caller works in inches.
+        assert_eq!(
+            canvas(&["width=5", "units=in", "dpi=200"]).1,
+            DEFAULT_HEIGHT
+        );
+    }
+
+    #[test]
+    fn background_accepts_css_colors() {
+        let red = writer(&["background=#ff0000"]).unwrap().background;
+        assert_eq!(red.components, [1.0, 0.0, 0.0, 1.0]);
+        for spelling in ["background=transparent", "background=none"] {
+            let clear = writer(&[spelling]).unwrap().background;
+            assert_eq!(
+                clear.components[3], 0.0,
+                "{spelling} should be fully transparent"
+            );
+        }
+        assert!(writer(&["background=rgb(0, 0, 255)"]).is_ok());
+    }
+
+    #[test]
+    fn bad_values_are_reported_per_option() {
+        let cases = [
+            ("units=furlongs", "'units' expects"),
+            ("dpi=0", "'dpi' expects a positive number"),
+            ("dpi=high", "'dpi' expects a number"),
+            ("width=0", "'width' resolves to 0 px"),
+            ("width=-4", "'width' resolves to -4 px"),
+            ("height=1e9", "'height' resolves to"),
+            ("background=nope", "'background' expects a CSS color"),
+        ];
+        for (option, expected) in cases {
+            let err = writer(&[option]).unwrap_err().to_string();
+            assert!(err.contains(expected), "{option}: {err}");
+        }
+    }
+
+    #[test]
+    fn unknown_options_are_rejected() {
+        let err = writer(&["with=1600"]).unwrap_err().to_string();
+        assert!(err.contains("unknown writer option 'with'"), "{err}");
+        assert!(err.contains("supported options: width, height"), "{err}");
+    }
 }
 
 #[cfg(all(test, feature = "duckdb"))]

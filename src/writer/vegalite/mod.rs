@@ -27,7 +27,7 @@ mod projection;
 
 use crate::plot::ArrayElement;
 use crate::plot::{ParameterValue, Parameters, Scale, ScaleTypeKind};
-use crate::writer::Writer;
+use crate::writer::{Writer, WriterOptions};
 use crate::{naming, AestheticValue, DataFrame, GgsqlError, Plot, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -1123,6 +1123,13 @@ impl Default for VegaLiteWriter {
 
 impl Writer for VegaLiteWriter {
     type Output = String;
+
+    /// Vega-Lite output is resolution-independent — size, DPI and background are
+    /// the consumer's business — so this writer takes no options and rejects any.
+    fn from_options(options: &WriterOptions) -> Result<Self> {
+        options.reject_unknown(&[])?;
+        Ok(Self::new())
+    }
 
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<String> {
         // 1. Validate spec

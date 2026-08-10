@@ -389,11 +389,56 @@ pub trait Reader {
 
 ```rust
 pub trait Writer {
-    /// Render a plot specification to output format
-    fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<String>;
+    /// What this writer produces — `String` for Vega-Lite JSON, `Vec<u8>` for PNG
+    type Output;
 
-    /// Get the file extension for this writer's output
-    fn file_extension(&self) -> &str;
+    /// Build the writer from key–value options (see `WriterOptions`)
+    fn from_options(options: &WriterOptions) -> Result<Self> where Self: Sized;
+
+    /// Render a plot specification and its data to the output format
+    fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<Self::Output>;
+
+    /// Check whether a spec can be rendered by this writer, without rendering it
+    fn validate(&self, spec: &Plot) -> Result<()>;
+
+    /// Render a prepared `Spec` from `reader.execute()` — the usual entry point
+    fn render(&self, spec: &Spec) -> Result<Self::Output>;
 }
 ```
+
+---
+
+### `WriterOptions`
+
+Free-form key–value configuration for a writer, for callers that collect settings
+from a user rather than in code (the CLI's repeatable `--writer-option
+key=value`). Keys are normalised: trimmed, lowercased, `-` folded to `_`.
+
+```rust
+let options = WriterOptions::parse(["width=1600", "height=1200", "units=px"])?;
+let png = HephaestusWriter::from_options(&options)?.render(&spec)?;
+
+// One string may carry several options, separated by `;`. Equivalent to the above:
+let options = WriterOptions::parse(["width=1600;height=1200;units=px"])?;
+
+// Or in code, without going through strings:
+let options = WriterOptions::new().set("dpi", "150");
+```
+
+`;` is the only separator — `,` is not, since values contain commas
+(`background=rgba(0,0,0,0)`).
+
+| Method | Purpose |
+| --- | --- |
+| `parse(pairs)` | Build from `key=value` strings, `;`-separated within a string; errors on a missing `=` |
+| `new()` / `set(key, value)` | Build programmatically |
+| `get(key)` | Raw value, if supplied |
+| `number(key)` | Value as a finite `f64`, erroring with the option's name |
+| `one_of(key, allowed)` | Value checked against a closed set |
+| `reject_unknown(known)` | Error naming keys the writer doesn't understand |
+| `is_empty()` | Whether any option was supplied |
+
+Which keys a writer accepts is the writer's own business:
+`VegaLiteWriter` takes none, `HephaestusWriter` takes `width`, `height`, `units`,
+`dpi`, and `background`.
 
