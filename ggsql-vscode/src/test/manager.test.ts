@@ -27,6 +27,11 @@ suite('manager', () => {
 		assert.strictEqual(state.sessionName, 'Sales analysis');
 	});
 
+	test('createDynState falls back when the supplied name is empty', () => {
+		// A blank name would otherwise leave the restored console with no title.
+		assert.strictEqual(createDynState('').sessionName, 'ggsql');
+	});
+
 	test('the manager opts out of the discovery cache fast path', () => {
 		// ggsql runtimes are never marked cacheable, because the kernel path
 		// can come from a workspace setting or from PATH. Without this flag

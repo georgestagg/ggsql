@@ -191,7 +191,7 @@
     "toml": "^3.0.0"
   },
   "devDependencies": {
-    "@posit-dev/positron": "^0.2.2",
+    "@posit-dev/positron": "^0.2.7",
     "@types/mocha": "^10.0.10",
     "@types/node": "^18.x",
     "@types/vscode": "^1.75.0",

@@ -315,7 +315,7 @@ export function createDynState(sessionName?: string): positron.LanguageRuntimeDy
     return {
         inputPrompt: 'ggsql> ',
         continuationPrompt: '... ',
-        sessionName: sessionName ?? 'ggsql',
+        sessionName: sessionName || 'ggsql',
     };
 }
 

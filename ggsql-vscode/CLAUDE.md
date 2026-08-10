@@ -17,6 +17,7 @@ ggsql-vscode/
 ├── src/
 │   ├── extension.ts          activate(): registers commands, manager, code lenses
 │   ├── manager.ts            Kernel discovery + Positron language-runtime registration
+│   ├── positronApi.ts        Acquires the Positron API so Positron can attribute it to this extension
 │   ├── connections.ts        Connection-string handling for the Connections pane
 │   ├── cellParser.ts         Splits .ggsql files into cells for Run-Cell commands
 │   ├── codelens.ts           "▶ Run cell" lens above each cell
@@ -96,7 +97,13 @@ Outside Positron there is no way to execute a query: `activate()` returns early,
 - the three keybindings
 - the five run commands, hidden from the Command Palette via a `commandPalette` menu entry
 
-`isPositron` is declared with a default of `true`, so it is correct in Positron from startup with no code and no activation-order window. In VS Code the key is never declared, so it evaluates falsy. Prefer it over a hand-rolled `setContext` key for anything purely declarative; the Positron API (`tryAcquirePositronApi`) is the right check when the code needs the API object itself.
+`isPositron` is declared with a default of `true`, so it is correct in Positron from startup with no code and no activation-order window. In VS Code the key is never declared, so it evaluates falsy. Prefer it over a hand-rolled `setContext` key for anything purely declarative; `getPositronApi()` from [`src/positronApi.ts`](src/positronApi.ts) is the right check when the code needs the API object itself.
+
+**Acquiring the Positron API.** `src/positronApi.ts` calls `require('positron')` directly, and `esbuild.js` lists `positron` in `external` so the call is still there in `out/extension.js`. This is load bearing, not a style choice. Positron's require interceptor works out which extension owns an API object from the filesystem path of the requiring file, and that identity becomes the `extensionId` on every runtime the extension registers. Reaching the API through the global accessor that `tryAcquirePositronApi()` uses puts the requiring path inside Positron's own bootstrap, which the interceptor cannot place, so the runtime is filed under `nullExtensionDescription` and Positron cannot activate this extension when it restores sessions after a window reload. `src/test/bundle.test.ts` guards the esbuild half of this.
+
+The Positron Supervisor is a soft dependency, reached through `getSupervisorApi()` in `manager.ts`. It deliberately is not in `extensionDependencies`: that field is static, and an entry for `positron.positron-supervisor` would stop the extension activating at all in VS Code, where the supervisor does not exist.
+
+`GgsqlRuntimeManager.alwaysRediscover` is `true` because ggsql runtimes are never marked `cacheable`, so Positron must run discovery on every window open rather than trusting its cross-window cache. The property is declared in the pinned `@posit-dev/positron` typings, so `tsc` checks the name directly; `src/test/manager.test.ts` also asserts the value.
 
 Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSqlAssociationPrompt`, syntax highlighting) is registered before the early return and works in plain VS Code. Add new commands on the correct side of that line, and gate them if they execute code.
 
@@ -121,6 +128,8 @@ code --install-extension ggsql-<version>.vsix
 
 Watch mode for development: `npm run watch` (runs esbuild + tsc in parallel).
 
+For an interactive session, open the **repo root** in Positron and press <kbd>F5</kbd> ("Run Extension"). [`/.vscode/launch.json`](../.vscode/launch.json) runs the `build-ggsql-vscode` task, which is `npm run watch` in this folder, then opens an Extension Development Host with `--extensionDevelopmentPath`, so the extension loads from source with no VSIX. Launch from Positron rather than VS Code, or the dev host has no Positron API and the runtime manager never registers. The watcher rebuilds `out/extension.js` on save, but the host does not hot-reload: run _Developer: Reload Window_ in the Extension Development Host to pick up a change.
+
 ## Testing
 
 ```sh
@@ -134,7 +143,7 @@ Tests live in `src/test/` and compile to `out-test/` via `tsconfig.test.json`, d
 
 Note that `tsc` does not prune output for deleted sources: if you delete or rename a test, remove its `.js` and `.js.map` from `out-test/test/` or the runner keeps executing the stale copy. `npm run test:extension` on its own does not recompile, so run `npm test` (or `npm run compile-tests` first) after editing any `.ts`.
 
-The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement and TextMate scopes. The Positron surface (runtime manager, connection drivers, cell execution) is not covered, since it needs a Positron host. `sqlAssociation.ts`, `manager.ts` and `connections.ts` are also untested.
+The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement, TextMate scopes, and the parts of `manager.ts` and `positronApi.ts` that are reachable without a Positron host. `bundle.test.ts` additionally asserts against the built `out/extension.js`. The rest of the Positron surface (session creation, connection drivers, cell execution) is not covered, since it needs a Positron host, and `sqlAssociation.ts` and `connections.ts` are untested.
 
 Add new tests as `src/test/<name>.test.ts`; no config change is needed.
 
