@@ -133,6 +133,10 @@ pub struct GeomSpec {
     pub raw_strings: &'static [(&'static str, &'static str)],
     /// Constant panel-space channel values, scale-bypassing (e.g. a rule's
     /// 0..1 span, discrete-tile band edges): (hephaestus channel, value).
+    ///
+    /// Materialised per row, not set as a scalar: a hephaestus geom whose
+    /// geometry varies per row (`SegmentGeom`, `RectGeom`, …) requires *every*
+    /// position channel to be a column, and panics on a constant.
     pub raw_numbers: Vec<(&'static str, f64)>,
     /// Per-row unscaled channel data the geom computes itself (e.g. bar band
     /// edges from width/dodge): (hephaestus channel, one value per row).
@@ -167,7 +171,7 @@ where
         }
     }
     for (channel, value) in &spec.raw_numbers {
-        builder.set(*channel, Raw(*value));
+        builder.set(*channel, Raw(vec![*value; ctx.df.height()]));
     }
     for (channel, values) in spec.data_channels {
         builder.set(channel, values);
@@ -195,14 +199,19 @@ fn wire_positions<G: BuildableGeom>(
 ) -> Result<()> {
     let offsets = AxisOffsets::new(ctx.df);
     for p in positions {
-        let col = aesthetic_column_name(ctx.layer, &p.aesthetic).ok_or_else(|| {
-            GgsqlError::WriterError(format!(
-                "{} layer has no {} mapping",
-                ctx.layer.geom.geom_type(),
-                p.aesthetic
-            ))
-        })?;
-        let data = column_to_channel(ctx.df, col)?;
+        let data = match aesthetic_column_name(ctx.layer, &p.aesthetic) {
+            Some(col) => column_to_channel(ctx.df, col)?,
+            // A position given as a bare constant. It is repeated per row rather
+            // than set as a scalar, because a geom whose geometry varies per row
+            // rejects a constant position channel.
+            None => constant_position(ctx, &p.aesthetic).ok_or_else(|| {
+                GgsqlError::WriterError(format!(
+                    "{} layer has no {} mapping",
+                    ctx.layer.geom.geom_type(),
+                    p.aesthetic
+                ))
+            })?,
+        };
         data.apply(builder, p.channel);
         plot.set_binding(p.channel, ctx.pos_scale(p.axis));
 
@@ -214,6 +223,29 @@ fn wire_positions<G: BuildableGeom>(
         }
     }
     Ok(())
+}
+
+/// A position aesthetic mapped to a bare `Literal`, materialised into one
+/// data-space value per row so it still travels through its position scale.
+///
+/// ggsql delivers an aesthetic three ways and the writer honours all three
+/// everywhere (see `wire_material`); positions are no exception. A number is a
+/// continuous coordinate, a string a discrete category, and a boolean is read
+/// as its category name, matching how the same values arrive in a column.
+fn constant_position(ctx: &Ctx, aesthetic: &str) -> Option<ChannelData> {
+    let n = ctx.df.height();
+    match ctx.layer.mappings.get(aesthetic) {
+        Some(AestheticValue::Literal(ParameterValue::Number(value))) => {
+            Some(ChannelData::Floats(vec![*value; n]))
+        }
+        Some(AestheticValue::Literal(ParameterValue::String(value))) => {
+            Some(ChannelData::Strings(vec![value.clone(); n]))
+        }
+        Some(AestheticValue::Literal(ParameterValue::Boolean(value))) => {
+            Some(ChannelData::Strings(vec![value.to_string(); n]))
+        }
+        _ => None,
+    }
 }
 
 /// The per-row band-fraction offsets ggsql resolved for a position adjustment,
@@ -312,18 +344,20 @@ pub fn wire_material<G: BuildableGeom>(
         }
     }
 
-    // Defaults for channels no spec mapped.
+    // Defaults for channels no spec mapped. `Raw` for the same reason literals
+    // are: a default is a visual value, and a sibling layer may have bound this
+    // channel to a scale that would otherwise swallow it.
     for m in material {
         if handled.contains(m.channel) {
             continue;
         }
         match m.default {
             MatDefault::Color(c) => {
-                builder.set(m.channel, c);
+                builder.set(m.channel, Raw(c));
                 handled.insert(m.channel);
             }
             MatDefault::Number(n) => {
-                builder.set(m.channel, n);
+                builder.set(m.channel, Raw(n));
                 handled.insert(m.channel);
             }
             MatDefault::None => {}
@@ -338,6 +372,13 @@ pub fn wire_material<G: BuildableGeom>(
 /// ggsql resolves them to (points), so numbers pass through unscaled. Returns
 /// whether the value was applicable (an unparseable color / type mismatch is
 /// left to the geom's default).
+///
+/// The constant is set **`Raw`**, i.e. scale-bypassing. A literal is already a
+/// visual-space value, and a hephaestus binding is per *plot channel*, not per
+/// geom: one layer mapping `colour` binds `stroke` to a categorical scale for
+/// every layer in the panel, and a sibling layer's plain (non-`Raw`) black
+/// would then be looked up in that scale's domain, resolve to `Null`, and
+/// vanish. Bypassing keeps each layer's constants its own.
 fn set_literal_channel<G: BuildableGeom>(
     builder: &mut GeomBuilder<G>,
     channel: &str,
@@ -347,21 +388,21 @@ fn set_literal_channel<G: BuildableGeom>(
     match (kind, lit) {
         (RangeKind::Color, ParameterValue::String(s)) => match parse_color(s) {
             Some(c) => {
-                builder.set(channel, c);
+                builder.set(channel, Raw(c));
                 true
             }
             None => false,
         },
         (RangeKind::Shape, ParameterValue::String(s)) => {
-            builder.set(channel, s.clone());
+            builder.set(channel, Raw(s.clone()));
             true
         }
         (RangeKind::Linetype, ParameterValue::String(s)) => {
-            builder.set(channel, HValue::Linetype(map_linetype(s)));
+            builder.set(channel, Raw(HValue::Linetype(map_linetype(s))));
             true
         }
         (RangeKind::Number, ParameterValue::Number(n)) if n.is_finite() => {
-            builder.set(channel, *n);
+            builder.set(channel, Raw(*n));
             true
         }
         _ => false,
@@ -602,8 +643,10 @@ impl MaterialSource {
     ) {
         match self {
             MaterialSource::Data { data, .. } => data.select(idx).apply(builder, channel),
+            // `Raw`: a resolved constant is a visual value and must not be looked
+            // up in whatever scale another layer bound to this channel.
             MaterialSource::Constant(v) => {
-                builder.set(channel, v.clone());
+                builder.set(channel, Raw(v.clone()));
             }
         }
     }

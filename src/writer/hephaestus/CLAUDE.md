@@ -128,7 +128,7 @@ for the minimal case):
 | `positions: Vec<PositionSpec>` | hephaestus `channel` ← ggsql `aesthetic`, plus which `PanelAxis` it drives (so the right `pos` scale is bound and the right dodge/jitter offsets picked up). |
 | `material: Vec<MaterialSpec>` | ggsql aesthetic → hephaestus channel, a `RangeKind`, and a `MatDefault` fallback matching ggsql's own geom default. Several aesthetics may target one channel (`fill`/`color`/`colour` → `fill`); the first that resolves wins. |
 | `raw_strings` | Unscaled string channels from a mapped aesthetic (text labels). |
-| `raw_numbers` | Constant panel-space values that bypass scales (a rule's 0..1 span). |
+| `raw_numbers` | Constant panel-space values that bypass scales (a rule's 0..1 span), materialised one per row. |
 | `data_channels` | Per-row values the geom computes itself (bar/tile band edges). Channels listed here are *claimed*: `wire_positions` won't overwrite them with the raw offsets, because the geom already folded those in. |
 | `legend_key: LegendKind` | Point / Line / Rect swatch, so a line legend shows a line. |
 | `grouped: bool` | Derive hephaestus `keys` from `layer.partition_by`, for multi-vertex marks (line, area, polygon). |
@@ -142,13 +142,26 @@ the same three ways:
 
 | `AestheticValue` | Meaning | Handling |
 | --- | --- | --- |
-| `Literal(..)` | A fixed value — **every geom default and every `SETTING` constant** arrives this way, not as a materialized column | Constant channel value (`set_literal_channel` / `constant_material`), converted by `RangeKind` |
+| `Literal(..)` | A fixed value — **every geom default and every `SETTING` constant** arrives this way, not as a materialized column | `Raw` constant channel value (`set_literal_channel` / `constant_material`), converted by `RangeKind` |
 | `Column` with a non-identity scale | Data-mapped | Set the column, `plot.set_binding(channel, aesthetic)`, record one legend |
 | `Column` with an identity scale, or `AnnotationColumn` | Visual-space values already | Per-row `Raw` |
 
 `MatDefault` is a true last-resort fallback, only for an aesthetic ggsql didn't
 map at all. Keying off columns alone silently drops every literal — which is how
 `SETTING color => 'red'` once rendered black.
+
+**Only a ggsql-mapped column goes through a scale; everything the writer
+resolves itself is `Raw`.** A hephaestus binding belongs to the *plot channel*,
+not to the geom that set it, so one layer mapping `colour` binds `stroke` to a
+categorical scale for **every** layer in the panel. A plain (non-`Raw`) constant
+on that channel — a literal, a `MatDefault`, a composite's
+`MaterialSource::Constant` — is then looked up in that scale's domain, resolves
+to `Null`, and the mark silently disappears. `Raw` bypasses the binding, which
+is what a value already in visual space wants anyway. The same holds for a
+position given as a constant: `wire_positions` materialises it per row through
+`constant_position` so it still travels through its position scale, because a
+hephaestus geom whose geometry varies per row rejects a constant position
+channel outright (`"x" must be data, not constant`).
 
 ### `MaterialSource` — composites
 
@@ -327,6 +340,22 @@ Two kinds, plus a third that doesn't exist yet:
 cargo run -p ggsql-cli --features hephaestus -- exec "<query>" \
     --reader "duckdb://memory" --writer hephaestus --output /tmp/out.png
 ```
+
+For eyeballing *at scale* — after a hephaestus bump, or when hunting the kind of
+small omission that only shows up across the whole feature surface — use the
+visual-test harness instead of one-off queries. It renders every executable
+```` ```{ggsql} ```` cell in [`/doc/`](../../../doc/) (≈190 in `doc/syntax/`
+alone) and writes one HTML report pairing each query with its render, optionally
+beside the Vega-Lite render of the same `Spec`:
+
+```sh
+cargo run -p ggsql-cli --features hephaestus --example visual_test -- --compare
+open target/visual-test/index.html
+```
+
+It never stops on a failure — an error or a panic is captured against its cell —
+so one run inventories every gap at once. Implementation notes:
+[`/ggsql-cli/CLAUDE.md`](../../../ggsql-cli/CLAUDE.md).
 
 ## Operational constraints
 

@@ -10,7 +10,7 @@
 //! `pos2` and its values in the `pos1` family.
 
 use hephaestus::color::rgb8;
-use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
+use hephaestus::plot::geom::{BuildableGeom, GeomBuilder, Raw};
 use hephaestus::plot::{Plot as HPlot, PointGeom, RectGeom, SegmentGeom};
 
 use super::super::channels::{
@@ -127,7 +127,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         fill.apply(&mut b, "fill", &box_i);
         stroke.apply(&mut b, "stroke", &box_i);
         outline(&mut b, &linewidth, linetype.as_ref(), &box_i);
-        b.set("fill_opacity", alpha);
+        b.set("fill_opacity", Raw(alpha));
         plot.add_geom(b.build());
     }
 
@@ -185,8 +185,8 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         stroke.apply(&mut b, "stroke", &out_i);
         // `PointGeom` has no dash pattern — a marker outline can't be dashed.
         outline(&mut b, &linewidth, None, &out_i);
-        b.set("size", constant_number(ctx, "size", 3.0));
-        b.set("shape", constant_string(ctx, "shape", "circle"));
+        b.set("size", Raw(constant_number(ctx, "size", 3.0)));
+        b.set("shape", Raw(constant_string(ctx, "shape", "circle")));
         plot.add_geom(b.build());
     }
 

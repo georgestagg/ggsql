@@ -1161,6 +1161,84 @@ repeated flags; unquoted in zsh the shell splits the command, which is why the
 docs lead with the quoting. Eighteen new tests (twelve on `WriterOptions`, six on
 `from_options`, neither needing a reader or a GPU); fmt and clippy clean.
 
+## Visual test harness — status: implemented
+
+Every phase above ended in "eyeballed", one query at a time, against whatever
+cases the work happened to touch. That is how the late-phase omissions kept
+surfacing: nothing ever rendered the *whole* feature surface at once. The docs
+already contain a curated corpus that does — every executable ```` ```{ggsql} ````
+cell in [`/doc/`](../../../doc/) — so the harness renders that corpus instead of
+inventing a new one.
+
+[`/ggsql-cli/examples/visual_test.rs`](../../../ggsql-cli/examples/visual_test.rs),
+run as `cargo run -p ggsql-cli --features hephaestus --example visual_test`, writes
+`target/visual-test/index.html`: one HTML page pairing each query with its render,
+with `--compare` putting the Vega-Lite render of the **same `Spec`** beside it.
+It is a developer tool, not a shipped feature — `[[example]]`'s `required-features`
+keeps it out of `cargo test --workspace`. Implementation notes live in
+[`/ggsql-cli/CLAUDE.md`](../../../ggsql-cli/CLAUDE.md); three properties matter
+here:
+
+- **The corpus runs like the docs run.** One reader per source file, cells in
+  document order, so a page that builds a table in one cell and plots it in the
+  next behaves as written. A cell with no `VISUALISE` runs as setup.
+- **Nothing aborts the run.** An execution error, a render error, or a *panic*
+  inside a writer is captured against its cell, so one report inventories every
+  problem at once. A harness that stops at the first failure would answer the
+  question this one exists to answer only for the first cell.
+- **It is a display harness, not a snapshot suite.** There is still no baseline
+  and no automated pass/fail on pixels (§9 Testing) — the judgement stays human.
+  What changed is the cost of exercising it: 190 queries in one pass instead of
+  one `--output /tmp/out.png` at a time.
+
+The report labels each cell with its source file and line, so anything it turns
+up points straight back at the query that produced it.
+
+Verified: 191 cells from 33 files under `doc/syntax/` in ~160 s (185 plots, 6
+setup cells), each rendered beside its Vega-Lite twin and eyeballed. The first
+full run found the two constant-channel bugs fixed in the section below —
+exactly the class of omission that one-query-at-a-time eyeballing had been
+missing.
+
+## Constant channels — status: implemented
+
+The first full harness run turned up two bugs with one root: **the writer set
+values it had resolved itself as plain hephaestus channel constants**, and a
+`Channel::Constant` is *scale-applied* (`resolve.rs::resolve_value`; only the
+`Raw*` variants bypass). A binding, meanwhile, belongs to the plot **channel**,
+not to the geom that set it. So a constant only behaved as intended while no
+other layer bound the same channel.
+
+- **A non-diagonal `rule` panicked.** `SegmentGeom::build: "x" must be data, not
+  constant — positions vary per row`. `segment::rule` spans the free axis with a
+  0..1 panel fraction through `GeomSpec::raw_numbers`, which `build_and_add` set
+  as a scalar; hephaestus's `require_data_column` rejects a constant on any
+  position channel of a geom whose geometry varies per row. Now materialised one
+  value per row. (The diagonal abline never hit this — `build_diagonal` already
+  computes per-row endpoints.) Four cells in `doc/syntax/layer/type/rule.qmd`.
+- **A constant material vanished next to a data-mapped sibling.** `DRAW line …
+  DRAW rule MAPPING label AS colour` bound `stroke` to a categorical scale for
+  the *whole panel*, so the line's constant black was looked up in
+  `{Critical, Target, Warning}`, resolved to `Null`, and the line simply wasn't
+  drawn — silently, in a plot that otherwise looked right. Every writer-resolved
+  constant is now `Raw`: `set_literal_channel` (literals and `SETTING`s),
+  `MatDefault` (geom defaults), `MaterialSource::Constant` (composites), and the
+  composites' own `size`/`shape`/`fill_opacity`/`alpha`. Per-row band fractions
+  and offsets are untouched — no scale is ever bound to a `_band` channel.
+
+The rule that falls out, now stated in [`CLAUDE.md`](CLAUDE.md): **only a
+ggsql-mapped column goes through a scale; everything the writer resolves itself
+is `Raw`.** For symmetry `wire_positions` gained `constant_position`, so a
+position arriving as a bare `Literal` is materialised per row and still travels
+through its position scale instead of erroring — every geom now accepts every
+form ggsql delivers an aesthetic in.
+
+Verified: all five `rule` forms render (horizontal, vertical, N data-driven lines
+with a collapsed legend, `aggregate => 'max'`, diagonal abline), the line+rule
+overlay draws both layers, 91 writer tests pass, and a full harness re-run over
+`doc/syntax/` is clean — 191 cells, 0 problems, all eyeballed against the
+Vega-Lite renders. fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1343,3 +1421,10 @@ The writer's tests are render-succeeds smoke tests plus exact-text assertions fo
 strip labels and bin labelling, backed by manual eyeballing. §6 planned
 **snapshot PNG tests** and they don't exist — there is no automated protection
 against visual regression, which matters with a moving pinned rev.
+
+The visual test harness narrows this but does not close it: it renders the whole
+doc corpus into one report (see the section above), so a rev bump can be
+re-eyeballed in a single pass, and an error or panic is *reported* per cell. It
+still compares nothing against a baseline. The remaining step is to keep a
+committed set of reference PNGs and diff against them — the harness's per-cell
+naming (`<source-slug>-<NN>.png`) is already stable enough to serve as one.

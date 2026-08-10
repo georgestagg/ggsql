@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use hephaestus::color::rgb8;
+use hephaestus::plot::geom::Raw;
 use hephaestus::plot::{Plot as HPlot, RibbonGeom};
 
 use super::super::channels::{
@@ -175,7 +176,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
             }
         }
     }
-    b.set("alpha", constant_number(ctx, "opacity", 1.0));
+    b.set("alpha", Raw(constant_number(ctx, "opacity", 1.0)));
     plot.add_geom(b.build());
 
     Ok(())
