@@ -103,7 +103,7 @@ Outside Positron there is no way to execute a query: `activate()` returns early,
 
 The Positron Supervisor is a soft dependency, reached through `getSupervisorApi()` in `manager.ts`. It deliberately is not in `extensionDependencies`: that field is static, and an entry for `positron.positron-supervisor` would stop the extension activating at all in VS Code, where the supervisor does not exist.
 
-`GgsqlRuntimeManager.alwaysRediscover` is `true` because ggsql runtimes are never marked `cacheable`, so Positron must run discovery on every window open rather than trusting its cross-window cache. The property is declared in the pinned `@posit-dev/positron` typings, so `tsc` checks the name directly; `src/test/manager.test.ts` also asserts the value.
+`GgsqlRuntimeManager.alwaysRediscover` is `true` because ggsql runtimes are never marked `cacheable`, so Positron must run discovery on every window open rather than trusting its cross-window cache. The typings declare it as an optional member, so `tsc` checks the value's type but not the name: a misspelling would compile as a harmless extra property and silently disable the flag. `src/test/manager.test.ts` is the guard, because the property access there fails to compile if the name changes.
 
 Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSqlAssociationPrompt`, syntax highlighting) is registered before the early return and works in plain VS Code. Add new commands on the correct side of that line, and gate them if they execute code.
 

@@ -40,4 +40,14 @@ suite('manager', () => {
 		const manager = new GgsqlRuntimeManager({} as vscode.ExtensionContext);
 		assert.strictEqual(manager.alwaysRediscover, true);
 	});
+
+	test('restoreSession propagates a missing supervisor', async () => {
+		// getSupervisorApi() is awaited first, before any kernel spec is
+		// written, so the rejection arrives with nothing done on disk.
+		const manager = new GgsqlRuntimeManager({} as vscode.ExtensionContext);
+		await assert.rejects(
+			() => manager.restoreSession({} as never, {} as never, 'Sales analysis'),
+			/Positron Supervisor extension not found/,
+		);
+	});
 });
