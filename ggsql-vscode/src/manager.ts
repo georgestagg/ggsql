@@ -307,12 +307,15 @@ function ensureKernelSpecInstalled(kernelPath: string): void {
 
 /**
  * Create the dynamic state for a ggsql runtime session.
+ *
+ * @param sessionName The name Positron holds for the session, when restoring
+ *   one. New sessions have no name yet and get the default.
  */
-function createDynState(): positron.LanguageRuntimeDynState {
+export function createDynState(sessionName?: string): positron.LanguageRuntimeDynState {
     return {
         inputPrompt: 'ggsql> ',
         continuationPrompt: '... ',
-        sessionName: 'ggsql',
+        sessionName: sessionName ?? 'ggsql',
     };
 }
 
@@ -438,11 +441,12 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
      */
     async restoreSession(
         runtimeMetadata: positron.LanguageRuntimeMetadata,
-        sessionMetadata: positron.RuntimeSessionMetadata
+        sessionMetadata: positron.RuntimeSessionMetadata,
+        sessionName: string
     ): Promise<positron.LanguageRuntimeSession> {
         const supervisorApi = await getSupervisorApi();
 
-        const dynState = createDynState();
+        const dynState = createDynState(sessionName);
 
         // Re-advertise this kernel on restore
         ensureKernelSpecInstalled(runtimeMetadata.runtimePath);
