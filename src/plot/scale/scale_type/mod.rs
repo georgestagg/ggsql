@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use super::transform::{Transform, TransformKind};
 use crate::plot::aesthetic::{is_facet_aesthetic, is_position_aesthetic};
-use crate::plot::types::{validate_parameter, DefaultParamValue, ParamDefinition, Parameters};
+use crate::plot::types::{
+    format_number, validate_parameter, DefaultParamValue, ParamDefinition, Parameters,
+};
 use crate::plot::{ArrayElement, ColumnInfo, ParameterValue};
 
 // Scale type implementations
@@ -810,13 +812,23 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
 
     /// Labelled breaks: `(numeric_position, display_label)` pairs.
     ///
-    /// Default: pairs each `numeric_breaks()` value with its string form.
+    /// Default: labels each break from its own typed `ArrayElement`, so a
+    /// temporal break reads as its ISO string rather than as the epoch number
+    /// its position projects to. The label is the element's `to_key_string()`,
+    /// which is also how `label_mapping` is keyed — so the `RENAMING` and
+    /// label-template overrides the caller applies actually match.
     /// Discrete/ordinal override to pair position indices with input-range
-    /// category names.  `label_mapping` overrides are applied by the caller.
+    /// category names.
     fn break_labels(&self, scale: &super::Scale) -> Vec<(f64, String)> {
+        if let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") {
+            return breaks
+                .iter()
+                .filter_map(|b| b.to_f64().map(|v| (v, b.to_key_string())))
+                .collect();
+        }
         self.numeric_breaks(scale)
             .into_iter()
-            .map(|v| (v, format!("{v}")))
+            .map(|v| (v, format_number(v)))
             .collect()
     }
 

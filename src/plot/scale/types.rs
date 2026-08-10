@@ -353,6 +353,48 @@ mod tests {
     }
 
     #[test]
+    fn test_temporal_break_labels_are_iso_strings() {
+        // 1208 days since epoch = 1973-04-23. A temporal break labels itself from
+        // its own value, not from the epoch number its position projects to.
+        let mut s = continuous_scale((1208.0, 1264.0), vec![]);
+        s.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Date(1208),
+                ArrayElement::Date(1236),
+                ArrayElement::Date(1264),
+            ]),
+        );
+        assert_eq!(
+            s.break_labels(),
+            vec![
+                (1208.0, "1973-04-23".to_string()),
+                (1236.0, "1973-05-21".to_string()),
+                (1264.0, "1973-06-18".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_temporal_break_labels_honour_mapping() {
+        // `label_mapping` is keyed by `to_key_string()`, so a RENAMING override on
+        // a temporal break has to be found under the ISO key.
+        let mut s = continuous_scale((1208.0, 1236.0), vec![]);
+        s.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(vec![ArrayElement::Date(1208), ArrayElement::Date(1236)]),
+        );
+        let mut mapping = HashMap::new();
+        mapping.insert("1973-04-23".to_string(), Some("Apr 23".to_string()));
+        mapping.insert("1973-05-21".to_string(), None);
+        s.label_mapping = Some(mapping);
+        assert_eq!(
+            s.break_labels(),
+            vec![(1208.0, "Apr 23".to_string()), (1236.0, String::new())]
+        );
+    }
+
+    #[test]
     fn test_break_labels_with_mapping() {
         let mut s = discrete_scale(&["A", "B", "C"]);
         let mut mapping = HashMap::new();

@@ -17,6 +17,12 @@
 
 ### Fixed
 
+- Temporal axes and legends in the hephaestus writer were labelled with the raw
+  epoch number behind the date (`1208` for a `DATE`, `106358400000000` for a
+  `TIMESTAMP`), and a `RENAMING` on a temporal scale was ignored. They now read as
+  dates, honor `RENAMING`, and match the Vega-Lite writer. Scales are also built
+  calendar-aware, so ticks the writer doesn't supply itself — those of a free facet
+  panel — are dates rather than numbers.
 - `segment`, `rule`, `ribbon` and `tile` layers under a map `PROJECT` now render
   in the hephaestus writer. ggsql expands these into per-vertex rows so the edges
   follow the projection's curvature, which the writer ignored — segments came out

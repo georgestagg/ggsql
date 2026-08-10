@@ -11,7 +11,9 @@ use std::sync::Arc;
 use hephaestus::color::{rgba, Color};
 use hephaestus::plot::geom::linetype::{dashdot, dashed, dotted, solid};
 use hephaestus::plot::scale::{self, Scale as HScale, TransformKind as HTransform};
-use hephaestus::scales::value::{LinetypeStep, Value as HValue};
+use hephaestus::scales::value::{
+    Date as HDate, DateTime as HDateTime, LinetypeStep, Time as HTime, Value as HValue,
+};
 
 use super::channels::{column_to_f64, column_to_strings};
 use crate::naming;
@@ -64,13 +66,21 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
             c
         }
         ScaleTypeKind::Continuous => {
-            let h_transform = transform.and_then(map_transform);
             let (min, max) = continuous_domain(scale);
-            let mut c = scale::continuous(min..=max);
-            if let Some(t) = h_transform {
-                c = c.with_transform(t);
+            // A temporal channel becomes a calendar-aware scale, so the ticks
+            // hephaestus generates for itself (and their labels) are dates
+            // rather than epoch numbers. ggsql's own breaks still win where it
+            // resolved them — see `apply_breaks`.
+            match temporal_scale(transform, min, max) {
+                Some(t) => t,
+                None => {
+                    let mut c = scale::continuous(min..=max);
+                    if let Some(t) = transform.and_then(map_transform) {
+                        c = c.with_transform(t);
+                    }
+                    c
+                }
             }
-            c
         }
     };
 
@@ -132,19 +142,43 @@ pub fn free_position_scale(
         ScaleTypeKind::Binned => global
             .and_then(|g| free_binned_scale(g, dfs, base))
             // No usable break array → fall back to a plain continuous panel scale.
-            .or_else(|| free_continuous_scale(dfs, base, transform)),
-        ScaleTypeKind::Continuous => free_continuous_scale(dfs, base, transform),
+            .or_else(|| free_continuous_scale(global, dfs, base, transform)),
+        ScaleTypeKind::Continuous => free_continuous_scale(global, dfs, base, transform),
     }
 }
 
 /// A per-panel continuous position scale over the panel's own data extent.
+///
+/// A temporal dimension becomes a temporal scale, and keeps ggsql's global break
+/// labels narrowed to the panel — the same treatment [`free_binned_scale`] gives
+/// bin edges, and what the Vega-Lite writer does with a free temporal axis. The
+/// alternative, letting hephaestus pick per-panel calendar ticks, invents breaks
+/// ggsql didn't resolve and packs full ISO labels into a panel too narrow to hold
+/// them (there is no label thinning — see PLAN.md §9). A panel no global break
+/// falls inside keeps hephaestus's own ticks rather than a bare axis; they are
+/// dates either way, because the scale carries the calendar unit.
 fn free_continuous_scale(
+    global: Option<&GScale>,
     dfs: &[&DataFrame],
     base: &str,
     transform: Option<GTransform>,
 ) -> Option<HScale> {
     let (min, max) = panel_extent(dfs, base)?;
     let (min, max) = pad_degenerate(min, max);
+    if let Some(hs) = temporal_scale(transform, min, max) {
+        let labels: Vec<(HValue, String)> = global
+            .map(|g| g.break_labels())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(pos, _)| *pos >= min && *pos <= max)
+            .map(|(pos, label)| (temporal_value(transform, pos), label))
+            .collect();
+        return Some(if labels.is_empty() {
+            hs
+        } else {
+            hs.with_breaks_labeled(labels)
+        });
+    }
     let mut c = scale::continuous(min..=max);
     if let Some(t) = transform.and_then(map_transform) {
         c = c.with_transform(t);
@@ -312,12 +346,21 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
         // PLAN.md §9 — it currently maps break positions through `binned_map`, which
         // sends every value to its bin's centre). Composite "lower – upper" range
         // labels belong to keyed legends and facet strips, not axes.
-        _ => hs.with_breaks_labeled(
-            labels
-                .into_iter()
-                .map(|(pos, label)| (HValue::Number(pos), label))
-                .collect(),
-        ),
+        //
+        // A continuous temporal scale takes its breaks as temporal values, matching
+        // the variant its own generated breaks come back as, so hephaestus formats
+        // any break we don't label as a date rather than as an epoch number.
+        _ => {
+            let temporal = matches!(type_kind, Some(ScaleTypeKind::Continuous))
+                .then(|| scale.transform.as_ref().map(|t| t.transform_kind()))
+                .flatten();
+            hs.with_breaks_labeled(
+                labels
+                    .into_iter()
+                    .map(|(pos, label)| (temporal_value(temporal, pos), label))
+                    .collect(),
+            )
+        }
     }
 }
 
@@ -409,6 +452,37 @@ pub fn bin_at_centre(bins: &[Bin], value: f64) -> Option<usize> {
                 .total_cmp(&(b.centre - value).abs())
         })
         .map(|(i, _)| i)
+}
+
+/// A hephaestus temporal scale over `min..=max`, in the unit the ggsql temporal
+/// transform names: days since epoch for `Date`, microseconds since epoch for
+/// `DateTime`, nanoseconds since midnight for `Time` — the same units ggsql's
+/// `ArrayElement` uses, which is what a temporal column projects to f64 as.
+/// `None` for any non-temporal transform.
+fn temporal_scale(transform: Option<GTransform>, min: f64, max: f64) -> Option<HScale> {
+    match transform? {
+        GTransform::Date => Some(scale::temporal(
+            HDate::from_days(min as i32)..=HDate::from_days(max as i32),
+        )),
+        GTransform::DateTime => Some(scale::temporal(
+            HDateTime::from_micros(min as i64)..=HDateTime::from_micros(max as i64),
+        )),
+        GTransform::Time => Some(scale::temporal(
+            HTime::from_nanos(min as i64)..=HTime::from_nanos(max as i64),
+        )),
+        _ => None,
+    }
+}
+
+/// Wrap a break position as the value variant its scale works in — the temporal
+/// variant under a temporal transform, a plain number otherwise.
+fn temporal_value(transform: Option<GTransform>, pos: f64) -> HValue {
+    match transform {
+        Some(GTransform::Date) => HValue::Date(pos as i32),
+        Some(GTransform::DateTime) => HValue::DateTime(pos as i64),
+        Some(GTransform::Time) => HValue::Time(pos as i64),
+        _ => HValue::Number(pos),
+    }
 }
 
 /// Map a ggsql transform to its hephaestus equivalent. Cast/temporal transforms
@@ -546,6 +620,49 @@ mod tests {
     fn binned_bins_empty_without_breaks() {
         assert!(binned_bins(&GScale::new("facet1")).is_empty());
         assert!(binned_bins(&binned_scale(&[5.0], &[])).is_empty());
+    }
+
+    /// A resolved continuous Date scale: domain and breaks in days since epoch,
+    /// labelled the way ggsql's resolution leaves them (ISO keys).
+    fn date_scale(domain: (i32, i32), breaks: &[i32]) -> GScale {
+        let mut scale = GScale::new("pos1");
+        scale.scale_type = Some(crate::plot::scale::ScaleType::continuous());
+        scale.transform = Some(crate::plot::scale::transform::Transform::date());
+        scale.input_range = Some(vec![
+            ArrayElement::Date(domain.0),
+            ArrayElement::Date(domain.1),
+        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::Array(breaks.iter().map(|d| ArrayElement::Date(*d)).collect()),
+        );
+        scale
+    }
+
+    #[test]
+    fn temporal_scale_labels_ggsql_breaks_as_dates() {
+        let scale = date_scale((1208, 1264), &[1208, 1236, 1264]);
+        let hs = build_scale(Some(&scale), RangeKind::Position).expect("scale");
+        let locale = hephaestus::scales::locale::Locale::EN_US;
+        let labels: Vec<String> = hs.breaks(5).iter().map(|b| hs.format(b, &locale)).collect();
+        assert_eq!(labels, vec!["1973-04-23", "1973-05-21", "1973-06-18"]);
+    }
+
+    #[test]
+    fn temporal_scale_is_calendar_aware() {
+        // Breaks hephaestus generates for itself come back as dates, not as the
+        // epoch-day numbers the domain is stored in — that is what a panel scale
+        // with no in-window ggsql break falls back on.
+        let hs = temporal_scale(Some(GTransform::Date), 1208.0, 1400.0).expect("temporal scale");
+        let locale = hephaestus::scales::locale::Locale::EN_US;
+        for label in hs.breaks(5).iter().map(|b| hs.format(b, &locale)) {
+            assert!(
+                label.starts_with("197"),
+                "expected a date label, got {label}"
+            );
+        }
+        assert!(temporal_scale(Some(GTransform::Log10), 1.0, 10.0).is_none());
+        assert!(temporal_scale(None, 1.0, 10.0).is_none());
     }
 
     #[test]

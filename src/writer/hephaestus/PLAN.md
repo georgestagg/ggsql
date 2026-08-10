@@ -933,6 +933,45 @@ row, where grouping cannot apply. Violin was the only geom building its own keys
   `intensity`, half-violin and ridgeline (`SCALE ORDINAL y`) renders. Test
   `renders_dodged_violin`; 81 writer tests; fmt, clippy clean.
 
+## Temporal axes — status: implemented
+
+Temporal axes and legends were labelled with the epoch integer their position
+projects to (`1208`, or `106358400000000` for a timestamp) rather than the date,
+and a `RENAMING` on a temporal scale was dropped entirely. Tick *positions* were
+always ggsql's, so this was a labelling fault, not a placement one. Two causes:
+
+- `Scale::break_labels()` (default impl in `plot/scale/scale_type/mod.rs`) built
+  each label as `format!("{v}")` over `numeric_breaks()`, discarding the break's
+  `ArrayElement` variant. It now labels each break from the element itself via
+  `to_key_string()` — which is also how `label_mapping` is keyed, so the label
+  template and `RENAMING` overrides are found instead of missed. Numeric labels
+  are unchanged (`format_number` agrees with the old `format!("{v}")` on every
+  break value), and the discrete/ordinal override is untouched.
+- The writer built every continuous scale with `scale::continuous`, so hephaestus
+  never learned the calendar unit even though the resolved ggsql scale names it
+  (`transform` is auto-set to `Date`/`DateTime`/`Time` from the column dtype).
+  `scales::temporal_scale` now builds `scale::temporal` in the unit the transform
+  names — days / µs since epoch, ns since midnight, matching `ArrayElement` and
+  therefore what a temporal column projects to f64 as — and `apply_breaks` hands
+  a continuous temporal scale its breaks as `Value::Date`/`DateTime`/`Time`.
+  Mapping is unaffected: hephaestus maps `Temporal` exactly as `Continuous`.
+
+Free temporal facet dimensions keep ggsql's global break labels **narrowed to the
+panel** (`free_continuous_scale`), the treatment `free_binned_scale` already gives
+bin edges and what the Vega-Lite writer does with a free temporal axis. Letting
+hephaestus pick per-panel calendar ticks instead — which it now can — invents
+breaks ggsql didn't resolve and puts five full ISO labels in a panel ~130 px wide.
+A panel that no global break falls inside keeps hephaestus's own ticks rather than
+a bare axis; they read as dates either way, because the scale carries the unit.
+
+- Verified (eyeballed, against the Vega-Lite render of the same query): a fixed
+  `Date` axis, the same with `RENAMING * => '{:time %b %d}'`, a `TIMESTAMP` axis, a
+  `Date`-mapped colourbar, and a free-scale faceted `Date` axis. Tests
+  `temporal_scale_labels_ggsql_breaks_as_dates`, `temporal_scale_is_calendar_aware`,
+  `test_temporal_break_labels_are_iso_strings`,
+  `test_temporal_break_labels_honour_mapping`; full `--features hephaestus` suite;
+  fmt, clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -987,15 +1026,27 @@ here so it survives between efforts.
 - **No axis label thinning or rotation.** hephaestus's `Axis` is
   `rail(scale, placement)` + `title` only, with ticks coming solely from the
   scale, so long tick labels overlap in narrow facet panels (visible with binned
-  range labels, and equally with long categorical labels).
+  range labels, and equally with long categorical labels). **Now the most visible
+  gap on a temporal axis:** a *fixed*-scale facet gives every panel the full
+  global break set, and an ISO date label is ~3× the width of the epoch integer
+  that used to be drawn there, so six dates collide where six numbers merely
+  crowded. Vega-Lite doesn't hit this because Vega-Lite's own `labelOverlap`
+  hides colliding labels. The fix belongs in hephaestus's `Axis`: it needs the
+  measured text metrics to decide a stride, which the writer doesn't have and
+  shouldn't guess. Keeping the tick and blanking its label is the presentation to
+  aim for.
 
 ### Feature gaps
 
 - `arrow` geom — the only unsupported `GeomType` (deliberate).
 - Theming: ggsql has no theme concept; the writer uses hephaestus's default and
   exposes no selection.
-- Calendar-native temporal axes (numeric axes with ggsql's formatted break labels
-  work today).
+- A `DateTime` axis is labelled with the full ISO timestamp
+  (`1973-06-25T00:00:00`), because that is what `ArrayElement::to_key_string()`
+  yields and hence what ggsql's default label template produces. The Vega-Lite
+  writer draws the same string from the same mapping, so the two agree — but a
+  compact default (dropping a time part that is midnight on every break) would
+  suit both, and belongs in ggsql's label templating rather than in either writer.
 - A `linewidth` aesthetic on ggsql's Text geom would let text outline width be set
   (a core + doc change; the outline itself works).
 ### Architectural debt — writer doing work ggsql should own
@@ -1022,7 +1073,21 @@ resolved per-panel domains and spatial position scales:
   ("Column `linewidth` … does not exist"). Grouping aesthetics (fill/stroke)
   survive; scalar ones don't.
 - `Scale::break_labels()` misses `label_mapping` for numeric discrete/ordinal
-  domains (`to_json()` `"5.0"` vs `to_key_string()` `"5"`).
+  domains: `categorical_break_labels` still labels a non-string category with
+  `format!("{}", to_json())` (`"5.0"`) while the mapping is keyed by
+  `to_key_string()` (`"5"`). The default (continuous/binned) impl no longer has
+  this fault — see the temporal-axes section.
+- **`TIME` columns are broken for both writers.** ggsql's Time convention is
+  nanoseconds (`casting.rs` targets `Time64(Nanosecond)`, `schema.rs` reads via the
+  strict `as_time64_ns`), but `needs_cast` treats any `Time64(_)` as already the
+  target, so DuckDB's `Time64(Microsecond)` is never converted. VL fails hard
+  (`Internal error: Expected Time64(Nanosecond) array, got Time64(Microsecond)`);
+  the hephaestus writer renders raw µs against a domain ggsql couldn't resolve.
+  Fix: treat a unit mismatch as needing a cast.
+- **VL pins global `axis.values` on a free facet scale**, so a free temporal panel
+  shows only whichever global breaks fall inside it (often one). The hephaestus
+  writer deliberately matches this; both would improve if ggsql resolved per-panel
+  breaks (see the architectural-debt item above).
 - VL's `build_discrete_facet_label_expr` is unreachable dead code and iterates a
   `HashMap` nondeterministically — deletion candidate.
 - VL's DateTime/Time binned facet strips are broken (its midpoint-string
@@ -1044,6 +1109,10 @@ resolved per-panel domains and spatial position scales:
   `TextElement` has no stroke field; `text_stroke` is a geom channel only.
 - The `text` feature's parley shaper is documented as scaffolding "meant to be
   replaced by the host".
+- Minor breaks ignore how sparse the supplied majors are: a temporal scale given a
+  single labelled break still emits sub-unit (daily) minors across the domain,
+  which reads as a dotted rail in a narrow panel. Deriving the minor interval from
+  the *supplied* majors, or letting a caller suppress minors, would fix it.
 - `src/scales/` docs still claim transforms are Identity-only — stale.
 
 ### Standing constraints (accepted)
