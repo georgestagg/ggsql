@@ -346,6 +346,17 @@ export async function getSupervisorApi(): Promise<PositronSupervisorApi> {
  * Manages the lifecycle of ggsql runtime sessions in Positron.
  */
 export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
+    /**
+     * Run discovery on every window open rather than trusting Positron's
+     * cross-window cache.
+     *
+     * ggsql runtimes are not marked cacheable: the ggsql.kernelPath setting is
+     * workspace scoped, and the PATH fallback is not guaranteed to resolve to
+     * a real file. A cache hit would therefore register only some of the
+     * candidates and silently hide the rest on warm starts.
+     */
+    public readonly alwaysRediscover = true;
+
     private _context: vscode.ExtensionContext;
     private _sessions: Map<string, positron.LanguageRuntimeSession> = new Map();
 
