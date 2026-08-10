@@ -5,85 +5,33 @@
 - New `HephaestusWriter` renders a plot to a PNG raster image via
   [hephaestus](https://github.com/posit-dev/hephaestus), behind a new
   off-by-default `hephaestus` feature (`--writer hephaestus` in the CLI). Covers
-  every layer type except `arrow`, all scale types and transforms, multi-layer
-  plots, `FACET` (Wrap/Grid, fixed and free scales), Cartesian/polar/map
-  projections, spatial geometry, and plot chrome (axes, legends, facet strips,
-  title/subtitle/caption). Requires a working GPU adapter — hardware or software,
-  e.g. lavapipe — at render time.
+  every layer type except `arrow`, all scale types and transforms, layer settings
+  and position adjustments, multi-layer plots, `FACET` (Wrap/Grid, fixed and free
+  scales), Cartesian/polar/map projections, spatial geometry, and plot chrome
+  (axes with major and minor gridlines, legends, facet strips, and
+  title/subtitle/caption spanning the whole figure). `LABEL caption` and the new
+  `minor_breaks` setting have no Vega-Lite equivalent and render only here.
+  Requires a working GPU adapter — hardware or software, e.g. lavapipe — at
+  render time.
 - New `minor_breaks` setting on continuous scales, controlling the unlabelled
   subdivisions between breaks: a whole number of minor breaks *per interval between
   two breaks* (`0` removes them), an array of exact positions, or — for temporal
   scales — an interval such as `'week'`. Defaults to a value chosen by the
-  transformation. Like `LABEL caption`, this has no Vega-Lite equivalent and is
-  ignored by that writer; the hephaestus writer draws them.
-- `LABEL caption => '...'` now renders. It has no Vega-Lite equivalent and is
-  ignored by that writer, but the hephaestus writer places it below the plot.
-- `LABEL title`/`subtitle` are rendered by the hephaestus writer, spanning the
-  whole figure for faceted plots.
+  transformation. This has no Vega-Lite equivalent and is ignored by that writer;
+  the hephaestus writer draws them.
 
 ### Fixed
 
-- Minor gridlines in the hephaestus writer were generated from the axis domain
-  instead of from ggsql's breaks, so an axis with few major breaks — a temporal axis
-  narrowed to one break in a facet panel — was filled with sub-unit minors that read
-  as a dotted rail. Minor breaks are now resolved by ggsql alongside the majors and
-  the writer draws those (see the new `minor_breaks` setting above).
-- A binned `size`, `shape` or `linetype` legend in the hephaestus writer drew one
-  key per bin *edge* — five keys for a four-bin ladder, each sized at an edge value,
-  implying a category that doesn't exist. It now draws one key per bin, sized at the
-  bin's midpoint, with the edge labels on a rail between the keys; a binned `color`
-  legend likewise becomes a stepped bar of one block per bin instead of a smooth
-  gradient.
-- Panels of a `FACET` with free scales were not expanded in the hephaestus writer, so
-  a mark at a panel's extreme was clipped in half at the panel edge, and
-  `SCALE ... SETTING expand` stopped applying once that dimension was freed. Free
-  panels now get the scale's own expansion, like a fixed axis.
-- Temporal axes and legends in the hephaestus writer were labelled with the raw
-  epoch number behind the date (`1208` for a `DATE`, `106358400000000` for a
-  `TIMESTAMP`), and a `RENAMING` on a temporal scale was ignored. They now read as
-  dates, honor `RENAMING`, and match the Vega-Lite writer. Scales are also built
-  calendar-aware, so ticks the writer doesn't supply itself — those of a free facet
-  panel — are dates rather than numbers.
-- `segment`, `rule`, `ribbon` and `tile` layers under a map `PROJECT` now render
-  in the hephaestus writer. ggsql expands these into per-vertex rows so the edges
-  follow the projection's curvature, which the writer ignored — segments came out
-  zero-length, ribbons zero-height, a rule became a fan of straight lines, and
-  tiles a box per vertex. A non-spatial map is also framed to the map's bounding
-  box now, so its marks land on the clip boundary and keep the projection's
-  proportions, as they already did for `spatial` layers.
-- The hephaestus writer drew a diagonal `rule` (abline) as a single solid line: it
-  ignored `linetype`, and a rule mapping several rows of slopes/intercepts
-  (`MAPPING slope AS slope, y AS y`) rendered only the first. It now draws one line
-  per row, honoring per-line `stroke`/`linetype`/`linewidth` — constant or
-  data-mapped, with a legend — like the Vega-Lite writer.
-- A `violin` layer with several groups per category (from a mapped aesthetic or
-  `PARTITION BY`) merged them into a single contour in the hephaestus writer. Each
-  group is now its own violin, in both orientations.
-- The hephaestus writer's `size`, `shape` and `linetype` legends drew empty
-  swatches next to their labels; the key glyphs are now painted (in the layer's
-  constant color, or a neutral grey when the color aesthetic is itself mapped).
-- The hephaestus writer now honors the `hinge` and `side` settings. `hinge` caps a
-  `boxplot`'s whiskers and a `range`'s endpoints (10pt by default for a range, so
-  every range previously lost its hinges), and `side` draws a half `boxplot` or
-  `violin` on the chosen side of the band, so the two pair up on one category.
-  Horizontal (transposed) `boxplot` and `violin` layers also render — the first
-  failed with an internal error and the second drew nothing.
-- `position => 'jitter'` and `position => 'dodge'` are honored by every layer type
-  in the hephaestus writer. Only bars, boxplots, violins and tiles used to move:
-  jittered points all landed on their category's centre line, and dodged points,
-  text, lines and ranges overplotted. Together with `side` this makes the
-  half-boxplot-plus-one-sided-jitter (raincloud) layout render.
-
-### Changed
-
-- The hephaestus writer draws a boxplot's median line at the layer's resolved
-  `linewidth` (default 1.0) instead of a fixed 1.5, matching the Vega-Lite
-  writer's median tick. `linewidth` and `linetype` now style every part of a
-  `boxplot` (box, whiskers, median, outlier markers) and both edges of a
-  `violin`, so `SETTING linewidth => 3, linetype => 'dashed'` is honored.
-- The hephaestus writer labels binned facet strips with the bin's range
-  (`2500 – 3500`, or `≥ 5500` for a squished terminal bin) instead of the raw bin
-  midpoint, and applies `RENAMING` to discrete facet strips.
+- `Scale::break_labels()` — what a writer reads to label an axis, colorbar or
+  legend tick — labels a temporal break with its own date (`1973-04-23`) instead
+  of the epoch number its position projects to (`1208`), and keys `RENAMING`
+  overrides by that same string, so a rename on a temporal scale is found rather
+  than missed. Numeric and categorical labels are unchanged.
+- A scale with an explicit input range that no layer trains — `SCALE x FROM (0, 10)`
+  alongside a diagonal `rule`, whose position is deliberately kept out of scale
+  training — takes its type from that range (numeric or temporal → continuous,
+  string or boolean → discrete) instead of staying untyped, so consumers get a
+  fully resolved scale.
 
 ## 0.4.1 - 2026-06-22
 

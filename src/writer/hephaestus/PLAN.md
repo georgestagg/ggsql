@@ -10,7 +10,8 @@ Status: **implemented** behind the non-default `hephaestus` feature — all geom
 except `arrow`, all scale types, multi-layer, faceting (fixed + free), Cartesian
 / Polar / Map projections, spatial, and plot chrome (titles, axes, legends,
 strips). This document is the design of record and the phase log; §9 lists the
-work deliberately deferred.
+work deliberately deferred. The *architecture* — abstractions, invariants, how to
+extend them — lives in [`CLAUDE.md`](CLAUDE.md).
 
 ## 1. Why this is a good fit
 
@@ -1145,13 +1146,10 @@ here so it survives between efforts.
   `0.0.1` crate. crates.io rejects git dependencies **even when optional**, so
   ggsql cannot be published while this dep exists in that form. This is the one
   item that blocks a release rather than polish.
-- No `src/writer/hephaestus/CLAUDE.md` (planned in §5). This document is doing
-  that job and is a phase log, not an architecture doc.
-- `src/CLAUDE.md` is stale: no `hephaestus` row in the feature table, and the
-  `writer/` section still says "Only Vega-Lite is implemented today".
-- CLI: no output-extension routing, and no flags for width/height/dpi/background,
-  so only the one hardcoded `HephaestusWriter::new(1500, 1000, 300.0)` with a
-  transparent background is reachable.
+- CLI: `--writer hephaestus` reaches the writer, but there is no
+  output-extension routing and no flags for width/height/dpi/background, so only
+  the one hardcoded `HephaestusWriter::new(1500, 1000, 300.0)` with a transparent
+  background is reachable.
 - `doc/` doesn't mention raster output at all.
 - Default-writer switchover criteria still undecided (Decision 4).
 

@@ -1,6 +1,7 @@
 //! ggsql geom → hephaestus geom dispatch. Each module declares its channel
 //! specs; [`build_into_plot`] picks the concrete hephaestus geom and builds it
-//! through the shared wiring. Composite geoms (boxplot, violin) are Phase 3b.
+//! through the shared wiring. Composite geoms (boxplot, violin) and the geoms
+//! needing unit conversion (text, spatial) supply their own builder instead.
 
 mod area;
 mod boxplot;
@@ -23,7 +24,8 @@ use super::wiring::{build_and_add, Ctx};
 use crate::plot::layer::geom::GeomType;
 use crate::{GgsqlError, Result};
 
-/// Build the layer's geom into `plot`, recording its scales/axes/legends in `w`.
+/// Build the layer's geom into `plot`: set its channels, bind them to the scales
+/// named in `ctx`, and record any legends on `ctx`.
 pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // A layer ggsql expanded into projected vertices draws as a polyline or a
     // polygon rather than as its usual mark, whatever the geom (see `densified`).

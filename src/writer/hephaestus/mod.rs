@@ -3,12 +3,15 @@
 //! Renders a resolved ggsql `Spec` to PNG bytes via the [`hephaestus`] 2D scene
 //! renderer.
 //!
-//! **Scope** (see `src/writer/hephaestus/PLAN.md`): multi-layer plots under
-//! Cartesian, Polar, and Map projections, with `FACET` faceting (Wrap/Grid,
-//! fixed + free scales). All geoms (point/line/path/area/ribbon/bar/histogram/
-//! tile/polygon/segment/rule/range/text/density/smooth/boxplot/violin), all
-//! scale types/transforms, material aesthetics, axis titles, and legends are
-//! supported. Unsupported geoms are rejected by [`HephaestusWriter::validate`].
+//! **Scope**: multi-layer plots under Cartesian, Polar, and Map projections,
+//! with `FACET` faceting (Wrap/Grid, fixed + free scales); every geom except
+//! `arrow`; all scale types and transforms, material aesthetics, plot and axis
+//! titles, and legends. A geom outside [`geom::is_supported`] is rejected by
+//! [`HephaestusWriter::validate`].
+//!
+//! Architecture — the abstractions and the invariants they keep — is documented
+//! in `src/writer/hephaestus/CLAUDE.md`; `PLAN.md` holds the design rationale and
+//! the inventory of deferred work.
 //!
 //! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
 //! (hardware or software, e.g. lavapipe) is required at render time.

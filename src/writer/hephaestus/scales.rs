@@ -37,10 +37,8 @@ pub enum RangeKind {
     Linetype,
 }
 
-/// Build a hephaestus scale from a resolved ggsql scale.
-///
-/// `data_extent` is the finite (min, max) of the channel's data, used as the
-/// domain fallback when the ggsql scale carries none (continuous scales only).
+/// Build a hephaestus scale from a resolved ggsql scale. `None` when ggsql
+/// resolved no scale type, so there is nothing to register.
 pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
     // No resolved scale type → no scale to register. ggsql is the source of scale
     // truth; the writer never fabricates one.
@@ -93,7 +91,7 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
     // Feed ggsql's resolved breaks + formatted labels for every scale (including
     // under a non-identity transform), so axis/legend ticks match ggsql — and the
     // Vega-Lite writer — exactly. ggsql's breaks pair with the same resolved
-    // domain hephaestus now uses, so they line up. `apply_breaks` is a no-op when
+    // domain hephaestus reads, so they line up. `apply_breaks` is a no-op when
     // the scale has no resolved breaks.
     if let Some(scale) = scale {
         hs = apply_breaks(hs, scale, Some(type_kind));
@@ -402,10 +400,10 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
             hs.with_breaks_labeled(pairs)
         }
         // Binned scales included: their breaks are the bin **edges**, labelled by
-        // ggsql. Placing an edge break on a binned axis is hephaestus's job (see
-        // PLAN.md §9 — it currently maps break positions through `binned_map`, which
-        // sends every value to its bin's centre). Composite "lower – upper" range
-        // labels belong to keyed legends and facet strips, not axes.
+        // ggsql. Placing an edge break on a binned axis is hephaestus's job, via
+        // `Scale::map_break` (a break takes its own domain fraction, where a data
+        // value goes to its bin's centre). Composite "lower – upper" range labels
+        // belong to keyed legends and facet strips, not axes.
         //
         // A continuous temporal scale takes its breaks as temporal values, matching
         // the variant its own generated breaks come back as, so hephaestus formats

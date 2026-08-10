@@ -35,16 +35,16 @@ The Cargo workspace (`/Cargo.toml`) has five members: `tree-sitter-ggsql`, `src`
 
 ```
 ggsql query  ──►  parser  ──►  Plot AST  ──►  executor  ──►  Spec  ──►  writer  ──►  output
-                  (tree-sitter)              (Reader runs SQL,            (Vega-Lite JSON)
-                                              applies stats,
+                  (tree-sitter)              (Reader runs SQL,            (Vega-Lite JSON
+                                              applies stats,               or PNG)
                                               resolves scales)
 ```
 
 - The parser splits the query at the `VISUALISE` boundary. SQL goes to a pluggable `Reader` (DuckDB, SQLite, ODBC); the VISUALISE part becomes a typed `Plot`.
 - The executor ties the two together: SQL → DataFrame, AST resolved against actual schema, stats and scales applied per layer.
-- The writer renders the resolved `Spec` to an output format (today: Vega-Lite JSON).
+- The writer renders the resolved `Spec` to an output format: Vega-Lite JSON (default), or PNG via the hephaestus renderer (non-default `hephaestus` feature).
 
-For details — module layout, traits, where extension points live — see [`src/CLAUDE.md`](src/CLAUDE.md). For the Vega-Lite renderer specifically, [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md). For the AST types, [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
+For details — module layout, traits, where extension points live — see [`src/CLAUDE.md`](src/CLAUDE.md). For a specific renderer, [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md) (Vega-Lite) or [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md) (raster). For the AST types, [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
 
 ## Building
 
@@ -117,6 +117,7 @@ Per-folder CLAUDE.md files cover component-specific test guidance.
 - *How does the parser work? How is a `Plot` built?* → [`src/CLAUDE.md`](src/CLAUDE.md), then `src/parser/`.
 - *How do I add a new geom / scale type / coord?* → [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
 - *How does Vega-Lite output get assembled?* → [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md).
+- *How does the raster (PNG) writer work?* → [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md), with the phase log and deferred work in [`src/writer/hephaestus/PLAN.md`](src/writer/hephaestus/PLAN.md).
 - *How does a query become rendered output end-to-end?* → [`src/CLAUDE.md`](src/CLAUDE.md) (execution pipeline), then `src/execute/`.
 - *How does the Jupyter kernel route messages?* → [`ggsql-jupyter/CLAUDE.md`](ggsql-jupyter/CLAUDE.md).
 - *How does the VS Code / Positron extension talk to the kernel?* → [`ggsql-vscode/CLAUDE.md`](ggsql-vscode/CLAUDE.md).

@@ -2,8 +2,8 @@
 //! (`pos1` = category, `pos2` = value, `offset` = pre-scaled half-width). We
 //! render one `RibbonGeom` band per (category, partition group): one edge sits at
 //! `+offset` and the other at `-offset` of the category band (via the ribbon's
-//! per-row band-offset channels), sharing the value channel. One row per grid
-//! sample — no hand-built outline.
+//! per-row band-offset channels), sharing the value channel. One ribbon row per
+//! KDE grid sample, so the contour needs no hand-built outline.
 //!
 //! Which axis carries the categories follows the layer's orientation
 //! (`BandAxes`); `side` collapses the band to one half, leaving the other edge on
