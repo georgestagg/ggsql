@@ -29,6 +29,9 @@
   (`MAPPING slope AS slope, y AS y`) rendered only the first. It now draws one line
   per row, honoring per-line `stroke`/`linetype`/`linewidth` — constant or
   data-mapped, with a legend — like the Vega-Lite writer.
+- A `violin` layer with several groups per category (from a mapped aesthetic or
+  `PARTITION BY`) merged them into a single contour in the hephaestus writer. Each
+  group is now its own violin, in both orientations.
 - The hephaestus writer's `size`, `shape` and `linetype` legends drew empty
   swatches next to their labels; the key glyphs are now painted (in the layer's
   constant color, or a neutral grey when the color aesthetic is itself mapped).

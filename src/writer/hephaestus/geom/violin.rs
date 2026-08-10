@@ -1,9 +1,9 @@
-//! `violin` composite geom. ggsql's stat emits a KDE grid per category
+//! `violin` composite geom. ggsql's stat emits a KDE grid per group
 //! (`pos1` = category, `pos2` = value, `offset` = pre-scaled half-width). We
-//! render one `RibbonGeom` band per category: one edge sits at `+offset` and the
-//! other at `-offset` of the category band (via the ribbon's per-row band-offset
-//! channels), sharing the value channel. One row per grid sample — no hand-built
-//! outline.
+//! render one `RibbonGeom` band per (category, partition group): one edge sits at
+//! `+offset` and the other at `-offset` of the category band (via the ribbon's
+//! per-row band-offset channels), sharing the value channel. One row per grid
+//! sample — no hand-built outline.
 //!
 //! Which axis carries the categories follows the layer's orientation
 //! (`BandAxes`); `side` collapses the band to one half, leaving the other edge on
@@ -16,7 +16,7 @@ use hephaestus::color::rgb8;
 use hephaestus::plot::{Plot as HPlot, RibbonGeom};
 
 use super::super::channels::{
-    aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
+    aesthetic_column_name, build_group_keys, column_to_channel, column_to_f64, column_to_strings,
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
@@ -37,16 +37,30 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let offset = require(layer, "offset")?;
 
     let p1 = column_to_channel(df, band_col)?;
-    let cat = column_to_strings(df, band_col)?; // grouping key per row
+    let cat = column_to_strings(df, band_col)?;
     let p2 = column_to_f64(df, value_col)?;
     let off = column_to_f64(df, offset)?;
 
-    // Order rows so each category's band is contiguous and ascending in the
-    // value axis (RibbonGeom connects a mark's rows in source order).
+    // One contour per (category, partition group): the category alone would merge
+    // a dodged violin's groups into a single blob, since ggsql keeps position
+    // aesthetics out of `partition_by`. The Vega-Lite writer composes its `detail`
+    // encoding the same way.
+    let partitions = build_group_keys(df, &layer.partition_by)?;
+    let keys: Vec<String> = match &partitions {
+        Some(parts) => cat
+            .iter()
+            .zip(parts)
+            .map(|(c, p)| format!("{c}\u{1f}{p}"))
+            .collect(),
+        None => cat.clone(),
+    };
+
+    // Order rows so each violin's band is contiguous and ascending in the value
+    // axis (RibbonGeom connects a mark's rows in source order).
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut index: HashMap<&str, usize> = HashMap::new();
-    for (i, c) in cat.iter().enumerate() {
-        let g = *index.entry(c.as_str()).or_insert_with(|| {
+    for (i, k) in keys.iter().enumerate() {
+        let g = *index.entry(k.as_str()).or_insert_with(|| {
             groups.push(Vec::new());
             groups.len() - 1
         });
@@ -73,7 +87,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // offset (zero when not dodged).
     let dodge = dodge_offsets(df, axes.dodge());
     let side = side_sign(layer);
-    let keys: Vec<String> = order.iter().map(|&i| cat[i].clone()).collect();
+    let ordered_keys: Vec<String> = order.iter().map(|&i| keys[i].clone()).collect();
     let edges: Vec<(f64, f64)> = order
         .iter()
         .map(|&i| {
@@ -140,7 +154,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (value_ch, _) = axes.value_channels();
 
     let mut b = RibbonGeom::builder();
-    b.keys(keys);
+    b.keys(ordered_keys);
     p1.select(&order).apply(&mut b, band_ch);
     p1.select(&order).apply(&mut b, band_ch2);
     b.set(frac_ch, band);

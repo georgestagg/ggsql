@@ -906,6 +906,33 @@ in `wiring::BandAxes` and `geom/hinge.rs` rather than per geom.
   tests; feature, default (hephaestus absent) and `cargo +1.86` builds, fmt, clippy
   clean.
 
+## Violin grouping — status: implemented
+
+A violin's `RibbonGeom` keys now come from the **category and the layer's
+`partition_by`**, not the category alone (`geom/violin.rs`), and rows are ordered
+by the value axis within that composite group. ggsql keeps position aesthetics out
+of `partition_by`, so neither key is sufficient by itself: the category alone
+merged every group in a category into one contour (three islands of one species
+drew as a single blob, in either orientation), while `partition_by` alone would
+merge the categories. The Vega-Lite writer composes its `detail` encoding the same
+way — `build_detail_encoding(partition_by)` plus the categorical position field.
+This covers `PARTITION BY` as well as dodge, which the original report didn't
+mention: the group *positions* were always right, only their identity was wrong.
+
+An audit of the other geoms for the same fault found none. Only marks spanning
+several rows can mis-group, which is `LineGeom` (line/path/smooth), `RibbonGeom`
+(area/ribbon/density), `PolygonGeom` (polygon) and the densified pair — all of
+which take their keys from `partition_by` through `wiring::build_and_add`
+(`GeomSpec::grouped`). Every other geom (point, the rect family, segment/range/
+rule, hinge caps, text, spatial, and each boxplot component) draws one mark per
+row, where grouping cannot apply. Violin was the only geom building its own keys.
+
+- Verified (eyeballed): dodged violins vertical + horizontal (one contour per
+  island, correct fills), `side => 'right'` dodged, `PARTITION BY sex`, faceted
+  violins, a `color`-mapped violin, and — unchanged — the single-group, dummy-axis,
+  `intensity`, half-violin and ridgeline (`SCALE ORDINAL y`) renders. Test
+  `renders_dodged_violin`; 81 writer tests; fmt, clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -971,13 +998,6 @@ here so it survives between efforts.
   work today).
 - A `linewidth` aesthetic on ggsql's Text geom would let text outline width be set
   (a core + doc change; the outline itself works).
-- **A dodged `violin` merges its groups into one mark.** The ribbon's `keys` come
-  from the category column alone, so every dodge group in a category forms a single
-  contour (three islands of one species render as one blob). The fix is to key on
-  the layer's `partition_by` (as the generic multi-vertex geoms do via
-  `build_group_keys`) and to order rows within that composite group, not within the
-  category. Unrelated to the offsets themselves — the group *positions* are correct.
-
 ### Architectural debt — writer doing work ggsql should own
 
 The principle is "ggsql owns all scale domains; the writer never computes

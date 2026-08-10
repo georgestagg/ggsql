@@ -1194,6 +1194,18 @@ mod tests {
     }
 
     #[test]
+    fn renders_dodged_violin() {
+        // Two fill groups per category: each must be its own contour (keyed on the
+        // category *and* the partition columns), not one merged blob.
+        assert_png_or_skip(render(
+            "SELECT g, f, v FROM (VALUES ('a','x',1),('a','x',2),('a','x',3),\
+             ('a','y',5),('a','y',6),('a','y',7),\
+             ('b','x',2),('b','x',3),('b','x',4),('b','y',6),('b','y',7),('b','y',8)) t(g,f,v) \
+             VISUALISE g AS x, v AS y, f AS fill DRAW violin",
+        ));
+    }
+
+    #[test]
     fn renders_text_stroke() {
         // A constant `stroke` outlines the glyphs; white-on-dark legibility.
         assert_png_or_skip(render(
