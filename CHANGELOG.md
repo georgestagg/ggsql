@@ -26,6 +26,10 @@
   plot sizes itself from its container, so a zero-width first measurement drew
   it at zero size with nothing left to correct it. It now recovers once the
   container has a real width.
+- ggsql interpreter sessions in Positron now come back after an extension host
+  restart as well as after a window reload. A session the user renamed also 
+  keeps its name across the restore, and ggsql runtimes are rediscovered on 
+  every window open rather than risking a stale cache hit.
 
 ## 0.4.1 - 2026-06-22
 
