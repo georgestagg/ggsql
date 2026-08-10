@@ -6,7 +6,7 @@
  */
 
 import * as vscode from 'vscode';
-import { tryAcquirePositronApi } from '@posit-dev/positron';
+import { getPositronApi } from './positronApi';
 import { GgsqlRuntimeManager } from './manager';
 import { createConnectionDrivers } from './connections';
 import { GgsqlCodeLensProvider, registerCellCommands } from './codelens';
@@ -43,7 +43,7 @@ export function activate(context: vscode.ExtensionContext): void {
     activateSqlAssociationPrompt(context);
 
     // Try to acquire the Positron API
-    const positronApi = tryAcquirePositronApi();
+    const positronApi = getPositronApi();
 
     if (!positronApi) {
         // Running in VS Code (not Positron) - syntax highlighting still works
