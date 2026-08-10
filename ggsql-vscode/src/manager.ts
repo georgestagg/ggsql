@@ -317,6 +317,27 @@ function createDynState(): positron.LanguageRuntimeDynState {
 }
 
 /**
+ * Get the Positron Supervisor API, activating the extension if needed.
+ *
+ * The supervisor is a soft dependency: it is declared nowhere in
+ * package.json, because an extensionDependencies entry would stop this
+ * extension activating at all in VS Code, where the supervisor does not
+ * exist. Awaiting activate() here gives the same ordering guarantee that a
+ * declared dependency would.
+ */
+export async function getSupervisorApi(): Promise<PositronSupervisorApi> {
+    const supervisorExt = vscode.extensions.getExtension<PositronSupervisorApi>(
+        'positron.positron-supervisor'
+    );
+
+    if (!supervisorExt) {
+        throw new Error('Positron Supervisor extension not found');
+    }
+
+    return supervisorExt.activate();
+}
+
+/**
  * ggsql Language Runtime Manager
  *
  * Manages the lifecycle of ggsql runtime sessions in Positron.
@@ -383,17 +404,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
         runtimeMetadata: positron.LanguageRuntimeMetadata,
         sessionMetadata: positron.RuntimeSessionMetadata
     ): Promise<positron.LanguageRuntimeSession> {
-        // Get the Positron Supervisor extension
-        const supervisorExt = vscode.extensions.getExtension<PositronSupervisorApi>(
-            'positron.positron-supervisor'
-        );
-
-        if (!supervisorExt) {
-            throw new Error('Positron Supervisor extension not found');
-        }
-
-        // Ensure the extension is activated
-        const supervisorApi = await supervisorExt.activate();
+        const supervisorApi = await getSupervisorApi();
 
         // Create the kernel spec using the runtime's kernel path
         const kernelSpec = createKernelSpec(runtimeMetadata.runtimePath);
@@ -429,16 +440,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
         runtimeMetadata: positron.LanguageRuntimeMetadata,
         sessionMetadata: positron.RuntimeSessionMetadata
     ): Promise<positron.LanguageRuntimeSession> {
-        // Get the Positron Supervisor extension
-        const supervisorExt = vscode.extensions.getExtension<PositronSupervisorApi>(
-            'positron.positron-supervisor'
-        );
-
-        if (!supervisorExt) {
-            throw new Error('Positron Supervisor extension not found');
-        }
-
-        const supervisorApi = await supervisorExt.activate();
+        const supervisorApi = await getSupervisorApi();
 
         const dynState = createDynState();
 
@@ -464,15 +466,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
      * Validate an existing session.
      */
     async validateSession(sessionId: string): Promise<boolean> {
-        const supervisorExt = vscode.extensions.getExtension<PositronSupervisorApi>(
-            'positron.positron-supervisor'
-        );
-
-        if (!supervisorExt) {
-            return false;
-        }
-
-        const supervisorApi = await supervisorExt.activate();
+        const supervisorApi = await getSupervisorApi();
         return supervisorApi.validateSession(sessionId);
     }
 }
