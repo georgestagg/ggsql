@@ -358,7 +358,6 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
     public readonly alwaysRediscover = true;
 
     private _context: vscode.ExtensionContext;
-    private _sessions: Map<string, positron.LanguageRuntimeSession> = new Map();
 
     constructor(context: vscode.ExtensionContext) {
         this._context = context;
@@ -436,14 +435,6 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
             dynState
         );
 
-        // Track the session
-        this._sessions.set(sessionMetadata.sessionId, session);
-
-        // Remove from tracking when session ends
-        session.onDidEndSession(() => {
-            this._sessions.delete(sessionMetadata.sessionId);
-        });
-
         return session;
     }
 
@@ -467,12 +458,6 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
             sessionMetadata,
             dynState
         );
-
-        this._sessions.set(sessionMetadata.sessionId, session);
-
-        session.onDidEndSession(() => {
-            this._sessions.delete(sessionMetadata.sessionId);
-        });
 
         return session;
     }
