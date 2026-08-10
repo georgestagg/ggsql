@@ -14,6 +14,7 @@ use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Result};
 
 /// A column extracted in the type hephaestus expects for a channel: numeric
 /// columns become `f64`s, text columns become category strings.
+#[derive(Clone)]
 pub enum ChannelData {
     Floats(Vec<f64>),
     Strings(Vec<String>),

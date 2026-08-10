@@ -157,7 +157,10 @@ where
             builder.keys(keys);
         }
     }
-    wire_positions(&mut builder, &spec.positions, plot, ctx)?;
+    // Band channels the geom computes itself (bar/tile edges) already carry the
+    // position adjustment, so `wire_positions` must not overwrite them.
+    let claimed: Vec<&str> = spec.data_channels.iter().map(|(c, _)| *c).collect();
+    wire_positions(&mut builder, &spec.positions, plot, ctx, &claimed)?;
     for (channel, aesthetic) in spec.raw_strings {
         if let Some(col) = aesthetic_column_name(ctx.layer, aesthetic) {
             builder.set(*channel, Raw(column_to_strings(ctx.df, col)?));
@@ -177,12 +180,20 @@ where
 /// Set position channels on the builder and bind them to the `pos1`/`pos2`
 /// scales. `set_binding` is idempotent, so repeated bindings across layers are
 /// harmless. Axis chrome is created later, per coordinate system, in `projection`.
+///
+/// Each position also picks up the layer's position adjustment: `dodge` and
+/// `jitter` are resolved by ggsql into per-row band fractions on the adjusted
+/// axis, which map onto the geom's matching `_band` channel. Channels listed in
+/// `claimed` are skipped — a geom that derives its own band edges (bar, tile) has
+/// already folded the same offsets in.
 fn wire_positions<G: BuildableGeom>(
     builder: &mut GeomBuilder<G>,
     positions: &[PositionSpec],
     plot: &mut HPlot,
     ctx: &Ctx,
+    claimed: &[&str],
 ) -> Result<()> {
+    let offsets = AxisOffsets::new(ctx.df);
     for p in positions {
         let col = aesthetic_column_name(ctx.layer, &p.aesthetic).ok_or_else(|| {
             GgsqlError::WriterError(format!(
@@ -194,8 +205,40 @@ fn wire_positions<G: BuildableGeom>(
         let data = column_to_channel(ctx.df, col)?;
         data.apply(builder, p.channel);
         plot.set_binding(p.channel, ctx.pos_scale(p.axis));
+
+        if let Some(values) = offsets.for_axis(p.axis) {
+            let band = format!("{}_band", p.channel);
+            if !claimed.contains(&band.as_str()) {
+                builder.set(band, values.clone());
+            }
+        }
     }
     Ok(())
+}
+
+/// The per-row band-fraction offsets ggsql resolved for a position adjustment,
+/// per panel axis. `None` for an axis the layer wasn't adjusted along — which is
+/// every axis for `position => 'identity'`, and the value axis always (`stack`
+/// rewrites the value columns instead of offsetting).
+struct AxisOffsets {
+    x: Option<Vec<f64>>,
+    y: Option<Vec<f64>>,
+}
+
+impl AxisOffsets {
+    fn new(df: &DataFrame) -> Self {
+        Self {
+            x: offset_column(df, "pos1offset"),
+            y: offset_column(df, "pos2offset"),
+        }
+    }
+
+    fn for_axis(&self, axis: PanelAxis) -> Option<&Vec<f64>> {
+        match axis {
+            PanelAxis::X => self.x.as_ref(),
+            PanelAxis::Y => self.y.as_ref(),
+        }
+    }
 }
 
 /// Set material channels: data-mapped → bind channel to its (globally
@@ -325,6 +368,126 @@ fn set_literal_channel<G: BuildableGeom>(
     }
 }
 
+/// The axis roles of a banded geom (boxplot / violin / range): its categories —
+/// or, for a range, its fixed positions — sit on one axis and its values on the
+/// other. ggsql flips the position columns of a transposed (horizontal) layer, so
+/// the banded axis becomes `pos2` and the values land in the `pos1` family;
+/// every channel name follows from that.
+///
+/// Hephaestus channels are named per panel axis (`x`, `y_band`, …), so a geom
+/// asks this for the channel that drives its banded or value axis instead of
+/// hardcoding `x`/`y`. The `pos1`/`pos2` *bindings* need no swap: a channel
+/// always belongs to the same panel axis.
+#[derive(Clone, Copy)]
+pub struct BandAxes {
+    transposed: bool,
+}
+
+impl BandAxes {
+    pub fn new(ctx: &Ctx) -> Self {
+        Self {
+            transposed: ctx.transposed,
+        }
+    }
+
+    /// The aesthetic family holding the banded-axis positions (`"pos1"`).
+    pub fn band(&self) -> &'static str {
+        if self.transposed {
+            "pos2"
+        } else {
+            "pos1"
+        }
+    }
+
+    /// The aesthetic family holding the values (`"pos2"`).
+    pub fn value(&self) -> &'static str {
+        if self.transposed {
+            "pos1"
+        } else {
+            "pos2"
+        }
+    }
+
+    /// The aesthetic carrying position-adjustment (dodge) offsets on the banded
+    /// axis.
+    pub fn dodge(&self) -> &'static str {
+        if self.transposed {
+            "pos2offset"
+        } else {
+            "pos1offset"
+        }
+    }
+
+    /// The two banded-axis position channels (`("x", "x2")`).
+    pub fn band_channels(&self) -> (&'static str, &'static str) {
+        if self.transposed {
+            ("y", "y2")
+        } else {
+            ("x", "x2")
+        }
+    }
+
+    /// The two value-axis position channels (`("y", "y2")`).
+    pub fn value_channels(&self) -> (&'static str, &'static str) {
+        if self.transposed {
+            ("x", "x2")
+        } else {
+            ("y", "y2")
+        }
+    }
+
+    /// The banded axis's band-fraction offset channels (`("x_band", "x2_band")`),
+    /// which shift a mark's two edges within the category band.
+    pub fn band_fraction_channels(&self) -> (&'static str, &'static str) {
+        if self.transposed {
+            ("y_band", "y2_band")
+        } else {
+            ("x_band", "x2_band")
+        }
+    }
+
+    /// The banded axis's absolute-pt offset channels (`("x_offset",
+    /// "x2_offset")`), for marks sized in points rather than band fractions
+    /// (hinge caps).
+    pub fn band_offset_channels(&self) -> (&'static str, &'static str) {
+        if self.transposed {
+            ("y_offset", "y2_offset")
+        } else {
+            ("x_offset", "x2_offset")
+        }
+    }
+}
+
+/// The `side` SETTING as a signed direction along the banded axis: `None` for
+/// `'both'` (a full-width mark centred on the band), else the sign of the half
+/// the mark occupies.
+///
+/// Hephaestus band offsets are positive-right on x and positive-up on y, so
+/// `'top'`/`'right'` are positive in either orientation — which reproduces the
+/// Vega-Lite writer's visual outcome (there the sign flips with orientation
+/// because Vega-Lite's y offsets point down).
+pub fn side_sign(layer: &Layer) -> Option<f64> {
+    match layer.parameters.get("side")? {
+        ParameterValue::String(s) => match s.as_str() {
+            "top" | "right" => Some(1.0),
+            "bottom" | "left" => Some(-1.0),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The two edges of a banded mark, as offsets from the band centre: the full
+/// `±half` band for `side => 'both'`, else the centreline → `±half` half-band.
+/// Used for band fractions (box, median, violin edge) and for pt-sized marks
+/// (hinge caps) alike.
+pub fn band_edges(half: f64, side: Option<f64>) -> (f64, f64) {
+    match side {
+        None => (-half, half),
+        Some(sign) => (0.0, sign * half),
+    }
+}
+
 /// Half the band width a banded geom (bar/box/violin) occupies: the
 /// dodge-narrowed width if set, else the `width` parameter (or `default`).
 pub fn band_half_width(layer: &Layer, default: f64) -> f64 {
@@ -377,14 +540,19 @@ pub fn constant_string(ctx: &Ctx, aesthetic: &str, default: &str) -> String {
     default.to_string()
 }
 
-/// A dodge offset column (per-row band fractions), or zeros when not dodged.
+/// A position-adjustment offset column (per-row band fractions), or zeros when
+/// the layer wasn't adjusted along that axis. For geoms that derive their own band
+/// edges and so need the offsets as numbers; the generic path wires the same
+/// column onto a `_band` channel in [`wire_positions`].
 pub fn dodge_offsets(df: &DataFrame, aesthetic: &str) -> Vec<f64> {
+    offset_column(df, aesthetic).unwrap_or_else(|| vec![0.0; df.height()])
+}
+
+/// ggsql's resolved offset column for one axis, when the layer carries one.
+fn offset_column(df: &DataFrame, aesthetic: &str) -> Option<Vec<f64>> {
     let name = crate::naming::aesthetic_column(aesthetic);
-    if df.column(&name).is_ok() {
-        column_to_f64(df, &name).unwrap_or_else(|_| vec![0.0; df.height()])
-    } else {
-        vec![0.0; df.height()]
-    }
+    df.column(&name).ok()?;
+    column_to_f64(df, &name).ok()
 }
 
 /// Resolve a label for an aesthetic: explicit `LABEL` wins (`None` suppresses),

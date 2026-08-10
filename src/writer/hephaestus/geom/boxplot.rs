@@ -2,7 +2,12 @@
 //! component); the component is tagged by the `type` aesthetic. We decompose
 //! into: box (`RectGeom`, q1→q3 filling the category band), whiskers
 //! (`SegmentGeom`, box edge → fence), median (`SegmentGeom` spanning the band),
-//! and outliers (`PointGeom`). All components share the `pos1`/`pos2` scales.
+//! optional whisker caps (`SegmentGeom`, the `hinge` SETTING), and outliers
+//! (`PointGeom`). All components share the `pos1`/`pos2` scales.
+//!
+//! Which axis carries the categories and which the summary values follows the
+//! layer's orientation (`BandAxes`): a transposed boxplot has its categories on
+//! `pos2` and its values in the `pos1` family.
 
 use hephaestus::color::rgb8;
 use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
@@ -13,23 +18,29 @@ use super::super::channels::{
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    band_half_width, constant_number, constant_string, dodge_offsets, resolve_color,
-    resolve_material, Ctx, LegendKind, MaterialSource,
+    band_edges, band_half_width, constant_number, constant_string, dodge_offsets, resolve_color,
+    resolve_material, side_sign, BandAxes, Ctx, LegendKind, MaterialSource,
 };
+use super::hinge::{caps, hinge_points};
 use crate::{GgsqlError, Result};
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
     let n = df.height();
 
-    let pos1 = require(layer, "pos1")?;
-    let type_col = require(layer, "type")?;
-    let value = require(layer, "pos2")?;
-    let value2 = require(layer, "pos2end")?;
+    let axes = BandAxes::new(ctx);
+    let cat_aes = axes.band();
+    let value_aes = axes.value();
+    let value2_aes = format!("{value_aes}end");
 
-    let p1 = column_to_channel(df, pos1)?;
-    let p2 = column_to_f64(df, value)?;
-    let p2e = column_to_f64(df, value2)?;
+    let cat_col = require(layer, cat_aes)?;
+    let type_col = require(layer, "type")?;
+    let value_col = require(layer, value_aes)?;
+    let value2_col = require(layer, &value2_aes)?;
+
+    let cat = column_to_channel(df, cat_col)?;
+    let v1 = column_to_f64(df, value_col)?;
+    let v2 = column_to_f64(df, value2_col)?;
     let types = column_to_strings(df, type_col)?;
 
     let rows_of = |t: &str| -> Vec<usize> { (0..n).filter(|&i| types[i] == t).collect() };
@@ -40,7 +51,8 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         .collect();
     let out_i = rows_of("outlier");
 
-    // Bind the position channels (panel-aware for free facet scales).
+    // Bind the position channels (panel-aware for free facet scales). A channel
+    // always drives the same panel axis, whatever the orientation.
     for (channel, scale) in [
         ("x", ctx.pos1_scale),
         ("x2", ctx.pos1_scale),
@@ -92,19 +104,26 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // (`opacity` → `fillOpacity` for a fill-bearing geom); the stroke-only
     // components have no fill to fade.
     let alpha = constant_number(ctx, "opacity", 1.0);
-    // Box width (band fraction, dodge-aware) + per-row dodge offsets.
-    let offsets = dodge_offsets(df, "pos1offset");
-    let half = band_half_width(layer, 0.75);
+    // Box width (band fraction, dodge-aware) + per-row dodge offsets. `side`
+    // narrows the box to one half of the band; the full `width` is kept for the
+    // dodge calculation (ggsql already applied it), so a half-box pairs cleanly
+    // with a half-violin on the same band.
+    let offsets = dodge_offsets(df, axes.dodge());
+    let (near, far) = band_edges(band_half_width(layer, 0.75), side_sign(layer));
+
+    let (band_ch, band_ch2) = axes.band_channels();
+    let (frac_ch, frac_ch2) = axes.band_fraction_channels();
+    let (value_ch, value_ch2) = axes.value_channels();
 
     // Box: a rect from q1 to q3 occupying `width` of the band (dodge-offset).
     if !box_i.is_empty() {
         let mut b = RectGeom::builder();
-        p1.select(&box_i).apply(&mut b, "x");
-        p1.select(&box_i).apply(&mut b, "x2");
-        b.set("y", pick(&p2, &box_i));
-        b.set("y2", pick(&p2e, &box_i));
-        b.set("x_band", shift(&offsets, &box_i, -half));
-        b.set("x2_band", shift(&offsets, &box_i, half));
+        cat.select(&box_i).apply(&mut b, band_ch);
+        cat.select(&box_i).apply(&mut b, band_ch2);
+        b.set(value_ch, pick(&v1, &box_i));
+        b.set(value_ch2, pick(&v2, &box_i));
+        b.set(frac_ch, shift(&offsets, &box_i, near));
+        b.set(frac_ch2, shift(&offsets, &box_i, far));
         fill.apply(&mut b, "fill", &box_i);
         stroke.apply(&mut b, "stroke", &box_i);
         outline(&mut b, &linewidth, linetype.as_ref(), &box_i);
@@ -112,31 +131,47 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         plot.add_geom(b.build());
     }
 
-    // Whiskers: vertical segments at the band centre, box edge → fence.
+    // Whiskers: segments at the band centre, box edge → fence. They stay on the
+    // centreline under `side`, like the outliers.
     if !whisk_i.is_empty() {
         let mut b = SegmentGeom::builder();
-        p1.select(&whisk_i).apply(&mut b, "x");
-        p1.select(&whisk_i).apply(&mut b, "x2");
-        b.set("y", pick(&p2, &whisk_i));
-        b.set("y2", pick(&p2e, &whisk_i));
-        b.set("x_band", shift(&offsets, &whisk_i, 0.0));
-        b.set("x2_band", shift(&offsets, &whisk_i, 0.0));
+        cat.select(&whisk_i).apply(&mut b, band_ch);
+        cat.select(&whisk_i).apply(&mut b, band_ch2);
+        b.set(value_ch, pick(&v1, &whisk_i));
+        b.set(value_ch2, pick(&v2, &whisk_i));
+        b.set(frac_ch, shift(&offsets, &whisk_i, 0.0));
+        b.set(frac_ch2, shift(&offsets, &whisk_i, 0.0));
         stroke.apply(&mut b, "stroke", &whisk_i);
         outline(&mut b, &linewidth, linetype.as_ref(), &whisk_i);
         plot.add_geom(b.build());
     }
 
-    // Median: a horizontal segment spanning the band at the median value.
+    // Median: a segment spanning the box's half of the band at the median value.
     if !med_i.is_empty() {
         let mut b = SegmentGeom::builder();
-        p1.select(&med_i).apply(&mut b, "x");
-        p1.select(&med_i).apply(&mut b, "x2");
-        b.set("y", pick(&p2, &med_i));
-        b.set("y2", pick(&p2, &med_i));
-        b.set("x_band", shift(&offsets, &med_i, -half));
-        b.set("x2_band", shift(&offsets, &med_i, half));
+        cat.select(&med_i).apply(&mut b, band_ch);
+        cat.select(&med_i).apply(&mut b, band_ch2);
+        b.set(value_ch, pick(&v1, &med_i));
+        b.set(value_ch2, pick(&v1, &med_i));
+        b.set(frac_ch, shift(&offsets, &med_i, near));
+        b.set(frac_ch2, shift(&offsets, &med_i, far));
         stroke.apply(&mut b, "stroke", &med_i);
         outline(&mut b, &linewidth, linetype.as_ref(), &med_i);
+        plot.add_geom(b.build());
+    }
+
+    // Whisker caps at the fence ends, `hinge` points wide (absent by default).
+    if let (Some(hinge), false) = (hinge_points(layer), whisk_i.is_empty()) {
+        let mut b = caps(
+            ctx,
+            axes,
+            cat.select(&whisk_i),
+            pick(&v2, &whisk_i),
+            shift(&offsets, &whisk_i, 0.0),
+            hinge,
+        );
+        stroke.apply(&mut b, "stroke", &whisk_i);
+        outline(&mut b, &linewidth, linetype.as_ref(), &whisk_i);
         plot.add_geom(b.build());
     }
 
@@ -144,9 +179,9 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // at their value, honoring the `size`/`shape` aesthetics.
     if !out_i.is_empty() {
         let mut b = PointGeom::builder();
-        p1.select(&out_i).apply(&mut b, "x");
-        b.set("y", pick(&p2, &out_i));
-        b.set("x_band", shift(&offsets, &out_i, 0.0));
+        cat.select(&out_i).apply(&mut b, band_ch);
+        b.set(value_ch, pick(&v1, &out_i));
+        b.set(frac_ch, shift(&offsets, &out_i, 0.0));
         stroke.apply(&mut b, "stroke", &out_i);
         // `PointGeom` has no dash pattern — a marker outline can't be dashed.
         outline(&mut b, &linewidth, None, &out_i);
@@ -184,8 +219,8 @@ fn pick(v: &[f64], idx: &[usize]) -> Vec<f64> {
     idx.iter().map(|&i| v[i]).collect()
 }
 
-/// Per-row band offsets for the selected rows, shifted by `delta` (e.g. ±half
-/// the box width for the two edges, 0 for a centered line/point).
+/// Per-row band offsets for the selected rows, shifted by `delta` (e.g. the box
+/// width's two edges, 0 for a centred line/point).
 fn shift(offsets: &[f64], idx: &[usize], delta: f64) -> Vec<f64> {
     idx.iter().map(|&i| offsets[i] + delta).collect()
 }

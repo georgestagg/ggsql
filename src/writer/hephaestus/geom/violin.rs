@@ -1,9 +1,13 @@
 //! `violin` composite geom. ggsql's stat emits a KDE grid per category
 //! (`pos1` = category, `pos2` = value, `offset` = pre-scaled half-width). We
-//! render one vertical `RibbonGeom` band per category: the right edge sits at
-//! `+offset` and the left edge at `-offset` of the category band (via the
-//! ribbon's per-row `x_band` / `x2_band` channels), sharing `y = pos2`. One row
-//! per grid sample — no hand-built outline.
+//! render one `RibbonGeom` band per category: one edge sits at `+offset` and the
+//! other at `-offset` of the category band (via the ribbon's per-row band-offset
+//! channels), sharing the value channel. One row per grid sample — no hand-built
+//! outline.
+//!
+//! Which axis carries the categories follows the layer's orientation
+//! (`BandAxes`); `side` collapses the band to one half, leaving the other edge on
+//! the centreline (so a half-violin can pair with a half-boxplot).
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -16,24 +20,29 @@ use super::super::channels::{
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_number, dodge_offsets, resolve_color, resolve_material, Ctx, LegendKind,
+    band_edges, constant_number, dodge_offsets, resolve_color, resolve_material, side_sign,
+    BandAxes, Ctx, LegendKind,
 };
 use crate::{GgsqlError, Result};
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
 
-    let pos1 = require(layer, "pos1")?;
-    let pos2 = require(layer, "pos2")?;
+    let axes = BandAxes::new(ctx);
+    let band_aes = axes.band();
+    let value_aes = axes.value();
+
+    let band_col = require(layer, band_aes)?;
+    let value_col = require(layer, value_aes)?;
     let offset = require(layer, "offset")?;
 
-    let p1 = column_to_channel(df, pos1)?;
-    let cat = column_to_strings(df, pos1)?; // grouping key per row
-    let p2 = column_to_f64(df, pos2)?;
+    let p1 = column_to_channel(df, band_col)?;
+    let cat = column_to_strings(df, band_col)?; // grouping key per row
+    let p2 = column_to_f64(df, value_col)?;
     let off = column_to_f64(df, offset)?;
 
-    // Order rows so each category's band is contiguous and ascending in pos2
-    // (RibbonGeom connects a mark's rows in source order).
+    // Order rows so each category's band is contiguous and ascending in the
+    // value axis (RibbonGeom connects a mark's rows in source order).
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut index: HashMap<&str, usize> = HashMap::new();
     for (i, c) in cat.iter().enumerate() {
@@ -49,21 +58,32 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         order.extend_from_slice(rows);
     }
 
+    // A channel always drives the same panel axis, whatever the orientation.
     for (channel, scale) in [
         ("x", ctx.pos1_scale),
         ("x2", ctx.pos1_scale),
         ("y", ctx.pos2_scale),
+        ("y2", ctx.pos2_scale),
     ] {
         plot.set_binding(channel, scale);
     }
 
-    // One vertical ribbon per category: right edge +offset, left edge -offset,
-    // both shifted by the dodge offset (zero when not dodged).
-    let dodge = dodge_offsets(df, "pos1offset");
+    // One ribbon per category, its two edges at ±offset of the category band (or
+    // centreline → offset for a one-sided `side`), both shifted by the dodge
+    // offset (zero when not dodged).
+    let dodge = dodge_offsets(df, axes.dodge());
+    let side = side_sign(layer);
     let keys: Vec<String> = order.iter().map(|&i| cat[i].clone()).collect();
-    let x_band: Vec<f64> = order.iter().map(|&i| dodge[i] + off[i]).collect();
-    let x2_band: Vec<f64> = order.iter().map(|&i| dodge[i] - off[i]).collect();
-    let ys: Vec<f64> = order.iter().map(|&i| p2[i]).collect();
+    let edges: Vec<(f64, f64)> = order
+        .iter()
+        .map(|&i| {
+            let (near, far) = band_edges(off[i], side);
+            (dodge[i] + near, dodge[i] + far)
+        })
+        .collect();
+    let band: Vec<f64> = edges.iter().map(|&(near, _)| near).collect();
+    let band2: Vec<f64> = edges.iter().map(|&(_, far)| far).collect();
+    let values: Vec<f64> = order.iter().map(|&i| p2[i]).collect();
 
     // Resolve fill + stroke once (data-mapped → shared scale/legend, else
     // constant), mirroring the VL writer's shared-encoding model.
@@ -112,13 +132,20 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         }
     }
 
+    // Both band edges carry the category; only one value channel is set, which is
+    // what selects the ribbon's orientation (a vertical band when the far edge is
+    // on x, a horizontal one when it is on y).
+    let (band_ch, band_ch2) = axes.band_channels();
+    let (frac_ch, frac_ch2) = axes.band_fraction_channels();
+    let (value_ch, _) = axes.value_channels();
+
     let mut b = RibbonGeom::builder();
     b.keys(keys);
-    p1.select(&order).apply(&mut b, "x");
-    p1.select(&order).apply(&mut b, "x2");
-    b.set("x_band", x_band);
-    b.set("x2_band", x2_band);
-    b.set("y", ys);
+    p1.select(&order).apply(&mut b, band_ch);
+    p1.select(&order).apply(&mut b, band_ch2);
+    b.set(frac_ch, band);
+    b.set(frac_ch2, band2);
+    b.set(value_ch, values);
     fill.apply(&mut b, "fill", &order);
     stroke.apply(&mut b, "stroke", &order);
     stroke.apply(&mut b, "stroke2", &order);

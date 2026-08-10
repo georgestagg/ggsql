@@ -9,12 +9,13 @@
 use hephaestus::color::rgb8;
 use hephaestus::plot::{Plot as HPlot, SegmentGeom};
 
-use super::super::channels::{aesthetic_column_name, column_to_f64};
+use super::super::channels::{aesthetic_column_name, column_to_channel, column_to_f64};
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_number, wire_material, Ctx, GeomSpec, LegendKind, MatDefault, MaterialSpec, PanelAxis,
-    PositionSpec,
+    constant_number, dodge_offsets, wire_material, BandAxes, Ctx, GeomSpec, LegendKind, MatDefault,
+    MaterialSpec, PanelAxis, PositionSpec,
 };
+use super::hinge::{caps, hinge_points};
 use crate::plot::layer::geom::GeomType;
 use crate::plot::ParameterValue;
 use crate::{Layer, Result};
@@ -94,6 +95,45 @@ fn material() -> Vec<MaterialSpec> {
             MatDefault::None,
         ),
     ]
+}
+
+/// `range` end caps: the `hinge` SETTING (10pt by default, `null` to hide) draws
+/// a cap across the band at **both** interval endpoints, on top of the interval's
+/// own segment. Mirrors the Vega-Lite writer, which adds two `tick` layers of
+/// `hinge` px beside the rule.
+///
+/// The caps take the same material table as the segment, so a data-mapped
+/// stroke/width/dash styles them like the interval (its legend collapses into the
+/// segment's, being the same scale).
+pub fn build_hinges(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
+    let Some(hinge) = hinge_points(ctx.layer) else {
+        return Ok(());
+    };
+    if ctx.df.height() == 0 {
+        return Ok(());
+    }
+    let axes = BandAxes::new(ctx);
+    // A range with no mapped position on the banded axis (ggsql's dummy axis) has
+    // nothing to centre the caps on.
+    let Some(band_col) = aesthetic_column_name(ctx.layer, axes.band()) else {
+        return Ok(());
+    };
+    let band = column_to_channel(ctx.df, band_col)?;
+    // Follow the interval's own position adjustment, which `wire_positions` put on
+    // its band channels.
+    let offsets = dodge_offsets(ctx.df, axes.dodge());
+
+    for bound in ["min", "max"] {
+        let aesthetic = format!("{}{bound}", axes.value());
+        let Some(col) = aesthetic_column_name(ctx.layer, &aesthetic) else {
+            continue;
+        };
+        let values = column_to_f64(ctx.df, col)?;
+        let mut b = caps(ctx, axes, band.clone(), values, offsets.clone(), hinge);
+        wire_material(&mut b, &material(), plot, ctx, LegendKind::Line)?;
+        plot.add_geom(b.build());
+    }
+    Ok(())
 }
 
 /// Whether this rule is a diagonal (abline): has a non-zero `slope`.

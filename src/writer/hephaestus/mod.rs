@@ -1071,6 +1071,119 @@ mod tests {
     }
 
     #[test]
+    fn renders_boxplot_hinge() {
+        // `hinge` caps the whiskers with a fixed-size (pt) tick at each fence.
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',3),('a',9),\
+             ('b',2),('b',3),('b',4),('b',5)) t(g,v) \
+             VISUALISE g AS x, v AS y DRAW boxplot SETTING hinge => 20",
+        ));
+    }
+
+    #[test]
+    fn renders_boxplot_side() {
+        // `side` halves the box, median and caps onto one side of the band,
+        // leaving whiskers and outliers on the centreline.
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',3),('a',9),\
+             ('b',2),('b',3),('b',4),('b',5)) t(g,v) \
+             VISUALISE g AS x, v AS y DRAW boxplot \
+             SETTING side => 'right', hinge => 20",
+        ));
+    }
+
+    #[test]
+    fn renders_transposed_boxplot() {
+        // A horizontal boxplot: ggsql flips the position columns, so the
+        // categories are on `pos2` and the summary values in the `pos1` family.
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',3),('a',9),\
+             ('b',2),('b',3),('b',4),('b',5)) t(g,v) \
+             VISUALISE v AS x, g AS y DRAW boxplot SETTING hinge => 15",
+        ));
+    }
+
+    #[test]
+    fn renders_half_violin_with_half_boxplot() {
+        // Opposite `side` values pair the two composites on one band, the
+        // documented raincloud-style layout (transposed, so top/bottom).
+        assert_png_or_skip(render(
+            "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',2),('a',3),('a',4),\
+             ('b',2),('b',3),('b',3),('b',4),('b',6)) t(g,v) \
+             VISUALISE v AS x, g AS y \
+             DRAW violin SETTING side => 'top' \
+             DRAW boxplot SETTING side => 'bottom', width => 0.3",
+        ));
+    }
+
+    #[test]
+    fn renders_jittered_points() {
+        // `position => 'jitter'` spreads the points across their category band;
+        // `side` (folded into the offsets by ggsql) keeps them on one half.
+        assert_png_or_skip(render(
+            "VISUALISE species AS x, bill_len AS y FROM ggsql:penguins DRAW point \
+             SETTING position => 'jitter'",
+        ));
+        assert_png_or_skip(render(
+            "VISUALISE species AS x, bill_len AS y FROM ggsql:penguins DRAW point \
+             SETTING position => 'jitter', side => 'right'",
+        ));
+    }
+
+    #[test]
+    fn renders_dodged_points() {
+        // Dodge on a geom that doesn't derive its own band edges: the offsets
+        // reach the point's band channel.
+        assert_png_or_skip(render(
+            "SELECT x, g, v FROM (VALUES ('a','p',3),('a','q',5),('b','p',2),('b','q',4)) \
+             t(x,g,v) \
+             VISUALISE x AS x, v AS y, g AS color DRAW point SETTING position => 'dodge'",
+        ));
+    }
+
+    #[test]
+    fn renders_dodged_range_with_hinges() {
+        // A dodged interval and its end caps share one offset, so they stay
+        // aligned in the dodge slot.
+        assert_png_or_skip(render(
+            "SELECT g, s, lo, hi FROM (VALUES ('a','p',1,5),('a','q',2,6),('b','p',2,7)) \
+             t(g,s,lo,hi) \
+             VISUALISE g AS x, lo AS ymin, hi AS ymax, s AS stroke DRAW range \
+             SETTING position => 'dodge'",
+        ));
+    }
+
+    #[test]
+    fn renders_jitter_with_half_boxplot() {
+        // The documented raincloud layout: a one-sided jitter above the
+        // centreline, a half-boxplot below it.
+        assert_png_or_skip(render(
+            "VISUALISE bill_len AS x, species AS y FROM ggsql:penguins \
+             DRAW point SETTING position => 'jitter', side => 'top', width => 0.4 \
+             DRAW boxplot SETTING side => 'bottom', width => 0.4",
+        ));
+    }
+
+    #[test]
+    fn renders_range_hinges() {
+        // A range carries 10pt end caps by default; `hinge => null` drops them.
+        assert_png_or_skip(render(
+            "SELECT g, lo, hi FROM (VALUES ('a',1,5),('b',2,7)) t(g,lo,hi) \
+             VISUALISE g AS x, lo AS ymin, hi AS ymax DRAW range",
+        ));
+        assert_png_or_skip(render(
+            "SELECT g, lo, hi FROM (VALUES ('a',1,5),('b',2,7)) t(g,lo,hi) \
+             VISUALISE g AS y, lo AS xmin, hi AS xmax DRAW range \
+             SETTING hinge => 40",
+        ));
+        assert_png_or_skip(render(
+            "SELECT g, lo, hi FROM (VALUES ('a',1,5),('b',2,7)) t(g,lo,hi) \
+             VISUALISE g AS x, lo AS ymin, hi AS ymax DRAW range \
+             SETTING hinge => null",
+        ));
+    }
+
+    #[test]
     fn renders_violin_linewidth() {
         assert_png_or_skip(render(
             "SELECT g, v FROM (VALUES ('a',1),('a',2),('a',2),('a',3),('a',4),\

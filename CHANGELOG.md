@@ -32,6 +32,17 @@
 - The hephaestus writer's `size`, `shape` and `linetype` legends drew empty
   swatches next to their labels; the key glyphs are now painted (in the layer's
   constant color, or a neutral grey when the color aesthetic is itself mapped).
+- The hephaestus writer now honors the `hinge` and `side` settings. `hinge` caps a
+  `boxplot`'s whiskers and a `range`'s endpoints (10pt by default for a range, so
+  every range previously lost its hinges), and `side` draws a half `boxplot` or
+  `violin` on the chosen side of the band, so the two pair up on one category.
+  Horizontal (transposed) `boxplot` and `violin` layers also render — the first
+  failed with an internal error and the second drew nothing.
+- `position => 'jitter'` and `position => 'dodge'` are honored by every layer type
+  in the hephaestus writer. Only bars, boxplots, violins and tiles used to move:
+  jittered points all landed on their category's centre line, and dodged points,
+  text, lines and ranges overplotted. Together with `side` this makes the
+  half-boxplot-plus-one-sided-jitter (raincloud) layout render.
 
 ### Changed
 

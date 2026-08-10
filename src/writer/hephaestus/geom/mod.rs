@@ -5,6 +5,7 @@
 mod area;
 mod boxplot;
 mod densified;
+mod hinge;
 mod line;
 mod point;
 mod polygon;
@@ -44,7 +45,12 @@ pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         }
         GeomType::Polygon => build_and_add::<PolygonGeom>(plot, polygon::spec(ctx), ctx),
         GeomType::Rule if segment::is_diagonal(ctx.layer) => segment::build_diagonal(plot, ctx),
-        GeomType::Segment | GeomType::Range | GeomType::Rule => {
+        // A range's `hinge` caps are extra segments beside the interval itself.
+        GeomType::Range => {
+            build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx)?;
+            segment::build_hinges(plot, ctx)
+        }
+        GeomType::Segment | GeomType::Rule => {
             build_and_add::<SegmentGeom>(plot, segment::spec(ctx), ctx)
         }
         GeomType::Text => text::build(plot, ctx),

@@ -839,6 +839,73 @@ and never densifies.)
   writer tests; feature, default (hephaestus absent) and `cargo +1.86` builds,
   fmt, clippy all clean.
 
+## `side` + `hinge` (banded geoms) — status: implemented
+
+The two boxplot parameters §9 listed as missing, plus the orientation handling
+they turned out to depend on. `hinge` and `side` are both *banded-axis* concepts —
+they measure across the axis a box/violin/interval sits on — so the work is shared
+in `wiring::BandAxes` and `geom/hinge.rs` rather than per geom.
+
+- **`BandAxes`** (`wiring.rs`) names the channels of a banded geom by role instead
+  of by axis: the aesthetic family holding the categories (`pos1`, or `pos2` when
+  ggsql flipped the layer), the value family, the dodge column, and the
+  banded-axis position / `_band` / `_offset` channels. Bindings need no swap — a
+  hephaestus channel always drives the same panel axis; only the column feeding it
+  moves. This closed a gap §9 never listed: **transposed composites were broken**
+  — a horizontal `boxplot` errored outright (`no pos2end mapping`) and a horizontal
+  `violin` silently rendered an empty panel (it read the category column as
+  numbers). Both now render, caps and all.
+- **`hinge`** (`geom/hinge.rs`) draws a `SegmentGeom` cap across the band via the
+  segment's absolute **pt** offset channels (`x_offset`/`y_offset`), so a cap keeps
+  its size at any panel width — the raster analog of the Vega-Lite writer's `tick`
+  of `size` px. `boxplot` caps its two whisker fences (default `null` = no caps);
+  `range` caps both interval endpoints (default 10pt, `hinge => null` to hide),
+  which had been silently missing for every range the writer drew. Caps take the
+  mark's resolved stroke/width/dash, so a per-group `stroke` colors them too.
+- **`side`** (`wiring::{side_sign, band_edges}`) halves a mark onto one side of the
+  band: box, median and caps span centreline → `±half`, while whiskers and
+  outliers stay centred (matching VL). The violin's ribbon collapses one edge onto
+  the centreline the same way. hephaestus band offsets are positive-right on x and
+  positive-up on y, so `'top'`/`'right'` are positive in **either** orientation —
+  one predicate, where the VL writer flips the sign with orientation because
+  Vega-Lite's y offsets point down. The visual outcome is the same, including the
+  documented half-violin + half-boxplot pairing. The full `width` is left to
+  ggsql's dodge calculation, so a half-box still occupies its dodge slot.
+- **Cap geometry is byte-equivalent to VL**, verified against its emitted spec for
+  `hinge => 20`: VL's both-sides `tick` has `size = 26.67px` (= 20pt × 96/72),
+  centred, so it spans `±13.33px`; the half-side tick has `size = 13.33px` shifted
+  by `+6.67px`, so it spans `[0, 13.33px]` — half the length, starting exactly on
+  the centreline. `band_edges(hinge / 2.0, …)` produces the same two edges
+  (`±10pt`, or `0 → 10pt`). The only unit caveat is writer-wide, not hinge-specific:
+  VL bakes points into CSS px at 96/72 while hephaestus converts at the render DPI,
+  as it does for every absolute size (`linewidth`, point `size`, dash lengths).
+- **Position adjustments reach every geom** (`wiring::wire_positions`). ggsql
+  resolves `dodge` and `jitter` into per-row band fractions in
+  `__ggsql_aes_pos1offset__`/`pos2offset` — and folds jitter's own `side` in there,
+  so that third `side` consumer needs no writer logic at all, only delivery. Only
+  the geoms that read `dodge_offsets` themselves (bar/histogram/tile, boxplot,
+  violin) were consuming those columns, so a jittered `point` layer drew every
+  point on the category centreline and a dodged one overplotted — the Vega-Lite
+  writer has always bound the column to `xOffset`/`yOffset` for any layer carrying
+  it. `wire_positions` now maps the offsets onto each position's matching `_band`
+  channel, skipping channels the geom claims in `data_channels` (bar/tile compute
+  edges that already include the offsets). This is also what the range-dodge gap
+  needed, so `segment::build_hinges` reads the same offsets and a dodged interval's
+  caps travel with it. `position => 'stack'` is untouched — it rewrites the value
+  columns in data and produces no offset column.
+- Verified (eyeballed): vertical + horizontal boxplots with caps, `side` left/
+  right/top/bottom, dodged boxes with caps, per-group stroke caps, a dummy-axis
+  (single) boxplot, faceted half-boxes, half-violin, the documented violin/boxplot
+  pairing, range caps in both orientations plus `hinge => null`, jittered points
+  (full band and one-sided), dodged points/text/ranges, the raincloud layout, and —
+  unchanged against a pre-change build — dodged bars, boxes, tiles. Tests
+  `renders_boxplot_hinge`, `renders_boxplot_side`, `renders_transposed_boxplot`,
+  `renders_half_violin_with_half_boxplot`, `renders_range_hinges`,
+  `renders_jittered_points`, `renders_dodged_points`,
+  `renders_dodged_range_with_hinges`, `renders_jitter_with_half_boxplot`; 80 writer
+  tests; feature, default (hephaestus absent) and `cargo +1.86` builds, fmt, clippy
+  clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -902,9 +969,14 @@ here so it survives between efforts.
   exposes no selection.
 - Calendar-native temporal axes (numeric axes with ggsql's formatted break labels
   work today).
-- boxplot `side` and `hinge` parameters are unimplemented (the VL writer has both).
 - A `linewidth` aesthetic on ggsql's Text geom would let text outline width be set
   (a core + doc change; the outline itself works).
+- **A dodged `violin` merges its groups into one mark.** The ribbon's `keys` come
+  from the category column alone, so every dodge group in a category forms a single
+  contour (three islands of one species render as one blob). The fix is to key on
+  the layer's `partition_by` (as the generic multi-vertex geoms do via
+  `build_group_keys`) and to order rows within that composite group, not within the
+  category. Unrelated to the offsets themselves — the group *positions* are correct.
 
 ### Architectural debt — writer doing work ggsql should own
 
