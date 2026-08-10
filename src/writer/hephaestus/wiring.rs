@@ -768,6 +768,15 @@ fn constant_material(ctx: &Ctx, aesthetic: &str, kind: RangeKind) -> Option<HVal
 /// Build a legend for a data-mapped material scale. Continuous color uses a
 /// colorbar; everything else a keyed legend (swatch per `legend_kind`) at the
 /// scale's breaks.
+///
+/// A binned scale flips whichever body it got into hephaestus's **binned** mode,
+/// because ggsql's binned breaks are the bin *edges*: `N + 1` breaks describe `N`
+/// bins. Binned mode draws one key (or one constant-color block) per bin and puts
+/// the edge labels on a tick rail *between* them, so every edge is labelled once
+/// at the boundary it names. That is why neither writer needs a compound
+/// `"lower – upper"` label here — unlike the Vega-Lite writer, which has no
+/// between-keys rail and so must reverse-engineer Vega's own range labels in
+/// `encoding::build_symbol_legend_label_mapping`.
 pub fn material_legend(
     ctx: &Ctx,
     scale_name: &str,
@@ -804,6 +813,9 @@ pub fn material_legend(
         }
         Legend::new(scale_name).side(LegendSide::Right).key(key)
     };
+    if type_kind == Some(ScaleTypeKind::Binned) {
+        legend = legend.binned();
+    }
     if let Some(title) = title {
         legend = legend.title(title);
     }

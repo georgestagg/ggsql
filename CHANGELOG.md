@@ -10,6 +10,12 @@
   projections, spatial geometry, and plot chrome (axes, legends, facet strips,
   title/subtitle/caption). Requires a working GPU adapter — hardware or software,
   e.g. lavapipe — at render time.
+- New `minor_breaks` setting on continuous scales, controlling the unlabelled
+  subdivisions between breaks: a whole number of minor breaks *per interval between
+  two breaks* (`0` removes them), an array of exact positions, or — for temporal
+  scales — an interval such as `'week'`. Defaults to a value chosen by the
+  transformation. Like `LABEL caption`, this has no Vega-Lite equivalent and is
+  ignored by that writer; the hephaestus writer draws them.
 - `LABEL caption => '...'` now renders. It has no Vega-Lite equivalent and is
   ignored by that writer, but the hephaestus writer places it below the plot.
 - `LABEL title`/`subtitle` are rendered by the hephaestus writer, spanning the
@@ -17,6 +23,21 @@
 
 ### Fixed
 
+- Minor gridlines in the hephaestus writer were generated from the axis domain
+  instead of from ggsql's breaks, so an axis with few major breaks — a temporal axis
+  narrowed to one break in a facet panel — was filled with sub-unit minors that read
+  as a dotted rail. Minor breaks are now resolved by ggsql alongside the majors and
+  the writer draws those (see the new `minor_breaks` setting above).
+- A binned `size`, `shape` or `linetype` legend in the hephaestus writer drew one
+  key per bin *edge* — five keys for a four-bin ladder, each sized at an edge value,
+  implying a category that doesn't exist. It now draws one key per bin, sized at the
+  bin's midpoint, with the edge labels on a rail between the keys; a binned `color`
+  legend likewise becomes a stepped bar of one block per bin instead of a smooth
+  gradient.
+- Panels of a `FACET` with free scales were not expanded in the hephaestus writer, so
+  a mark at a panel's extreme was clipped in half at the panel edge, and
+  `SCALE ... SETTING expand` stopped applying once that dimension was freed. Free
+  panels now get the scale's own expansion, like a fixed axis.
 - Temporal axes and legends in the hephaestus writer were labelled with the raw
   epoch number behind the date (`1208` for a `DATE`, `106358400000000` for a
   `TIMESTAMP`), and a `RENAMING` on a temporal scale was ignored. They now read as

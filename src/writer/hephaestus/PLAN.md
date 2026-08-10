@@ -972,6 +972,146 @@ a bare axis; they read as dates either way, because the scale carries the unit.
   `test_temporal_break_labels_honour_mapping`; full `--features hephaestus` suite;
   fmt, clippy clean.
 
+## hephaestus bump — status: implemented
+
+Dep bumped to rev `5aada7c`, which lands four of the deficiencies this writer
+reported upstream:
+
+1. **In-memory PNG encode.** `png::{encode_png, write_png_to}` sit beside the
+   file-only `write_png`, so `render_png` calls `encode_png` instead of driving
+   the `png` crate itself — the `png` dependency is gone from `src/Cargo.toml`.
+   The same change settled the alpha question the Phase 1 notes left open:
+   `render_to_buffer` hands out **straight** (un-premultiplied) alpha, which is
+   what PNG stores, so no conversion is needed on a transparent background
+   either.
+2. **Chrome text can be outlined.** `TextElement` gained
+   `text_stroke` / `text_linewidth_pt`, mirroring the text geoms' channels, and
+   every chrome path (axis and legend tick labels, titles, polar) draws the
+   stroke pass behind the fill. Nothing to wire here yet — ggsql has no theme
+   concept — but the gap is closed upstream.
+3. **Binned keyed legends reserve what they draw.** The measure pass now sizes
+   one row per *bin* at the bin's midpoint, matching the renderer.
+4. Stale `src/scales/` docs (transforms "Identity-only") and the `text` module's
+   "scaffolding" framing of its parley shaper are both corrected.
+
+**Binned legends now use hephaestus's binned mode.** `material_legend` calls
+`.binned()` whenever the scale type is `Binned`, which was the fix §9 had wrong.
+The old §9 entry wanted compound `"lower – upper"` range labels from hephaestus;
+they aren't needed, because a binned legend puts the edge labels on a tick rail
+*between* the keys, so each edge is labelled once at the boundary it names. What
+was actually missing was the writer asking for that mode. Before: a keyed legend
+drew one key per *edge* — five keys for a four-bin ladder, each sized at an edge
+value, implying five categories and a mark of exactly that value. After: four keys
+sampled at bin midpoints with `2500 … 6500` on the rail between them; on a
+colorbar the same call gives four constant-color blocks instead of a gradient.
+Vega-Lite has no between-keys rail, so it takes the other route — `determine_legend_style`
+sends non-color binned aesthetics to a **symbol** legend, whose per-key labels
+*are* Vega-generated ranges (`"2500 – 3500"`), which is why `encoding.rs` needs
+`build_symbol_legend_label_mapping` to re-derive those strings before a `RENAMING`
+can match them. hephaestus needs none of that machinery.
+`open_lower()` / `open_upper()` remain unused: ggsql marks a suppressed terminal
+label as `Some(None)`, which `break_labels()` turns into an empty string, so the
+outer boundary renders as a bare tick rather than no tick.
+
+Verified: full `--features hephaestus` suite (85 tests) passes, including
+`renders_binned_size_legend` and `renders_binned_color_legend`; both eyeballed
+against the pre-change render. fmt, clippy clean.
+
+## Free-panel expansion — status: implemented
+
+A free facet dimension is the one domain the writer computes itself, and it was a
+raw data extent: marks at a panel's extremes were drawn *half outside* the panel
+(a point at the maximum lost its top half to the clip) while a fixed axis got the
+usual 5%. `SETTING expand` also silently stopped applying to a dimension once it
+was freed.
+
+Fixed by reading the policy off the scale instead of padding in the writer:
+
+- `Scale::expand_range(min, max)` (`plot/scale/types.rs`) applies the scale's
+  resolved `expand` factors to a caller-supplied range and clips to the transform's
+  allowed domain — the same two steps, in the same order, as `resolve_common_steps`.
+  It sits next to `numeric_domain()` / `break_labels()` because it is the same kind
+  of thing: a resolved fact a consumer reads rather than re-derives. `Scale` was
+  already the writer's only channel for scale truth, so no new surface was needed
+  in `scales.rs`.
+- `resolve_common_steps` now writes the factors it applied back into
+  `properties["expand"]`, normalised to `[mult, add]`. Without this the writer would
+  read the *requested* expansion and miss `ScaleDataContext::default_expand`, which
+  is visible only during resolution — a polar full-circle theta resolves to zero
+  expansion, and a free theta panel padded by 5% would open a gap in the pie. This
+  matches how `properties["breaks"]` already carries a resolved value, and is
+  idempotent: re-resolving reads back the same factors it wrote.
+- `free_continuous_scale` calls `expand_range` on the panel extent. Break labels are
+  filtered against the *padded* bounds, so a global break just outside a panel's
+  data extent but inside its panel now draws, as it would on a fixed axis.
+- `free_binned_scale` deliberately does **not** expand: a bar's band width is
+  `1 / (edges - 1)`, which assumes the domain spans exactly the edges, so padding
+  the domain would desynchronise bar width from bin width.
+
+Verified: `FACET species SETTING free => 'y'` on penguins, eyeballed before/after —
+every extreme mark is now whole and inside its panel, with break labels unchanged.
+Four `expand_range` unit tests (default, `SETTING expand` as scalar and as
+`[mult, add]`, zero, log clip); full suite 1782 tests + 24 doctests pass; fmt,
+clippy clean.
+
+## Minor breaks — status: implemented
+
+Break positions are ggsql's to own, **minor as well as major**. The writer supplied
+majors and left minors to be generated from the domain, so a sparse major set — a
+fixed temporal axis narrowed to one break in a facet panel — got sub-unit minors and
+read as a dotted rail. Fixed on both sides of the boundary; dep bumped to `5e9a060`
+for the upstream half.
+
+- **hephaestus** gained a minor-break override: `MinorBreaksSpec`
+  (`Explicit` / `CountBetween` / `NumericInterval` / `TemporalInterval`) with
+  `with_minor_breaks` / `with_minor_count` / `with_minor_interval` /
+  `with_minor_temporal_interval` / `clear_minor_breaks`, independent of
+  `breaks_spec`, falling back to the automatic algorithm when unset or when the
+  variant doesn't match the scale type.
+- **ggsql** already owned the *algorithms* —
+  `TransformTrait::calculate_minor_breaks` per transform, plus a
+  `default_minor_break_count` (1 for identity/sqrt, 8 for the log family, 3 for
+  temporal) — but nothing resolved them: no callers outside
+  `plot/scale/transform/` and `plot/scale/breaks.rs`. They had never been reachable,
+  because Vega-Lite has no minor-tick concept and there was no other writer, so with
+  one that draws them the whole thing became worth exposing rather than merely
+  wiring: **`minor_breaks` is now a continuous-scale `SETTING`** mirroring `breaks` —
+  a count, an array of positions, or a temporal interval string — resolved in place
+  into an array of positions in step 5b of the default `resolve()` and read back via
+  `Scale::numeric_minor_breaks()`. Documented in
+  [`doc/syntax/scale/type/continuous.qmd`](../../../doc/syntax/scale/type/continuous.qmd).
+  Three details worth keeping:
+  - **The count is per major interval**, not a target for the whole axis the way
+    `breaks => n` is. Subdividing an interval shouldn't depend on how many breaks the
+    scale ended up with. `minor_breaks => 0` means none.
+  - **`Some(vec![])` and `None` must stay distinct.** The first is "resolved to no
+    minors", which a writer has to honour; the second is "not resolved", which leaves
+    a writer free to fall back on its own. Hence `numeric_minor_breaks()` returns an
+    `Option`, unlike `numeric_breaks()`.
+  - Minors are filtered to the domain by comparing `to_f64()`, not through
+    `filter_breaks_to_range`, which only filters `Number` elements and so cannot
+    constrain a temporal break at all — a gap the majors path still has (see the
+    ggsql-core list).
+
+  `Binned` overrides `resolve` and has its own settings list, so it neither derives
+  minors nor accepts the setting — a binned axis's ticks are its bin edges, with
+  nothing to subdivide.
+- **The writer** pins them through `apply_minor_breaks` (fixed scales) and the
+  narrowed-to-panel list in `free_continuous_scale` (free dimensions), wrapping each
+  position as the transform's value variant exactly as the majors are. Both go
+  through `apply_pinned_minors`, which passes `None` straight through (keeping
+  hephaestus's automatic minors) but pins an empty list as an empty list, so
+  `minor_breaks => 0` reaches `with_minor_breaks(vec![])` and draws nothing. A free
+  panel that no global major lands in keeps the whole tick set automatic rather than
+  mixing ggsql minors with hephaestus majors.
+
+Verified: a `DATE` line facetted with `free => 'x'`, eyeballed before/after — roughly
+ten crowded weekly minors per panel become four on ggsql's own grid, majors unchanged;
+plus `SETTING minor_breaks => 3` (three gridlines per interval), `=> 0` (none), and
+`=> -1` rejected at validation. Eleven new tests across the accessor, the resolution
+of each setting form, and the rejection; full suite 1793 tests + 24 doctests pass;
+fmt, clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1009,9 +1149,9 @@ here so it survives between efforts.
   that job and is a phase log, not an architecture doc.
 - `src/CLAUDE.md` is stale: no `hephaestus` row in the feature table, and the
   `writer/` section still says "Only Vega-Lite is implemented today".
-- CLI: `--writer` help text only advertises `vegalite`; no output-extension
-  routing; no flags for width/height/dpi/background, so only one hardcoded size
-  is reachable.
+- CLI: no output-extension routing, and no flags for width/height/dpi/background,
+  so only the one hardcoded `HephaestusWriter::new(1500, 1000, 300.0)` with a
+  transparent background is reachable.
 - `doc/` doesn't mention raster output at all.
 - Default-writer switchover criteria still undecided (Decision 4).
 
@@ -1020,9 +1160,19 @@ here so it survives between efforts.
 - **Legends are captured from the first panel only**, assuming every panel yields
   identical legends. True under fixed scales; unverified for a free-scale facet
   that also maps a material aesthetic.
-- **Log scales get no domain expansion** — under a non-identity transform the
-  writer deliberately falls back to the raw data extent (see the ggsql-core item
-  below).
+- **A log scale whose expanded lower bound crosses zero renders blank.** Not a
+  writer fault and not "log scales get no expansion" — expansion works whenever it
+  stays positive (`body_mass VIA log` resolves `[2520, 6480]`, a real 5% pad). The
+  trigger is `min - mult·span - add ≤ 0`, i.e. data spanning decades: `(1, 10, 100,
+  1000) VIA log` resolves `[2.2250738585072014e-308, 1049.95]` because ggsql expands
+  in linear space and then clips to the transform's allowed domain (the ggsql-core
+  item below). The data then occupies the top ~1% of a 311-decade axis, and the
+  breaks land at `5e-308 … 1000`. **Both writers fail, differently**: VL emits a
+  2498-character `axis.labelExpr` of denormal decimal literals and crushes every
+  point against the top of the panel; hephaestus renders an essentially *empty*
+  figure — chrome consumes the layout and only the `y` title survives. Fixing
+  expansion in ggsql fixes both; hephaestus-side expansion would only be a
+  fallback.
 - **No axis label thinning or rotation.** hephaestus's `Axis` is
   `rail(scale, placement)` + `title` only, with ticks coming solely from the
   scale, so long tick labels overlap in narrow facet panels (visible with binned
@@ -1056,16 +1206,26 @@ extents". Two scoped exceptions remain, both of which would disappear if ggsql
 resolved per-panel domains and spatial position scales:
 
 - **Free facet scales**: `scales::{free_position_scale, free_binned_scale}` compute
-  per-panel domains (and select the per-panel bin window).
+  per-panel domains (and select the per-panel bin window). Narrowed: the *extent*
+  is still the writer's, but the padding around it is ggsql's via
+  `Scale::expand_range`.
 - **Spatial `pos1`/`pos2`**: synthesized in `mod.rs` from `computed["bbox"]` (or
   the geometry extent) because ggsql resolves no position scales for a spatial
   layer.
 
 ### Upstream ggsql-core (each also fixes the Vega-Lite writer)
 
-- **Range expansion runs in linear data space then clips** to the transform's
-  valid domain, so a log domain collapses to `[f64::MIN_POSITIVE, max]` and its
-  breaks explode. Fix: expand in transform space.
+- **Range expansion runs in linear data space then clips** to the transform's valid
+  domain (`resolve_common_steps` → `expand_numeric_range_selective`, then
+  `clip_to_transform_domain`), so a log domain whose padded minimum crosses zero
+  collapses to `[f64::MIN_POSITIVE, max]` and its breaks explode. Fix: expand in
+  transform space. This is the single worst open bug for *either* writer — see the
+  measured symptoms under "Correctness risks".
+- `filter_breaks_to_range` only filters `ArrayElement::Number` and only when both
+  range endpoints are numbers, so it cannot constrain a **temporal** break: a
+  calendar-aligned major outside the resolved domain survives and both writers place
+  it off-panel. The minors path sidesteps this by filtering on `to_f64()`; the majors
+  path should do the same.
 - **`bar` on a numeric primary axis stays continuous** (no `pos1end`), so
   band-fraction bars get no width; VL hits the same wall (`bandwidth('x')` is 0).
 - **A data-mapped `linewidth` on a boxplot/violin is rejected by ggsql**: the stat
@@ -1096,24 +1256,29 @@ resolved per-panel domains and spatial position scales:
 
 ### Upstream hephaestus
 
-- `png::write_png` is file-only — no in-memory encode, so every host
-  re-implements byte encoding.
-- No scale-level domain expansion / "nice" padding.
-- Binned scales keep bin edges in the output range, so they can't also carry a
-  color/size range (see the binned-material bug above).
-- Range labels (`"lower – upper"`) would be the right presentation for a binned
-  scale driving a **keyed** legend (size / shape), where the writer currently passes
-  ggsql's edge labels. Not urgent: binned color renders as a colorbar, where edge
-  labels on the band boundaries are correct.
-- Chrome text (titles, axis labels, strip labels) can't be outlined:
-  `TextElement` has no stroke field; `text_stroke` is a geom channel only.
-- The `text` feature's parley shaper is documented as scaffolding "meant to be
-  replaced by the host".
-- Minor breaks ignore how sparse the supplied majors are: a temporal scale given a
-  single labelled break still emits sub-unit (daily) minors across the domain,
-  which reads as a dotted rail in a narrow panel. Deriving the minor interval from
-  the *supplied* majors, or letting a caller suppress minors, would fix it.
-- `src/scales/` docs still claim transforms are Identity-only — stale.
+Pinned at rev `5e9a060`. One item left, and it is a fallback rather than a gap the
+writer can reach. The shape of everything that got resolved here: the writer's job
+is to pass resolved values through, so wherever hephaestus had to compute something
+itself, the fix was a missing *setter*, not a better algorithm.
+
+**No scale-level domain expansion / "nice" padding.** Not a gap in practice, and
+no longer one anywhere the writer can reach. ggsql owns expansion:
+`resolve_common_steps` applies `SETTING expand` via
+`expand_numeric_range_selective` while resolving the scale, so `numeric_domain()`
+is already padded before either writer sees it, and both pass it through verbatim
+(`continuous_domain` → `scale::continuous(min..=max)`; VL's `build_scale_object` →
+`scale.domain`). Neither writer uses its host's own padding — VL never emits `nice`
+or `padding` either — so the two agree exactly on a fixed scale.
+
+The one place it used to cost something, **a free facet dimension**, is fixed: see
+the expansion section below. VL solves the same problem by *delegating* —
+`build_scale_object` skips `domain` when `is_free(...)` and the spec sets
+`resolve.scale: independent`, so Vega derives each panel's domain and pads it —
+whereas the hephaestus writer now asks ggsql for the factors and applies them to
+the extent it computed. Both end up padded; ggsql's route additionally honours an
+explicit `SETTING expand` per panel, which Vega's own padding would ignore.
+What is left upstream is only the *fallback* case: a host with no resolved scale
+at all still gets no padding from hephaestus.
 
 ### Standing constraints (accepted)
 

@@ -26,6 +26,7 @@ use hephaestus::backend::vello::VelloRenderer;
 pub use hephaestus::color::{rgba, Color};
 use hephaestus::geometry::Size;
 use hephaestus::plot::{scale, AspectMode, Plot as HPlot, PlotComposition};
+use hephaestus::png::encode_png;
 use hephaestus::scales::chrome::AxisSide;
 use hephaestus::shape::ShapeRegistry;
 use hephaestus::Renderer;
@@ -359,24 +360,10 @@ fn render_png(
         .render_to_buffer(width, height, background, &mut pixels)
         .map_err(|e| GgsqlError::WriterError(format!("hephaestus render failed: {e}")))?;
 
+    // `render_to_buffer` hands out straight (un-premultiplied) alpha, which is
+    // exactly what PNG stores, so the buffer encodes as-is.
     encode_png(width, height, &pixels)
-}
-
-/// Encode a premultiplied RGBA8 buffer as PNG bytes.
-fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut buf, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut header = encoder
-            .write_header()
-            .map_err(|e| GgsqlError::WriterError(format!("PNG header write failed: {e}")))?;
-        header
-            .write_image_data(rgba)
-            .map_err(|e| GgsqlError::WriterError(format!("PNG data write failed: {e}")))?;
-    }
-    Ok(buf)
+        .map_err(|e| GgsqlError::WriterError(format!("PNG encode failed: {e}")))
 }
 
 #[cfg(all(test, feature = "duckdb"))]
@@ -1047,6 +1034,27 @@ mod tests {
             "VISUALISE body_mass AS x FROM ggsql:penguins DRAW bar \
              SCALE BINNED x SETTING breaks => (2500, 3500, 4500, 5500, 6500) \
              FACET species SETTING free => 'x'",
+        ));
+    }
+
+    #[test]
+    fn renders_binned_size_legend() {
+        // A binned *keyed* legend: one key per bin, sized at the bin's midpoint,
+        // with ggsql's edge labels on the rail between keys.
+        assert_png_or_skip(render(
+            "VISUALISE bill_len AS x, bill_dep AS y, body_mass AS size \
+             FROM ggsql:penguins DRAW point \
+             SCALE BINNED size SETTING breaks => (2500, 3500, 4500, 5500, 6500)",
+        ));
+    }
+
+    #[test]
+    fn renders_binned_color_legend() {
+        // The same ladder driving color: a stepped colorbar, one block per bin.
+        assert_png_or_skip(render(
+            "VISUALISE bill_len AS x, bill_dep AS y, body_mass AS color \
+             FROM ggsql:penguins DRAW point \
+             SCALE BINNED color SETTING breaks => (2500, 3500, 4500, 5500, 6500)",
         ));
     }
 

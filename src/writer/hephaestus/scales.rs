@@ -113,6 +113,11 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
 /// occupies (see [`free_binned_scale`]). ggsql's resolved *continuous* breaks are
 /// for the global domain and don't fit a per-panel one, so those ticks are left to
 /// hephaestus.
+///
+/// The *padding* around a computed extent is still ggsql's:
+/// [`Scale::expand_range`](crate::plot::Scale::expand_range) applies the scale's
+/// own resolved `expand` factors, so a free panel is padded exactly like a fixed
+/// axis. Only the extent is derived here, never the expansion policy.
 pub fn free_position_scale(
     global: Option<&GScale>,
     dfs: &[&DataFrame],
@@ -164,7 +169,29 @@ fn free_continuous_scale(
     transform: Option<GTransform>,
 ) -> Option<HScale> {
     let (min, max) = panel_extent(dfs, base)?;
+    // A panel extent is raw data, where `numeric_domain()` would already be
+    // expanded, so pad it with the scale's own resolved expansion — otherwise a
+    // free panel's marks sit hard against the panel edge while a fixed axis gets
+    // 5%, and `SETTING expand` silently stops applying once a dimension is freed.
+    let (min, max) = match global {
+        Some(g) => g.expand_range(min, max),
+        None => (min, max),
+    };
     let (min, max) = pad_degenerate(min, max);
+    // ggsql's global minors, narrowed to this panel — the same treatment its majors
+    // get below. Pinning these is what keeps a panel showing one major from being
+    // filled with hephaestus's own sub-unit minors: ggsql derives minors from the
+    // global major spacing, so the survivors stay on that grid. `None` (no minors
+    // resolved) stays None so the fallback survives; an empty list after filtering is
+    // a panel that genuinely contains none.
+    let minors: Option<Vec<f64>> = global
+        .and_then(|g| g.numeric_minor_breaks())
+        .map(|positions| {
+            positions
+                .into_iter()
+                .filter(|pos| *pos >= min && *pos <= max)
+                .collect()
+        });
     if let Some(hs) = temporal_scale(transform, min, max) {
         let labels: Vec<(HValue, String)> = global
             .map(|g| g.break_labels())
@@ -173,17 +200,42 @@ fn free_continuous_scale(
             .filter(|(pos, _)| *pos >= min && *pos <= max)
             .map(|(pos, label)| (temporal_value(transform, pos), label))
             .collect();
+        // Leave the whole tick set automatic when no global break lands in the panel;
+        // pinning minors around ticks hephaestus chose itself would mix two grids.
         return Some(if labels.is_empty() {
             hs
         } else {
-            hs.with_breaks_labeled(labels)
+            apply_pinned_minors(hs.with_breaks_labeled(labels), minors.as_deref(), transform)
         });
     }
     let mut c = scale::continuous(min..=max);
     if let Some(t) = transform.and_then(map_transform) {
         c = c.with_transform(t);
     }
-    Some(c)
+    Some(apply_pinned_minors(c, minors.as_deref(), transform))
+}
+
+/// Pin `minors` (ggsql positions, already narrowed to the target domain) on `hs`,
+/// wrapping each as the transform's value variant.
+///
+/// `None` leaves hephaestus's automatic minors in place — ggsql resolved none, so
+/// there is nothing to pass through. `Some(&[])` pins an empty list, which is how
+/// hephaestus is told to draw no minors at all: that is `SETTING minor_breaks => 0`
+/// arriving intact rather than being mistaken for "nothing to say".
+fn apply_pinned_minors(
+    hs: HScale,
+    minors: Option<&[f64]>,
+    transform: Option<GTransform>,
+) -> HScale {
+    match minors {
+        Some(positions) => hs.with_minor_breaks(
+            positions
+                .iter()
+                .map(|pos| temporal_value(transform, *pos))
+                .collect(),
+        ),
+        None => hs,
+    }
 }
 
 /// A per-panel **binned** position scale: ggsql's globally resolved bin edges,
@@ -191,10 +243,14 @@ fn free_continuous_scale(
 ///
 /// The writer never invents bin boundaries — it only selects from the edges ggsql
 /// resolved, and labels them with ggsql's own edge labels. Edges and domain narrow
-/// together because a hephaestus binned scale keeps its edges in the output range
-/// and derives band width as `1 / (edges - 1)`: keeping every global edge while
-/// shrinking the domain would leave each bar a global bin-width wide, hanging off
-/// the panel.
+/// together because a hephaestus binned scale derives band width from its edge
+/// count as `1 / (edges - 1)`: keeping every global edge while shrinking the domain
+/// would leave each bar a global bin-width wide, hanging off the panel.
+///
+/// Neither `expand_range` nor pinned minors here: the band width a bar is drawn at
+/// assumes the domain spans exactly the edges, so padding the domain would
+/// desynchronise bar width from bin width, and a binned axis's ticks are its edges,
+/// with nothing to subdivide.
 fn free_binned_scale(global: &GScale, dfs: &[&DataFrame], base: &str) -> Option<HScale> {
     let bins = binned_bins(global);
     if bins.is_empty() {
@@ -323,7 +379,11 @@ pub fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
 
 /// Feed ggsql's resolved breaks + formatted labels into the hephaestus scale so
 /// axis/legend ticks match ggsql exactly (including RENAMING overrides).
+///
+/// Minor breaks travel the same way, via [`apply_minor_breaks`]: break positions are
+/// ggsql's to own, majors and minors alike, so nothing here invents either.
 fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) -> HScale {
+    let hs = apply_minor_breaks(hs, scale, type_kind);
     let labels = scale.break_labels();
     if labels.is_empty() {
         return hs;
@@ -362,6 +422,19 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
             )
         }
     }
+}
+
+/// Pin ggsql's resolved minor breaks (sub-ticks / sub-gridlines) so they subdivide
+/// ggsql's majors instead of being generated from the domain. Without this a sparse
+/// major set — a fixed temporal axis narrowed to one break in a facet panel — gets
+/// hephaestus's own sub-unit minors, which read as a dotted rail.
+fn apply_minor_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) -> HScale {
+    // Same variant rule as the majors: a temporal scale's positions go back as
+    // typed temporal values, everything else as plain numbers.
+    let temporal = matches!(type_kind, Some(ScaleTypeKind::Continuous))
+        .then(|| scale.transform.as_ref().map(|t| t.transform_kind()))
+        .flatten();
+    apply_pinned_minors(hs, scale.numeric_minor_breaks().as_deref(), temporal)
 }
 
 /// One bin of a resolved ggsql binned scale: its numeric edges, its centre (the

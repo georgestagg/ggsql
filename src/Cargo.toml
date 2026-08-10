@@ -40,8 +40,7 @@ adbc_core = { version = "0.23", optional = true }
 geozero = { workspace = true, optional = true, features = ["with-wkb", "with-wkt", "with-geojson"] }
 
 # Hephaestus raster writer (non-default; gated, excluded from the MSRV 1.86 build)
-hephaestus = { git = "https://github.com/posit-dev/hephaestus.git", rev = "a90dc84b769e5723c4ca675bd9b439063cdc501a", optional = true, default-features = false, features = ["vello", "png", "text", "geom-wkb", "geom-wkt"] }
-png = { version = "0.18", optional = true }
+hephaestus = { git = "https://github.com/posit-dev/hephaestus.git", rev = "5e9a06042af976b54ace5a0ac135d564a4b12ef2", optional = true, default-features = false, features = ["vello", "png", "text", "geom-wkb", "geom-wkt"] }
 
 # Serialization
 serde.workspace = true
@@ -74,6 +73,6 @@ adbc = ["dep:adbc_core"]
 odbc = ["dep:toml_edit", "dep:libloading"]
 spatial = ["dep:geozero", "rusqlite?/load_extension"]
 vegalite = []
-hephaestus = ["dep:hephaestus", "dep:png"]
+hephaestus = ["dep:hephaestus"]
 builtin-data = []
 all-readers = ["duckdb", "sqlite", "odbc"]

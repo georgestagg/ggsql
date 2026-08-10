@@ -52,8 +52,9 @@ pub struct Scale {
     #[serde(default)]
     pub explicit_transform: bool,
     /// Additional scale properties (SETTING clause)
-    /// Note: `breaks` can be either a Number (count) or Array (explicit positions).
-    /// If scalar at parse time, it's converted to Array during resolution.
+    /// Note: `breaks` and `minor_breaks` can each be a Number (count), Array
+    /// (explicit positions) or String (temporal interval). Whatever the user wrote,
+    /// both are converted to an Array of positions during resolution.
     pub properties: Parameters,
     /// Whether this scale has been resolved (set by resolve() method)
     /// Used to skip re-resolution of pre-resolved scales (e.g., Binned scales)
@@ -118,6 +119,29 @@ impl Scale {
         }
     }
 
+    /// Numeric minor break positions (after resolution), from the `minor_breaks`
+    /// setting.
+    ///
+    /// Minor breaks carry no labels — they are the sub-ticks / sub-gridlines between
+    /// majors. Returns an `Option`, unlike [`numeric_breaks`](Self::numeric_breaks),
+    /// because "resolved to none" and "not resolved" have to be told apart:
+    ///
+    /// - `Some(positions)`, possibly **empty** — resolution ran. An empty vector is
+    ///   the user asking for no minors (`SETTING minor_breaks => 0`) and a consumer
+    ///   must honour it by drawing none.
+    /// - `None` — no minor breaks were resolved, either because the scale type has
+    ///   none (discrete, ordinal, binned — a binned axis's ticks are its bin edges)
+    ///   or because the scale is unresolved. A consumer is free to fall back on its
+    ///   own algorithm.
+    pub fn numeric_minor_breaks(&self) -> Option<Vec<f64>> {
+        match self.properties.get("minor_breaks") {
+            Some(ParameterValue::Array(breaks)) => {
+                Some(breaks.iter().filter_map(|b| b.to_f64()).collect())
+            }
+            _ => None,
+        }
+    }
+
     /// Labelled breaks: `(numeric_position, display_label)` pairs.
     ///
     /// Delegates to the scale type, then applies `label_mapping` overrides.
@@ -157,6 +181,38 @@ impl Scale {
                 let max = range.last()?.to_f64()?;
                 Some((min, max))
             }
+        }
+    }
+
+    /// Apply this scale's resolved expansion to a caller-computed `(min, max)`.
+    ///
+    /// [`numeric_domain`](Self::numeric_domain) is already expanded, so this is
+    /// only for a consumer that had to derive a range ggsql did *not* resolve —
+    /// today, a writer computing a per-panel domain for a **free** facet
+    /// dimension. Going through this method rather than re-deriving the formula
+    /// keeps a free panel padded exactly like a fixed axis, honours
+    /// `SETTING expand`, and picks up context-dependent factors the caller can't
+    /// see (a polar full-circle theta resolves to zero expansion).
+    ///
+    /// Mirrors resolution: expand, then clip to the transform's allowed domain.
+    /// On an unresolved scale the factors fall back to the continuous defaults.
+    pub fn expand_range(&self, min: f64, max: f64) -> (f64, f64) {
+        let (mult, add) = super::scale_type::get_expand_factors(&self.properties);
+        let expanded = super::scale_type::expand_numeric_range(
+            &[ArrayElement::Number(min), ArrayElement::Number(max)],
+            mult,
+            add,
+        );
+        let clipped = match &self.transform {
+            Some(t) => super::scale_type::clip_to_transform_domain(&expanded, t),
+            None => expanded,
+        };
+        match (
+            clipped.first().and_then(|e| e.to_f64()),
+            clipped.last().and_then(|e| e.to_f64()),
+        ) {
+            (Some(lo), Some(hi)) => (lo, hi),
+            _ => (min, max),
         }
     }
 }
@@ -408,6 +464,87 @@ mod tests {
                 (2.0, "B".to_string()),
                 (3.0, String::new())
             ]
+        );
+    }
+
+    #[test]
+    fn test_numeric_minor_breaks_is_none_until_resolved() {
+        // Unresolved, so a consumer may fall back to its own algorithm. A setting
+        // value that resolution hasn't converted yet reads the same way.
+        let mut s = continuous_scale((0.0, 100.0), vec![0.0, 50.0, 100.0]);
+        assert_eq!(s.numeric_minor_breaks(), None);
+        s.properties
+            .insert("minor_breaks".to_string(), ParameterValue::Number(3.0));
+        assert_eq!(s.numeric_minor_breaks(), None);
+    }
+
+    #[test]
+    fn test_numeric_minor_breaks_reads_resolved_positions() {
+        let mut s = continuous_scale((0.0, 100.0), vec![0.0, 50.0, 100.0]);
+        s.properties.insert(
+            "minor_breaks".to_string(),
+            ParameterValue::Array(vec![ArrayElement::Number(25.0), ArrayElement::Number(75.0)]),
+        );
+        assert_eq!(s.numeric_minor_breaks(), Some(vec![25.0, 75.0]));
+    }
+
+    #[test]
+    fn test_numeric_minor_breaks_distinguishes_resolved_none() {
+        // `minor_breaks => 0` resolves to an empty array, which must not read as
+        // "unresolved" — a consumer has to draw none rather than invent some.
+        let mut s = continuous_scale((0.0, 100.0), vec![0.0, 50.0, 100.0]);
+        s.properties.insert(
+            "minor_breaks".to_string(),
+            ParameterValue::Array(Vec::new()),
+        );
+        assert_eq!(s.numeric_minor_breaks(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn test_expand_range_uses_the_continuous_default() {
+        // No `expand` property → the 5%-of-span default, both ends.
+        let s = continuous_scale((0.0, 100.0), vec![]);
+        assert_eq!(s.expand_range(0.0, 100.0), (-5.0, 105.0));
+    }
+
+    #[test]
+    fn test_expand_range_honours_the_setting() {
+        // Multiplier only, then the [mult, add] pair resolution writes back.
+        let mut s = continuous_scale((0.0, 100.0), vec![]);
+        s.properties
+            .insert("expand".to_string(), ParameterValue::Number(0.1));
+        assert_eq!(s.expand_range(0.0, 100.0), (-10.0, 110.0));
+
+        s.properties.insert(
+            "expand".to_string(),
+            ParameterValue::Array(vec![ArrayElement::Number(0.1), ArrayElement::Number(1.0)]),
+        );
+        assert_eq!(s.expand_range(0.0, 100.0), (-11.0, 111.0));
+    }
+
+    #[test]
+    fn test_expand_range_zero_is_exact() {
+        // What a polar full-circle theta resolves to: no padding at all, so a
+        // free panel doesn't open a gap in the pie.
+        let mut s = continuous_scale((0.0, 100.0), vec![]);
+        s.properties.insert(
+            "expand".to_string(),
+            ParameterValue::Array(vec![ArrayElement::Number(0.0), ArrayElement::Number(0.0)]),
+        );
+        assert_eq!(s.expand_range(0.0, 100.0), (0.0, 100.0));
+    }
+
+    #[test]
+    fn test_expand_range_clips_to_the_transform_domain() {
+        // Mirrors resolution: expanding below zero on a log scale clips to the
+        // transform's allowed minimum rather than producing an invalid domain.
+        let mut s = continuous_scale((1.0, 1000.0), vec![]);
+        s.transform = Some(Transform::log());
+        let (lo, hi) = s.expand_range(1.0, 1000.0);
+        assert_eq!(lo, f64::MIN_POSITIVE);
+        assert!(
+            (hi - 1049.95).abs() < 1e-9,
+            "upper end expands normally: {hi}"
         );
     }
 }

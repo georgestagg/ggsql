@@ -260,6 +260,9 @@ Continuous/binned scales:
 - `pretty` — boolean, default `true`. Use Wilkinson's algorithm for nice breaks.
 - `reverse` — boolean, default `false`. Reverse scale direction.
 
+Continuous scales additionally:
+- `minor_breaks` — unlabelled subdivisions between breaks. Integer count **per interval between two breaks** (`0` removes them), array of values, or interval string for temporal. Defaults to a per-transformation value. Only drawn by writers that support minor breaks; Vega-Lite ignores it.
+
 Binned scales additionally:
 - `closed` — `'left'` (default) or `'right'`
 
