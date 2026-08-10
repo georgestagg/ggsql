@@ -9,6 +9,7 @@
 
 - The VS Code / Positron extension now ships a language icon that renders in the session picker, editor tabs and the Explorer. It previously pointed at a file that did not exist, which left the icon blank.
 - In plain VS Code, the extension no longer offers run buttons, keybindings or Command Palette entries for commands that need the Positron runtime and so had no handler there.
+- Plots in Positron notebooks no longer come out blank when the cell output is rendered before Positron has laid the slot out, which happened on the first execution after a kernel started and when reopening a saved notebook. The plot sizes itself from its container, so a zero-width first measurement drew it at zero size with nothing left to correct it. It now recovers once the container has a real width.
 
 ## 0.4.1 - 2026-06-22
 
