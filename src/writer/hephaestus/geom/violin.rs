@@ -54,7 +54,12 @@ fn material() -> [MaterialSpec; 5] {
             RangeKind::Linetype,
             MatDefault::None,
         ),
-        MaterialSpec::new("opacity", "alpha", RangeKind::Number, MatDefault::None),
+        MaterialSpec::new(
+            "opacity",
+            "fill_opacity",
+            RangeKind::Number,
+            MatDefault::None,
+        ),
     ]
 }
 
@@ -236,7 +241,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
             }
         }
     }
-    b.set("alpha", Raw(constant_number(ctx, "opacity", 1.0)));
+    b.set("fill_opacity", Raw(constant_number(ctx, "opacity", 1.0)));
     plot.add_geom(b.build());
 
     Ok(())

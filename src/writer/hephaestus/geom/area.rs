@@ -60,7 +60,7 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
             MaterialSpec::new("stroke", "stroke2", RangeKind::Color, MatDefault::None),
             MaterialSpec::new(
                 "opacity",
-                "alpha",
+                "fill_opacity",
                 RangeKind::Number,
                 MatDefault::Number(0.8),
             ),

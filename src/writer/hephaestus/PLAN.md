@@ -1223,7 +1223,7 @@ other layer bound the same channel.
   drawn — silently, in a plot that otherwise looked right. Every writer-resolved
   constant is now `Raw`: `set_literal_channel` (literals and `SETTING`s),
   `MatDefault` (geom defaults), `MaterialSource::Constant` (composites), and the
-  composites' own `size`/`shape`/`fill_opacity`/`alpha`. Per-row band fractions
+  composites' own `size`/`shape`/`fill_opacity`. Per-row band fractions
   and offsets are untouched — no scale is ever bound to a `_band` channel.
 
 The rule that falls out, now stated in [`CLAUDE.md`](CLAUDE.md): **only a
@@ -1238,6 +1238,53 @@ with a collapsed legend, `aggregate => 'max'`, diagonal abline), the line+rule
 overlay draws both layers, 91 writer tests pass, and a full harness re-run over
 `doc/syntax/` is clean — 191 cells, 0 problems, all eyeballed against the
 Vega-Lite renders. fmt and clippy clean.
+
+## hephaestus bump `a353698` → `aec4e1b` — status: implemented
+
+Upstream closed every item §9's "Upstream hephaestus" list had accumulated. The
+bump is mostly *subtraction* on this side: three of the seven were writer
+workarounds that now have nothing to work around.
+
+Required by the bump (`aec4e1b` panics on an unknown channel rather than ignoring
+it, so these were hard failures, not cosmetic):
+
+- **The `alpha` channel is gone**; opacity is `fill_opacity` / `stroke_opacity`
+  everywhere, geoms and legend keys alike. `area` and `violin` were the last two
+  users — both `RibbonGeom`, both now on `fill_opacity`, which is what every other
+  fill-bearing geom in the writer already mapped ggsql's `opacity` to.
+
+Enabled by the bump:
+
+- **`UNPINNABLE_CHANNELS` deleted.** hephaestus now sizes each swatch cell from
+  the key it holds (`render_keys::swatch_dim_for`), insets a rect's border, and
+  reserves a line key's cap body. All three reasons the writer withheld `size` /
+  `linewidth` / `shape` from a key are gone, so `pin_constants` pins them like
+  anything else: `SETTING shape => 'star'` now puts stars in the legend, and
+  `SETTING size => 12` gets a cell that fits the marker instead of a disc painted
+  across the legend.
+- **The partial-opacity translation deleted.** `ResolvedKey` grew separate
+  `fill_opacity` / `stroke_opacity` matching the geom channels 1:1, so a zero
+  opacity is *pinned* rather than reverse-engineered into "leave the colour
+  channel unset". `partial_opacity_target` and `suppressed_channels` are gone;
+  `opacity => 0` on a point layer still draws open circles in both panel and key.
+- **`LegendKind::Text`** added, and the `text` geom switched to it from `Point`.
+  A scaled `fontsize` legend now draws letters at each size.
+
+Fixed upstream with no writer change — verified by re-rendering each repro:
+
+- A **shape scale** draws its marks (`ctx.scale_for("shape")`), and its keys draw
+  the glyph at a sensible size with no swallowing outline disc.
+- **`SCALE linewidth TO (0, 30)`** renders the polyline, tapering from zero.
+- A **radar's closing edge** wraps forward across the 1.0/0.0 seam instead of
+  retracing the interior.
+- **Text chrome is measured with the width it is drawn at**, fixing both symptoms
+  at once: a wrapped facet strip reserves all its lines rather than clipping to
+  one, and an axis tick label containing a space centres on the whole label rather
+  than on its first word.
+
+Verified: 191 cells over `doc/syntax/` in ~164 s, 0 problems, eyeballed against
+the Vega-Lite renders; the seven repros above re-rendered individually; 91 writer
+tests pass; fmt and clippy clean.
 
 ## 8. Key source references
 
@@ -1284,6 +1331,27 @@ here so it survives between efforts.
 - **Legends are captured from the first panel only**, assuming every panel yields
   identical legends. True under fixed scales; unverified for a free-scale facet
   that also maps a material aesthetic.
+- **`area` and `density` stroke their baseline as well as their curve.** The
+  ribbon-edge wiring sends every outline aesthetic to *both* curves, which is
+  right for `ribbon` (both its edges are data) and wrong for the other two, where
+  curve A is the axis rather than part of the shape. Gate the curve-A copies on
+  the geom, the way `violin.rs` gates them on `side`.
+- **A row whose scaled *numeric* value is null is drawn unpainted rather than
+  dropped.** `column_to_f64` maps a null to `NaN`, the geom draws the mark anyway,
+  and the channel resolves to nothing — so `doc/syntax/layer/position/jitter.qmd:67`
+  renders penguins' two NULL-`body_mass` rows as white circles that Vega-Lite
+  omits entirely. Note the rule differs by scale type and the categorical half is
+  already correct: a **categorical** null is a trained level with its own colour
+  and legend key (see `channels::NULL_CATEGORY`), a **continuous or binned** null
+  is missing data and the row should not be drawn at all.
+- **A map frames tighter than Vega-Lite does.** Both writers frame to the data
+  bbox and now agree on proportions, but VL pads the fitted extent by 10%
+  (`vegalite/projection/map.rs:135-147`, `dx = (xmax - xmin) * 1.1`) while
+  `map_bbox`/`nice_range` pad not at all — `nice_range` only widens a degenerate
+  span. Matching that 10% is the writer half. Whether framing should key off the
+  projection's own extent instead of the data's is a separate core question in
+  `resolve_final_bbox`, and `doc/syntax/coord/crs.qmd:204-213` currently documents
+  data-framing as intended.
 - **A log scale whose expanded lower bound crosses zero renders blank.** Not a
   writer fault and not "log scales get no expansion" — expansion works whenever it
   stays positive (`body_mass VIA log` resolves `[2520, 6480]`, a real 5% pad). The
@@ -1308,11 +1376,7 @@ here so it survives between efforts.
   hides colliding labels. The fix belongs in hephaestus's `Axis`: it needs the
   measured text metrics to decide a stride, which the writer doesn't have and
   shouldn't guess. Keeping the tick and blanking its label is the presentation to
-  aim for. This is also what the "weird axis label alignment" on
-  `doc/syntax/scale/type/discrete.qmd:115` (`RENAMING * => 'Species: {}'`) turns
-  out to be — the labels and their positions are resolved correctly and agree
-  with VL; they are simply too long to sit side by side.
-
+  aim for.
 ### Feature gaps
 
 - `arrow` geom — the only unsupported `GeomType` (deliberate).
@@ -1387,71 +1451,29 @@ resolved per-panel domains and spatial position scales:
 
 ### Upstream hephaestus
 
-Pinned at rev `a353698`. The shape of everything that got resolved here: the
+Pinned at rev `aec4e1b`. The shape of everything that got resolved here: the
 writer's job is to pass resolved values through, so wherever hephaestus had to
 compute something itself, the fix was a missing *setter*, not a better algorithm.
-The items below are the ones no setter reaches.
 
-**A shape scale drops its marks entirely.** `plot/geom/point.rs:287` resolves the
-`shape` channel with `resolve_str_channel_or(shape_ch, None, i, …)` — passing
-`None` where every other channel passes its bound scale (`size` does so on the
-line above, from `ctx.scale_for("size")`). The raw *domain* value (`"Adelie"`)
-is therefore used as a shape name, misses the registry, and `point.rs:302-305`
-`continue`s past the mark. So the layer disappears rather than drawing wrong
-shapes. ggsql's side is correct end to end: the default palette's names match
-hephaestus's registry 1:1 (`plot/scale/palettes.rs:1928-1969` vs `shape.rs:664`),
-`RangeKind::Shape` is registered, and the channel is bound. A literal
-`SETTING shape => 'star'` still works, because that goes through `Raw`.
-Affects `doc/syntax/scale/aesthetic/shape.qmd` and the discrete-scale shape
-example. Fix is `ctx.scale_for("shape")`.
+Every item this section previously listed is now fixed upstream, verified by
+re-rendering its repro (see the bump entry in the phase log for the writer-side
+changes the bump required). One item remains, and it costs nothing in practice:
 
-**A `linewidth` of 0 drops a whole polyline.** `plot/geom/line.rs:547-555`
-resolves the mark's width from its *first row* and bails on
-`linewidth_px <= 0.0`, so `SCALE linewidth TO (0, 30)` renders nothing at all —
-even though every later vertex is wide, and even though ribbon mode is otherwise
-active and would interpolate per vertex. `TO (1, 30)` renders correctly, which is
-how to tell this apart from the channel not being wired. The guard wants to be
-per-vertex (or taken from the mark's maximum) once ribbon mode is on.
-Repro: `doc/syntax/layer/type/line.qmd:87-98`.
-
-**Legend keys are sized from the theme's geom defaults, not from their cell.**
-`chrome/legend/render_keys.rs` takes `size_pt`/`linewidth_pt` from the key when
-set and from `theme.geom.*` otherwise, and the cell never grows to fit. Three
-consequences: a *fixed* `size`/`linewidth`/`shape` cannot be shown on a key at
-all (the writer excludes them — `wiring::UNPINNABLE_CHANNELS`); a legend *scaled*
-on `linewidth` overflows its cell at the top of the range; and `render_line`
-(`render_keys.rs:219-262`) draws edge-to-edge with kurbo's default **round** caps,
-so every line key overhangs by `linewidth/2`. `ResolvedKey` has no `cap` field and
-`LegendKeySpec::fixed("cap", …)` is silently swallowed, so there is no writer-side
-escape; the cheapest upstream fix for the last one is
-`Stroke::new(w).with_caps(Cap::Butt)`, as `plot/plot.rs:802-804` already does.
-
-**Facet strips measure unwrapped but draw wrapped.** `StripMeasure::new`
-(`plot/chrome/strip.rs:118-146`) measures the label at `f32::INFINITY` and sizes
-the slot for one line; `draw_strip` renders through `draw_text_element_in_rect`,
-which wraps to the strip's interior width (`plot/plot.rs:2105-2106`) and then
-clips to the background shape. A label wider than the panel therefore wraps to N
-lines inside a one-line slot and lines 2..N are clipped — exactly what ggsql's
-binned facet strips produce, since those carry bin-range labels. There is no
-strip-thickness setter and no way to opt out of wrapping, so the writer can only
-work around it via the theme's `strip_text` size. Real fix: measure with the same
-`max_width` the draw pass uses.
-
-**No scale-level domain expansion / "nice" padding.** Not a gap in practice, and
-no longer one anywhere the writer can reach. ggsql owns expansion:
-`resolve_common_steps` applies `SETTING expand` via
-`expand_numeric_range_selective` while resolving the scale, so `numeric_domain()`
-is already padded before either writer sees it, and both pass it through verbatim
-(`continuous_domain` → `scale::continuous(min..=max)`; VL's `build_scale_object` →
-`scale.domain`). Neither writer uses its host's own padding — VL never emits `nice`
-or `padding` either — so the two agree exactly on a fixed scale.
+**No scale-level domain expansion / "nice" padding.** Not a gap anywhere the
+writer can reach. ggsql owns expansion: `resolve_common_steps` applies
+`SETTING expand` via `expand_numeric_range_selective` while resolving the scale,
+so `numeric_domain()` is already padded before either writer sees it, and both
+pass it through verbatim (`continuous_domain` → `scale::continuous(min..=max)`;
+VL's `build_scale_object` → `scale.domain`). Neither writer uses its host's own
+padding — VL never emits `nice` or `padding` either — so the two agree exactly on
+a fixed scale.
 
 The one place it used to cost something, **a free facet dimension**, is fixed: see
-the expansion section below. VL solves the same problem by *delegating* —
+the expansion section above. VL solves the same problem by *delegating* —
 `build_scale_object` skips `domain` when `is_free(...)` and the spec sets
 `resolve.scale: independent`, so Vega derives each panel's domain and pads it —
-whereas the hephaestus writer now asks ggsql for the factors and applies them to
-the extent it computed. Both end up padded; ggsql's route additionally honours an
+whereas the hephaestus writer asks ggsql for the factors and applies them to the
+extent it computed. Both end up padded; ggsql's route additionally honours an
 explicit `SETTING expand` per panel, which Vega's own padding would ignore.
 What is left upstream is only the *fallback* case: a host with no resolved scale
 at all still gets no padding from hephaestus.

@@ -51,7 +51,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // a text geom's `stroke` is Null and hephaestus skips the outline pass
     // entirely while the channel is unset; its width is hephaestus's theme
     // default, as ggsql's text geom has no `linewidth` aesthetic.
-    wire_material(&mut b, &material(), plot, ctx, LegendKind::Point)?;
+    wire_material(&mut b, &material(), plot, ctx, LegendKind::Text)?;
 
     // Aesthetics needing conversion, resolved per row: a mapped column, else the
     // layer's literal repeated, else the ggsql default.

@@ -144,6 +144,9 @@ pub enum LegendKind {
     Point,
     Line,
     Rect,
+    /// A glyph, for a text layer: a scaled `fontsize` says what it does by
+    /// drawing letters at each size rather than discs.
+    Text,
 }
 
 /// What a geom needs wired: its position channels, material table, any raw
@@ -872,6 +875,7 @@ pub fn material_legend(
             LegendKind::Point => LegendKeySpec::point(),
             LegendKind::Line => LegendKeySpec::line(),
             LegendKind::Rect => LegendKeySpec::rect(),
+            LegendKind::Text => LegendKeySpec::text(),
         }
         .scaled(channel, scale_name);
         Legend::new(scale_name)
@@ -909,69 +913,10 @@ pub fn material_legend(
 /// Two channels are deliberately left alone: the one the legend is *scaled* on
 /// (pinning it would override the very thing being shown), and any channel a
 /// scale owns — a data-mapped aesthetic's column holds domain values, not visual
-/// ones, and it carries its own legend anyway.
-/// The channels a legend key must *not* inherit from the layer: the ones that
-/// decide how much room the glyph takes, rather than how it is painted.
-///
-/// A key's cell does not grow to fit its glyph. `render_point` sizes a marker
-/// from `theme.geom.point.size_pt` and outlines it at `stroke_width_pt` — both
-/// tuned for a legend — and only falls back to those when the key leaves the
-/// channel unset. Pin `size`/`linewidth` and the key instead uses a length
-/// chosen for a 3pt data marker; pin `shape` and it switches to scaling that
-/// shape's path by the same length. Either way the swatch stops fitting its
-/// cell: `SETTING size => 10` paints a disc across the whole legend.
-///
-/// A legend *scaled* on one of these is unaffected — it is the scaled channel,
-/// so it is never pinned, and hephaestus sizes those keys from the scale.
-const UNPINNABLE_CHANNELS: &[&str] = &["size", "linewidth", "shape"];
-
-/// The colour channel a *partial* opacity governs, if it governs only one.
-///
-/// A geom's `fill_opacity` and `stroke_opacity` fade one channel each, but a
-/// legend key has a single `alpha` that hephaestus applies to its fill *and* its
-/// stroke (`render_point`, `render_rect`). Pinning a partial opacity there would
-/// fade the wrong things — for `opacity => 0` on a point layer it fades the
-/// glyph out of existence, even though the marks stay visible as open circles.
-///
-/// So a partial opacity is translated instead of pinned: at zero, the channel it
-/// governs is *absent* from the mark, and a key can say that exactly by leaving
-/// that channel unset. `alpha` returns `None` because it really is a whole-mark
-/// opacity and maps onto the key's own `alpha` directly.
-fn partial_opacity_target(channel: &str) -> Option<&'static str> {
-    match channel {
-        "fill_opacity" => Some("fill"),
-        "stroke_opacity" => Some("stroke"),
-        _ => None,
-    }
-}
-
-/// Channels a legend key must leave unset because the layer faded them out
-/// entirely: the colour channel behind every partial opacity the layer resolves
-/// to zero, plus the opacity channel itself (there is nothing left for it to
-/// say). See [`partial_opacity_target`] for why this is a translation rather
-/// than a pin.
-fn suppressed_channels<'a>(ctx: &Ctx, material: &'a [MaterialSpec]) -> HashSet<&'a str> {
-    let mut suppressed = HashSet::new();
-    for m in material {
-        let Some(target) = partial_opacity_target(m.channel) else {
-            continue;
-        };
-        // A data-mapped opacity varies per row; there is no single value to act on.
-        if is_data_mapped(ctx, m.aesthetic) {
-            continue;
-        }
-        let value = constant_material(ctx, m.aesthetic, m.kind).or(match m.default {
-            MatDefault::Number(n) => Some(HValue::Number(n)),
-            _ => None,
-        });
-        if matches!(value, Some(HValue::Number(n)) if n == 0.0) {
-            suppressed.insert(target);
-            suppressed.insert(m.channel);
-        }
-    }
-    suppressed
-}
-
+/// ones, and it carries its own legend anyway. Everything else pins, including
+/// the channels that decide how much room the glyph takes (`size`, `linewidth`,
+/// `shape`): hephaestus sizes each swatch cell from the key it holds, so a
+/// `SETTING size => 12` marker gets a cell that fits it.
 fn pin_constants(
     ctx: &Ctx,
     mut key: LegendKeySpec,
@@ -980,23 +925,13 @@ fn pin_constants(
     legend_kind: LegendKind,
     kind: RangeKind,
 ) -> LegendKeySpec {
-    // Channels the layer fades all the way out, and so leaves off its marks:
-    // `SETTING opacity => 0` on a point geom draws open circles, and the key
-    // says so by having no fill rather than by being invisible. Resolved up
-    // front because the opacity that suppresses a channel may sit after it in
-    // the table.
-    let suppressed = suppressed_channels(ctx, material);
-
     // `claimed` is "do not pin this channel again"; `pinned` is "this channel
     // actually got a value". They differ for a channel a *scale* owns: nothing
     // may pin over it, but it has no constant either.
     let mut claimed: HashSet<&str> = HashSet::from([scaled_channel]);
     let mut pinned: HashSet<&str> = HashSet::from([scaled_channel]);
     for m in material {
-        if claimed.contains(m.channel)
-            || UNPINNABLE_CHANNELS.contains(&m.channel)
-            || suppressed.contains(m.channel)
-        {
+        if claimed.contains(m.channel) {
             continue;
         }
         // A channel another scale drives is spoken for, whichever aesthetic
@@ -1031,11 +966,13 @@ fn pin_constants(
     if kind != RangeKind::Color {
         let body = match legend_kind {
             LegendKind::Line => "stroke",
-            LegendKind::Point | LegendKind::Rect => "fill",
+            LegendKind::Point | LegendKind::Rect | LegendKind::Text => "fill",
         };
-        // Not when the layer suppressed it: an unfilled mark wants an unfilled
-        // key, and the grey would put back the fill that was just taken away.
-        if !pinned.contains(body) && !suppressed.contains(body) {
+        // A layer that fades its body out keeps the grey harmlessly: the
+        // `fill_opacity` / `stroke_opacity` pinned above is what hephaestus
+        // paints it at, so `opacity => 0` leaves the key as unfilled as the
+        // marks are.
+        if !pinned.contains(body) {
             key = key.fixed(body, HValue::Color(rgb8(64, 64, 64)));
         }
     }

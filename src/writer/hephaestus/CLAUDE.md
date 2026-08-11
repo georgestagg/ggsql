@@ -130,7 +130,7 @@ for the minimal case):
 | `raw_strings` | Unscaled string channels from a mapped aesthetic (text labels). |
 | `raw_numbers` | Constant panel-space values that bypass scales (a rule's 0..1 span), materialised one per row. |
 | `data_channels` | Per-row values the geom computes itself (bar/tile band edges). Channels listed here are *claimed*: `wire_positions` won't overwrite them with the raw offsets, because the geom already folded those in. |
-| `legend_key: LegendKind` | Point / Line / Rect swatch, so a line legend shows a line. |
+| `legend_key: LegendKind` | Point / Line / Rect / Text swatch, so a line legend shows a line and a text legend shows a glyph. |
 | `grouped: bool` | Derive hephaestus `keys` from `layer.partition_by`, for multi-vertex marks (line, area, polygon). |
 
 ### The three ways ggsql delivers an aesthetic
@@ -196,13 +196,20 @@ hephaestus channels are named per **panel axis**; scales are registered under th
 and is idempotent, so repeated bindings across layers and components are
 harmless.
 
+**Each hephaestus geom declares the channels it accepts, and setting one it
+doesn't declare panics** (`geom::state::validate_known_channels`, at build time
+rather than at draw). So the names below are per-geom, not global: only the
+fill-bearing geoms take `fill_opacity`, only `RibbonGeom` takes the `2`-suffixed
+far-edge channels. A misnamed channel fails loudly rather than rendering as the
+default — check the target geom's `CHANNELS` catalog upstream when adding one.
+
 | Concept | hephaestus channel |
 | --- | --- |
 | Positions | `x`, `x2`, `y`, `y2` |
 | Band fraction offsets (dodge/jitter, width) | `x_band`, `x2_band`, `y_band`, `y2_band` |
 | Absolute (pt) offsets — hinge caps | `x_offset`, `x2_offset`, `y_offset`, `y2_offset` |
 | Color | `fill`, `stroke` (`stroke2` = a ribbon's far edge; `text_stroke` = a glyph outline) |
-| Scalars | `size`, `linewidth`, `linetype`, `shape`, `fill_opacity` / `stroke_opacity` / `alpha` |
+| Scalars | `size`, `linewidth`, `linetype`, `shape`, `fill_opacity` / `stroke_opacity` |
 | Geometry / text | `geometry`; `text`, `anchor_x`, `anchor_y`, `angle`, `weight`, `italic`, `family` |
 
 | Scale registry key | Source |
@@ -322,7 +329,8 @@ A legend key paints only what it is told to paint — nothing is inherited from 
 plot — so `pin_constants` dresses each key in the layer's own constants, walking
 the same `MaterialSpec` table the geom wired itself from. That table already
 encodes the geom's aliasing (`color` → `fill` for an area, → `stroke` for a
-line), so the key ends up styled like the marks it describes. Three rules:
+line), so the key ends up styled like the marks it describes. Exactly two rules,
+and everything else pins:
 
 - **Never pin the scaled channel**, or the key overrides the thing it exists to show.
 - **Never pin a channel a scale owns.** A data-mapped aesthetic's column holds
@@ -331,17 +339,14 @@ line), so the key ends up styled like the marks it describes. Three rules:
   grey; a colour-scaled legend takes no fallback at all, because ggsql maps
   `color` onto both `fill` and `stroke` and hephaestus only collapses those two
   legends while their keys stay equivalent.
-- **Never pin `size`, `linewidth` or `shape`** (`UNPINNABLE_CHANNELS`). A key's
-  cell does not grow to fit its glyph, and those three are what hephaestus sizes
-  the glyph from; pinning a length chosen for a 3pt data marker paints a disc
-  across the whole legend. See PLAN.md §9.
-- **Translate a zero *partial* opacity, don't pin it.** A key has a single `alpha`
-  covering fill and stroke together, where a geom has `fill_opacity` and
-  `stroke_opacity` separately. `opacity => 0` on a point geom leaves open circles,
-  so the key must drop its **fill** — pinning the zero instead fades the whole
-  glyph away, which also deletes that layer from a key shared with another geom.
-  `suppressed_channels` handles this; plain `alpha` is a whole-mark value and pins
-  directly.
+
+That includes the channels that decide how much room the glyph takes. hephaestus
+sizes each swatch **cell** from the key it holds, so `size`, `linewidth` and
+`shape` pin like any other constant — `SETTING shape => 'star'` puts stars in the
+legend, and `SETTING size => 12` gets a cell that fits the marker. It also
+includes `fill_opacity` / `stroke_opacity`, which a key carries separately just as
+a geom does: `opacity => 0` on a point geom pins straight through and leaves the
+key as open a circle as the marks are.
 
 One legend is recorded per **aesthetic**, not per channel. A geom may drive
 several channels from one aesthetic — a ribbon sends `stroke` to both edge curves
