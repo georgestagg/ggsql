@@ -180,8 +180,9 @@ impl Writer for HephaestusWriter {
         let (composition, panels) = facet::build_panels(spec, data)?;
         // The composition owns the shape registry backing composition-level legend
         // glyphs (point markers, line dashes).
-        let mut view =
-            PlotComposition::new(&composition).shape_registry(ShapeRegistry::with_builtins());
+        let mut view = PlotComposition::new(&composition)
+            .shape_registry(ShapeRegistry::with_builtins())
+            .theme(wiring::ggsql_theme());
 
         // Plot title/subtitle/caption from the LABEL clause. These live on the
         // composition, not the per-panel plots, so one label spans the whole
@@ -306,14 +307,17 @@ impl Writer for HephaestusWriter {
             // Axes are created per coordinate system, edge-only for fixed scales.
             plot = apply_projection(plot, spec, panel, &ps);
 
-            // Lock a map panel's aspect to its bounding box so the projection
-            // keeps its proportions (a globe stays round), the raster analog of
-            // the Vega-Lite writer's uniform projection scale.
-            if let Some((xmin, ymin, xmax, ymax)) = map_bbox {
-                let (w, h) = (xmax - xmin, ymax - ymin);
-                if w > 0.0 && h > 0.0 {
-                    plot = plot.aspect_ratio(h / w).aspect_mode(AspectMode::Range);
-                }
+            // Lock a map panel to square units so the projection keeps its
+            // proportions (a globe stays round), the raster analog of the
+            // Vega-Lite writer's single uniform projection scale.
+            //
+            // `aspect_ratio` is the *data-space* x-unit : y-unit ratio, not a
+            // panel width:height ratio. Map coordinates arrive pre-projected, so
+            // one unit means the same length on both axes and the ratio is 1 —
+            // passing the bbox's own height/width instead stretches every map by
+            // exactly that factor.
+            if map_bbox.is_some() {
+                plot = plot.aspect_ratio(1.0).aspect_mode(AspectMode::Range);
             }
 
             // Facet strip labels (Wrap/Grid-column header on top, Grid-row on right).

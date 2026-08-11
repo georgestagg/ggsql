@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use hephaestus::color::{rgb8, Color};
 use hephaestus::plot::chrome::legend::{Legend, LegendKeySpec};
 use hephaestus::plot::geom::{BuildableGeom, Geom, GeomBuilder, Raw};
+use hephaestus::plot::theme::{Element, Length, RectElement, Theme};
 use hephaestus::plot::Plot as HPlot;
 use hephaestus::scales::chrome::LegendSide;
 use hephaestus::scales::value::Value as HValue;
@@ -18,6 +19,28 @@ use super::channels::{
 use super::scales::{map_linetype, parse_color, RangeKind};
 use crate::plot::{ParameterValue, ScaleTypeKind};
 use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Plot, Result};
+
+/// The chrome ggsql renders with: hephaestus's default theme with the handful of
+/// deviations ggsql needs. This is the single hook for chrome — ggsql has no
+/// theme concept of its own yet, so anything the two writers must agree on that
+/// isn't a scale or a channel belongs here.
+///
+/// Only one deviation so far: a colorbar's frame. hephaestus's `BarTheme` leaves
+/// `linewidth_pt` unset, which cascades to the 1pt ink border every `RectElement`
+/// gets by default, so a continuous color legend arrives boxed. Vega-Lite draws
+/// no gradient border (its `gradientStrokeWidth` default is 0), and the discrete
+/// `KeyTheme` next to it zeroes its own border, so the box is out of place in
+/// either comparison.
+pub fn ggsql_theme() -> Theme {
+    let mut theme = Theme::default();
+    theme.legend.bar.frame = Element::Set(RectElement {
+        // The bar's own gradient fills the interior; only the border changes.
+        fill: None,
+        linewidth_pt: Some(Length::Abs(0.0)),
+        ..RectElement::default()
+    });
+    theme
+}
 
 /// Read-only context for building one layer's geom.
 pub struct Ctx<'a> {
@@ -286,6 +309,15 @@ pub fn wire_material<G: BuildableGeom>(
     legend_kind: LegendKind,
 ) -> Result<()> {
     let mut handled: HashSet<&str> = HashSet::new();
+    // One legend per *aesthetic*, not per channel. A geom may drive several
+    // channels from one aesthetic — a ribbon sends `stroke` to both of its edge
+    // curves — and each is a separate `MaterialSpec`, but they all describe the
+    // same scale and want one swatch between them. Recording a second legend
+    // does not merely duplicate: its key is `scaled` on the mirror channel
+    // (`stroke2`), which no legend key kind consumes, so it resolves to neither
+    // fill nor stroke and hephaestus paints its "row isn't empty" placeholder —
+    // a black outline over the real key.
+    let mut legended: HashSet<&str> = HashSet::new();
 
     for m in material {
         if handled.contains(m.channel) {
@@ -317,18 +349,20 @@ pub fn wire_material<G: BuildableGeom>(
             let data = column_to_channel(ctx.df, col)?;
             data.apply(builder, m.channel);
             // Bind the channel to the aesthetic's scale (registered globally) and
-            // record a legend. hephaestus collapses compatible legends, so repeated
-            // records across layers for the same scale merge at registration.
+            // record a legend the first time this aesthetic is seen. hephaestus
+            // collapses compatible legends, so repeated records across *layers*
+            // for the same scale still merge at registration.
             plot.set_binding(m.channel, m.aesthetic);
-            ctx.push_legend(material_legend(
-                ctx,
-                m.aesthetic,
-                m.channel,
-                m.kind,
-                type_kind,
-                aesthetic_label(ctx.spec, ctx.layer, m.aesthetic),
-                legend_kind,
-            ));
+            if legended.insert(m.aesthetic) {
+                ctx.push_legend(material_legend(
+                    ctx,
+                    m.aesthetic,
+                    m.channel,
+                    m.kind,
+                    legend_kind,
+                    material,
+                ));
+            }
         } else {
             match m.kind {
                 RangeKind::Color => {
@@ -670,24 +704,18 @@ pub fn resolve_color(
     channel: &'static str,
     default: Color,
     legend_kind: LegendKind,
+    material: &[MaterialSpec],
 ) -> Result<MaterialSource> {
-    Ok(
-        resolve_material(ctx, plot, aesthetic, channel, RangeKind::Color, legend_kind)?
-            .unwrap_or(MaterialSource::Constant(HValue::Color(default))),
-    )
-}
-
-/// Like [`resolve_color`] but with no fallback. For aesthetics whose ggsql
-/// default is `Null` (e.g. a text geom's `stroke`), where "unmapped" must leave
-/// the channel unset rather than substitute a color.
-pub fn resolve_optional_color(
-    ctx: &Ctx,
-    plot: &mut HPlot,
-    aesthetic: &'static str,
-    channel: &'static str,
-    legend_kind: LegendKind,
-) -> Result<Option<MaterialSource>> {
-    resolve_material(ctx, plot, aesthetic, channel, RangeKind::Color, legend_kind)
+    Ok(resolve_material(
+        ctx,
+        plot,
+        aesthetic,
+        channel,
+        RangeKind::Color,
+        legend_kind,
+        material,
+    )?
+    .unwrap_or(MaterialSource::Constant(HValue::Color(default))))
 }
 
 /// Resolve a material aesthetic for a composite geom, dispatching the same three
@@ -710,12 +738,8 @@ pub fn resolve_material(
     channel: &'static str,
     kind: RangeKind,
     legend_kind: LegendKind,
+    material: &[MaterialSpec],
 ) -> Result<Option<MaterialSource>> {
-    let type_kind = ctx
-        .spec
-        .find_scale(aesthetic)
-        .and_then(|s| s.scale_type.as_ref())
-        .map(|st| st.scale_type_kind());
     if is_data_mapped(ctx, aesthetic) {
         let col = aesthetic_column_name(ctx.layer, aesthetic);
         plot.set_binding(channel, aesthetic);
@@ -724,9 +748,8 @@ pub fn resolve_material(
             aesthetic,
             channel,
             kind,
-            type_kind,
-            aesthetic_label(ctx.spec, ctx.layer, aesthetic),
             legend_kind,
+            material,
         ));
         return Ok(Some(MaterialSource::Data {
             data: column_to_channel(ctx.df, col.unwrap())?,
@@ -820,15 +843,23 @@ fn constant_material(ctx: &Ctx, aesthetic: &str, kind: RangeKind) -> Option<HVal
 /// `"lower – upper"` label here — unlike the Vega-Lite writer, which has no
 /// between-keys rail and so must reverse-engineer Vega's own range labels in
 /// `encoding::build_symbol_legend_label_mapping`.
+/// `scale_name` is the ggsql aesthetic, which is also the key the scale is
+/// registered under — so the scale's type and the legend's title both follow
+/// from it rather than being passed in.
 pub fn material_legend(
     ctx: &Ctx,
     scale_name: &str,
     channel: &str,
     kind: RangeKind,
-    type_kind: Option<ScaleTypeKind>,
-    title: Option<String>,
     legend_kind: LegendKind,
+    material: &[MaterialSpec],
 ) -> Legend {
+    let type_kind = ctx
+        .spec
+        .find_scale(scale_name)
+        .and_then(|s| s.scale_type.as_ref())
+        .map(|st| st.scale_type_kind());
+    let title = aesthetic_label(ctx.spec, ctx.layer, scale_name);
     let continuous_color = kind == RangeKind::Color
         && matches!(
             type_kind,
@@ -837,24 +868,22 @@ pub fn material_legend(
     let mut legend = if continuous_color {
         Legend::colorbar(scale_name).side(LegendSide::Right)
     } else {
-        let mut key = match legend_kind {
+        let key = match legend_kind {
             LegendKind::Point => LegendKeySpec::point(),
             LegendKind::Line => LegendKeySpec::line(),
             LegendKind::Rect => LegendKeySpec::rect(),
         }
         .scaled(channel, scale_name);
-        // A key only paints what it is told to paint, so when the scaled channel
-        // isn't itself a color the glyph needs one — otherwise the swatch is
-        // invisible next to its label. Use the layer's constant color, matching
-        // the marks the legend describes.
-        if kind != RangeKind::Color {
-            let body = match legend_kind {
-                LegendKind::Line => "stroke",
-                LegendKind::Point | LegendKind::Rect => "fill",
-            };
-            key = key.fixed(body, HValue::Color(key_color(ctx, legend_kind)));
-        }
-        Legend::new(scale_name).side(LegendSide::Right).key(key)
+        Legend::new(scale_name)
+            .side(LegendSide::Right)
+            .key(pin_constants(
+                ctx,
+                key,
+                material,
+                channel,
+                legend_kind,
+                kind,
+            ))
     };
     if type_kind == Some(ScaleTypeKind::Binned) {
         legend = legend.binned();
@@ -865,25 +894,150 @@ pub fn material_legend(
     legend
 }
 
-/// The color a non-color legend key paints its glyph with: the layer's constant
-/// color for the aesthetic carrying the glyph's body, the other color aesthetic
-/// as a fallback (a stroke-only geom has no fill, and vice versa), else a neutral
-/// grey. A data-mapped color aesthetic has no single constant, so it falls through
-/// to the grey — that scale gets its own legend anyway.
-fn key_color(ctx: &Ctx, legend_kind: LegendKind) -> Color {
-    let order = match legend_kind {
-        LegendKind::Line => ["stroke", "fill"],
-        LegendKind::Point | LegendKind::Rect => ["fill", "stroke"],
-    };
-    for aesthetic in order {
-        // A data-mapped color has no constant to borrow — its column holds domain
-        // values, not colors — and it carries its own legend anyway.
-        if is_data_mapped(ctx, aesthetic) {
+/// Dress a legend key in everything the layer holds constant, so the swatch
+/// looks like the marks it describes: a translucent area's key is translucent, a
+/// map layer's key carries its border color, a dashed line's key is dashed.
+///
+/// A key paints only what it is told to paint — nothing is inherited from the
+/// plot — so every constant has to be pinned explicitly. The geom's own
+/// `MaterialSpec` table is the source: it already names each ggsql aesthetic's
+/// hephaestus channel *and* that geom's aliasing (`color` → `fill` for an area,
+/// → `stroke` for a line), so the key is styled exactly like the geom is.
+/// `LegendKeySpec::fixed` ignores channels the key kind doesn't consume, which
+/// is what lets one table serve point, line and rect keys.
+///
+/// Two channels are deliberately left alone: the one the legend is *scaled* on
+/// (pinning it would override the very thing being shown), and any channel a
+/// scale owns — a data-mapped aesthetic's column holds domain values, not visual
+/// ones, and it carries its own legend anyway.
+/// The channels a legend key must *not* inherit from the layer: the ones that
+/// decide how much room the glyph takes, rather than how it is painted.
+///
+/// A key's cell does not grow to fit its glyph. `render_point` sizes a marker
+/// from `theme.geom.point.size_pt` and outlines it at `stroke_width_pt` — both
+/// tuned for a legend — and only falls back to those when the key leaves the
+/// channel unset. Pin `size`/`linewidth` and the key instead uses a length
+/// chosen for a 3pt data marker; pin `shape` and it switches to scaling that
+/// shape's path by the same length. Either way the swatch stops fitting its
+/// cell: `SETTING size => 10` paints a disc across the whole legend.
+///
+/// A legend *scaled* on one of these is unaffected — it is the scaled channel,
+/// so it is never pinned, and hephaestus sizes those keys from the scale.
+const UNPINNABLE_CHANNELS: &[&str] = &["size", "linewidth", "shape"];
+
+/// The colour channel a *partial* opacity governs, if it governs only one.
+///
+/// A geom's `fill_opacity` and `stroke_opacity` fade one channel each, but a
+/// legend key has a single `alpha` that hephaestus applies to its fill *and* its
+/// stroke (`render_point`, `render_rect`). Pinning a partial opacity there would
+/// fade the wrong things — for `opacity => 0` on a point layer it fades the
+/// glyph out of existence, even though the marks stay visible as open circles.
+///
+/// So a partial opacity is translated instead of pinned: at zero, the channel it
+/// governs is *absent* from the mark, and a key can say that exactly by leaving
+/// that channel unset. `alpha` returns `None` because it really is a whole-mark
+/// opacity and maps onto the key's own `alpha` directly.
+fn partial_opacity_target(channel: &str) -> Option<&'static str> {
+    match channel {
+        "fill_opacity" => Some("fill"),
+        "stroke_opacity" => Some("stroke"),
+        _ => None,
+    }
+}
+
+/// Channels a legend key must leave unset because the layer faded them out
+/// entirely: the colour channel behind every partial opacity the layer resolves
+/// to zero, plus the opacity channel itself (there is nothing left for it to
+/// say). See [`partial_opacity_target`] for why this is a translation rather
+/// than a pin.
+fn suppressed_channels<'a>(ctx: &Ctx, material: &'a [MaterialSpec]) -> HashSet<&'a str> {
+    let mut suppressed = HashSet::new();
+    for m in material {
+        let Some(target) = partial_opacity_target(m.channel) else {
+            continue;
+        };
+        // A data-mapped opacity varies per row; there is no single value to act on.
+        if is_data_mapped(ctx, m.aesthetic) {
             continue;
         }
-        if let Some(HValue::Color(c)) = constant_material(ctx, aesthetic, RangeKind::Color) {
-            return c;
+        let value = constant_material(ctx, m.aesthetic, m.kind).or(match m.default {
+            MatDefault::Number(n) => Some(HValue::Number(n)),
+            _ => None,
+        });
+        if matches!(value, Some(HValue::Number(n)) if n == 0.0) {
+            suppressed.insert(target);
+            suppressed.insert(m.channel);
         }
     }
-    rgb8(64, 64, 64)
+    suppressed
+}
+
+fn pin_constants(
+    ctx: &Ctx,
+    mut key: LegendKeySpec,
+    material: &[MaterialSpec],
+    scaled_channel: &str,
+    legend_kind: LegendKind,
+    kind: RangeKind,
+) -> LegendKeySpec {
+    // Channels the layer fades all the way out, and so leaves off its marks:
+    // `SETTING opacity => 0` on a point geom draws open circles, and the key
+    // says so by having no fill rather than by being invisible. Resolved up
+    // front because the opacity that suppresses a channel may sit after it in
+    // the table.
+    let suppressed = suppressed_channels(ctx, material);
+
+    // `claimed` is "do not pin this channel again"; `pinned` is "this channel
+    // actually got a value". They differ for a channel a *scale* owns: nothing
+    // may pin over it, but it has no constant either.
+    let mut claimed: HashSet<&str> = HashSet::from([scaled_channel]);
+    let mut pinned: HashSet<&str> = HashSet::from([scaled_channel]);
+    for m in material {
+        if claimed.contains(m.channel)
+            || UNPINNABLE_CHANNELS.contains(&m.channel)
+            || suppressed.contains(m.channel)
+        {
+            continue;
+        }
+        // A channel another scale drives is spoken for, whichever aesthetic
+        // reached it first — claim it so a later alias can't pin over it.
+        if is_data_mapped(ctx, m.aesthetic) {
+            claimed.insert(m.channel);
+            continue;
+        }
+        let value = constant_material(ctx, m.aesthetic, m.kind).or(match m.default {
+            MatDefault::Color(c) => Some(HValue::Color(c)),
+            MatDefault::Number(n) => Some(HValue::Number(n)),
+            MatDefault::None => None,
+        });
+        if let Some(value) = value {
+            claimed.insert(m.channel);
+            pinned.insert(m.channel);
+            key = key.fixed(m.channel, value);
+        }
+    }
+    // Last resort: a key whose body color is neither scaled nor constant renders
+    // as an empty swatch next to its label. That happens when the geom leaves
+    // the body unmapped with no default, and — more often — when a *different*
+    // scale owns it: a `size` legend on a layer that also maps `fill` cannot
+    // borrow the fill column, since it holds domain values rather than colors.
+    // A neutral grey is the honest stand-in; that scale carries its own legend.
+    //
+    // A color-scaled legend never needs it: the scale itself paints the key. It
+    // must also not get it, because ggsql maps `color` onto *both* `fill` and
+    // `stroke`, and hephaestus only collapses those two legends into one swatch
+    // while their keys stay equivalent — a grey body on just the `stroke` one
+    // splits them, leaving a second key drawn over the first.
+    if kind != RangeKind::Color {
+        let body = match legend_kind {
+            LegendKind::Line => "stroke",
+            LegendKind::Point | LegendKind::Rect => "fill",
+        };
+        // Not when the layer suppressed it: an unfilled mark wants an unfilled
+        // key, and the grey would put back the fill that was just taken away.
+        if !pinned.contains(body) && !suppressed.contains(body) {
+            key = key.fixed(body, HValue::Color(rgb8(64, 64, 64)));
+        }
+    }
+    key
 }

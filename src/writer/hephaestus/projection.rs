@@ -95,7 +95,24 @@ fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelS
     // pie convention). `start` defaults to 0 (12 o'clock); `end` defaults to a
     // full turn past `start`, so setting only `start` rotates a full circle
     // rather than truncating it (matches the VL writer's `start + 360`).
-    let base = PolarProjection::full_circle();
+    // A categorical angle makes a radar rather than a pie: ggsql resolves that
+    // and records it as `properties["radar"]` (the Vega-Lite writer reads the
+    // same flag). `PolarProjection::radar` differs from `full_circle` in two
+    // ways — `Chord` edges, so a polyline bends at each category boundary
+    // instead of arcing between them, and `theta_break_fracs` at the band
+    // centres `(i + 0.5) / N`, which is exactly where `Scale::map` puts a
+    // discrete scale's categories, so spokes, grid polygons and data line up.
+    let categories = matches!(
+        proj.properties.get("radar"),
+        Some(ParameterValue::Boolean(true))
+    )
+    .then(|| spec.find_scale("pos2").and_then(|s| s.input_range.as_ref()))
+    .flatten()
+    .map(|range| range.len());
+    let base = match categories {
+        Some(n) => PolarProjection::radar(n),
+        None => PolarProjection::full_circle(),
+    };
     let num = |k| match proj.properties.get(k) {
         Some(ParameterValue::Number(n)) => Some(*n),
         _ => None,
@@ -125,9 +142,12 @@ fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelS
         ));
     }
     if has_real_axis(spec, "pos1") {
+        // The radial rail runs along the spoke at the *start* of the sweep.
+        // `theta_frac` is a 0–1 fraction of the sweep, not an angle — the sweep's
+        // own start is 0.0 whatever `theta_start` works out to be.
         plot.add_axis(Axis::rail(
             ps.pos1.as_str(),
-            AxisPlacement::PolarRadius { theta_frac: start },
+            AxisPlacement::PolarRadius { theta_frac: 0.0 },
         ));
     }
     plot

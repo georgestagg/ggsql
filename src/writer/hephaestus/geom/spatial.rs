@@ -10,15 +10,12 @@ use hephaestus::plot::{GeometryGeom, Plot as HPlot};
 
 use super::super::channels::column_to_geometry;
 use super::super::scales::RangeKind;
-use super::super::wiring::{
-    resolve_color, wire_material, Ctx, LegendKind, MatDefault, MaterialSpec,
-};
+use super::super::wiring::{wire_material, Ctx, LegendKind, MatDefault, MaterialSpec};
 use crate::naming;
 use crate::Result;
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let df = ctx.df;
-    let n = df.height();
 
     // The geometry aesthetic is always materialised to the internal WKB column.
     let geoms = column_to_geometry(df, &naming::aesthetic_column("geometry"))?;
@@ -32,34 +29,25 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     plot.set_binding("x", ctx.pos1_scale);
     plot.set_binding("y", ctx.pos2_scale);
 
-    // fill/stroke: data-mapped (choropleth) → shared scale + legend, else the
-    // mapped literal or the ggsql spatial defaults.
-    let all: Vec<usize> = (0..n).collect();
-    resolve_color(
-        ctx,
-        plot,
-        "fill",
-        "fill",
-        rgb8(0x74, 0x74, 0x74),
-        LegendKind::Rect,
-    )?
-    .apply(&mut b, "fill", &all);
-    resolve_color(
-        ctx,
-        plot,
-        "stroke",
-        "stroke",
-        rgb8(0, 0, 0),
-        LegendKind::Rect,
-    )?
-    .apply(&mut b, "stroke", &all);
-
-    // opacity/linewidth/linetype: routed through the shared material path so
-    // each is honored whether it's the ggsql literal default, a `SETTING`
-    // constant, or data-mapped (scale-bound + legended). Mirrors the generic
-    // geoms; ggsql's spatial defaults (opacity 0.8, linewidth 0.2, solid) arrive
-    // as literals and set the fallback.
+    // Every material aesthetic goes through the shared path, so each is honored
+    // whether it's the ggsql literal default, a `SETTING` constant, or
+    // data-mapped (scale-bound + legended) — a choropleth is just a data-mapped
+    // `fill`. ggsql's spatial defaults (grey fill, black border, opacity 0.8,
+    // linewidth 0.2, solid) arrive as literals; the `MatDefault`s match them so
+    // a legend key still carries the layer's look when nothing is mapped.
     let material = [
+        MaterialSpec::new(
+            "fill",
+            "fill",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(0x74, 0x74, 0x74)),
+        ),
+        MaterialSpec::new(
+            "stroke",
+            "stroke",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(0, 0, 0)),
+        ),
         MaterialSpec::new(
             "opacity",
             "fill_opacity",

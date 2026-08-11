@@ -20,6 +20,14 @@ fn is_free(aesthetic: &str, facet: Option<&crate::plot::Facet>) -> bool {
     facet.is_some_and(|f| f.is_free(aesthetic))
 }
 
+/// Whether a scale lays its input out as bands rather than as a continuum.
+fn is_categorical(scale: &crate::Scale) -> bool {
+    matches!(
+        scale.scale_type.as_ref().map(|st| st.scale_type_kind()),
+        Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal)
+    )
+}
+
 /// Build a Vega-Lite labelExpr from label mappings
 ///
 /// Generates a conditional expression that renames or suppresses labels:
@@ -473,7 +481,16 @@ fn build_scale_properties(
     // Skip for free facet scales - Vega-Lite should compute independent domains
     if !ctx.is_binned_legend && !skip_domain {
         if let Some(ref domain_values) = scale.input_range {
-            let domain_json: Vec<Value> = domain_values.iter().map(|elem| elem.to_json()).collect();
+            let mut domain_json: Vec<Value> =
+                domain_values.iter().map(|elem| elem.to_json()).collect();
+            // A categorical `y` runs bottom-up, as in ggplot2: the first level
+            // sits at the bottom of the panel. Vega-Lite lays a band domain out
+            // top-to-bottom, so the domain is handed over backwards to put it
+            // the right way up. `scale.reverse` still composes on top, flipping
+            // whatever the default now is.
+            if ctx.aesthetic == "pos2" && is_categorical(scale) {
+                domain_json.reverse();
+            }
             scale_obj.insert("domain".to_string(), json!(domain_json));
         }
     }

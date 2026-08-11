@@ -157,19 +157,26 @@ fn detect_from_scales(
     // is just customizing a scale (e.g., SCALE y SETTING expand) without intending
     // to change orientation. The geom's default_remappings will define orientation.
     //
-    // If the geom declares `pos1` as `Dummy` and the user hasn't mapped it,
-    // pos1 *is* the (synthetic) primary axis — leave the layer aligned so the
-    // stat fills it in. Auto-transposing in that case would push the dummy
-    // onto the secondary axis, which is never what the user means.
+    // When the geom declares `pos1` as `Dummy` (bar, boxplot) and the user
+    // mapped only `pos2`, the mapped scale's *type* says which axis they filled,
+    // because a dummy geom's two axes hold different things:
+    // - discrete `pos2` (`DRAW bar MAPPING species AS y`) is the category axis,
+    //   so the layer transposes and the stat synthesizes the dummy on `pos1`;
+    // - continuous `pos2` (`DRAW boxplot MAPPING bill_len AS y`) is the *value*
+    //   axis, which is where it already sits when aligned — transposing would
+    //   push the categories onto the axis holding the measurements.
+    // This is Rule 3's discrete-axis-is-primary logic, applied early because
+    // only one scale exists for Rule 3 to compare.
     if has_pos1_mapping || has_pos2_mapping {
-        let pos1_is_dummy = matches!(
-            Geom::from_type(*geom).aesthetics().get("pos1"),
-            Some(DefaultAestheticValue::Dummy)
-        );
-        if has_pos2 && !has_pos1 && (!pos1_is_dummy || has_pos1_mapping) {
-            return TRANSPOSED;
-        }
-        if has_pos1 && !has_pos2 {
+        if has_pos2 && !has_pos1 {
+            let pos1_is_dummy = matches!(
+                Geom::from_type(*geom).aesthetics().get("pos1"),
+                Some(DefaultAestheticValue::Dummy)
+            );
+            if !pos1_is_dummy || has_pos1_mapping || pos2_scale.is_some_and(is_discrete_scale) {
+                return TRANSPOSED;
+            }
+        } else if has_pos1 && !has_pos2 {
             return ALIGNED;
         }
     }

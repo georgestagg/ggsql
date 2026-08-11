@@ -52,7 +52,12 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
             ),
             MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
+            // A ribbon's two edge curves are stroked independently: `stroke`
+            // outlines curve A (the baseline / lower edge), `stroke2` curve B
+            // (the data curve). Wiring only the first leaves the band's visible
+            // silhouette unbordered, so every outline aesthetic is sent to both.
             MaterialSpec::new("stroke", "stroke", RangeKind::Color, MatDefault::None),
+            MaterialSpec::new("stroke", "stroke2", RangeKind::Color, MatDefault::None),
             MaterialSpec::new(
                 "opacity",
                 "alpha",
@@ -66,8 +71,20 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
                 MatDefault::None,
             ),
             MaterialSpec::new(
+                "linewidth",
+                "linewidth2",
+                RangeKind::Number,
+                MatDefault::None,
+            ),
+            MaterialSpec::new(
                 "linetype",
                 "linetype",
+                RangeKind::Linetype,
+                MatDefault::None,
+            ),
+            MaterialSpec::new(
+                "linetype",
+                "linetype2",
                 RangeKind::Linetype,
                 MatDefault::None,
             ),

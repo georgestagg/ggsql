@@ -585,8 +585,18 @@ pub fn minor_breaks_linear(major_breaks: &[f64], n: usize, range: Option<(f64, f
 
     let step = interval / (n + 1) as f64;
 
+    // Extrapolating past the outermost majors only makes sense when the majors
+    // share one rhythm — then the minors outside continue the pattern of the
+    // ones inside. With user-supplied uneven majors (`breaks => (37, 42, 55)`)
+    // there is no such rhythm: `step` comes from the *first* interval only, so
+    // extrapolated minors sit at a spacing matching no part of the axis and read
+    // as stray ticks beyond the last label. Those axes get interior minors only.
+    let evenly_spaced = major_breaks
+        .windows(2)
+        .all(|w| (w[1] - w[0] - interval).abs() <= interval.abs() * 1e-9);
+
     // If range extends before first major break, extrapolate backwards
-    if let Some((min, _)) = range {
+    if let (true, Some((min, _))) = (evenly_spaced, range) {
         let first_major = major_breaks[0];
         let mut pos = first_major - step;
         while pos >= min {
@@ -608,7 +618,7 @@ pub fn minor_breaks_linear(major_breaks: &[f64], n: usize, range: Option<(f64, f
     }
 
     // If range extends beyond last major break, extrapolate forwards
-    if let Some((_, max)) = range {
+    if let (true, Some((_, max))) = (evenly_spaced, range) {
         let last_major = *major_breaks.last().unwrap();
         let mut pos = last_major + step;
         while pos <= max {

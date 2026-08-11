@@ -54,12 +54,31 @@ pub fn aesthetic_column_name<'a>(layer: &'a Layer, aesthetic: &str) -> Option<&'
     }
 }
 
+/// The category a null stands in for when a scaled column reaches hephaestus.
+///
+/// ggsql trains a categorical domain over the nulls as well, so `NULL` is a
+/// level like any other and gets its own colour and legend key. hephaestus's
+/// `DataColumn` has no null-carrying variant, though, so a null row cannot be
+/// handed over as the `Value::Null` sitting in the domain — it would resolve to
+/// nothing and the mark would draw unfilled. Both sides therefore agree on this
+/// sentinel instead: [`scales::category_value`] puts it in the domain and in the
+/// break positions, and [`column_to_channel`] puts it in the data. The visible
+/// text is unaffected, because labels travel separately (`with_breaks_labeled`).
+///
+/// It carries the internal `__ggsql_` prefix so a real category cannot collide
+/// with it.
+pub const NULL_CATEGORY: &str = "__ggsql_null__";
+
 /// Extract a column as the channel type implied by its arrow dtype: text →
 /// category strings, everything else → `f64`.
+///
+/// This is the *scaled* path — the values here are looked up in a scale's
+/// domain — so a null becomes [`NULL_CATEGORY`] rather than the empty string
+/// [`column_to_strings`] uses for raw, unscaled text.
 pub fn column_to_channel(df: &DataFrame, name: &str) -> Result<ChannelData> {
     let array = df.column(name)?;
     if matches!(array.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
-        Ok(ChannelData::Strings(column_to_strings(df, name)?))
+        Ok(ChannelData::Strings(read_strings(df, name, NULL_CATEGORY)?))
     } else {
         Ok(ChannelData::Floats(column_to_f64(df, name)?))
     }
@@ -80,8 +99,16 @@ pub fn column_to_f64(df: &DataFrame, name: &str) -> Result<Vec<f64>> {
 }
 
 /// Read a column as strings, casting non-text columns to text. Nulls become
-/// empty strings.
+/// empty strings — this is the raw, unscaled path (text labels, shape and
+/// linetype names), where an empty string is the right "nothing here".
 pub fn column_to_strings(df: &DataFrame, name: &str) -> Result<Vec<String>> {
+    read_strings(df, name, "")
+}
+
+/// Read a column as strings, substituting `null_as` for null cells. Callers
+/// differ only in what a null should become: nothing at all, or the sentinel
+/// category a scale's domain knows about.
+fn read_strings(df: &DataFrame, name: &str, null_as: &str) -> Result<Vec<String>> {
     let array = df.column(name)?;
     let casted;
     let str_array: &StringArray = if matches!(array.data_type(), DataType::Utf8) {
@@ -93,7 +120,7 @@ pub fn column_to_strings(df: &DataFrame, name: &str) -> Result<Vec<String>> {
     Ok((0..str_array.len())
         .map(|i| {
             if str_array.is_null(i) {
-                String::new()
+                null_as.to_string()
             } else {
                 str_array.value(i).to_string()
             }

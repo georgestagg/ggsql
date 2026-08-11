@@ -1308,7 +1308,10 @@ here so it survives between efforts.
   hides colliding labels. The fix belongs in hephaestus's `Axis`: it needs the
   measured text metrics to decide a stride, which the writer doesn't have and
   shouldn't guess. Keeping the tick and blanking its label is the presentation to
-  aim for.
+  aim for. This is also what the "weird axis label alignment" on
+  `doc/syntax/scale/type/discrete.qmd:115` (`RENAMING * => 'Species: {}'`) turns
+  out to be — the labels and their positions are resolved correctly and agree
+  with VL; they are simply too long to sit side by side.
 
 ### Feature gaps
 
@@ -1352,15 +1355,19 @@ resolved per-panel domains and spatial position scales:
   path should do the same.
 - **`bar` on a numeric primary axis stays continuous** (no `pos1end`), so
   band-fraction bars get no width; VL hits the same wall (`bandwidth('x')` is 0).
+- **An identity `size` column has no agreed unit**, so the two writers cannot
+  agree on it. `SCALE IDENTITY size` bypasses scaling by design and both writers
+  receive the same raw numbers (`flipper_len`, 172–231); VL reads `size` as an
+  *area in px²* (≈15 px markers), hephaestus as a *pt diameter* (≈230–310 px, so
+  the panel becomes one undifferentiated field). Neither is wrong on its own
+  terms — VL converts pt→area only for *literals* (`encoding.rs:558`), never for
+  an identity column, so the conversion has nowhere to live but core. Settling it
+  means deciding what unit ggsql promises for an identity material column, then
+  having both writers honour it. `doc/syntax/scale/type/identity.qmd:15`.
 - **A data-mapped `linewidth` on a boxplot/violin is rejected by ggsql**: the stat
   drops the column, so `linewidth AS w` fails validation for *both* writers
   ("Column `linewidth` … does not exist"). Grouping aesthetics (fill/stroke)
   survive; scalar ones don't.
-- `Scale::break_labels()` misses `label_mapping` for numeric discrete/ordinal
-  domains: `categorical_break_labels` still labels a non-string category with
-  `format!("{}", to_json())` (`"5.0"`) while the mapping is keyed by
-  `to_key_string()` (`"5"`). The default (continuous/binned) impl no longer has
-  this fault — see the temporal-axes section.
 - **`TIME` columns are broken for both writers.** ggsql's Time convention is
   nanoseconds (`casting.rs` targets `Time64(Nanosecond)`, `schema.rs` reads via the
   strict `as_time64_ns`), but `needs_cast` treats any `Time64(_)` as already the
@@ -1380,10 +1387,55 @@ resolved per-panel domains and spatial position scales:
 
 ### Upstream hephaestus
 
-Pinned at rev `5e9a060`. One item left, and it is a fallback rather than a gap the
-writer can reach. The shape of everything that got resolved here: the writer's job
-is to pass resolved values through, so wherever hephaestus had to compute something
-itself, the fix was a missing *setter*, not a better algorithm.
+Pinned at rev `a353698`. The shape of everything that got resolved here: the
+writer's job is to pass resolved values through, so wherever hephaestus had to
+compute something itself, the fix was a missing *setter*, not a better algorithm.
+The items below are the ones no setter reaches.
+
+**A shape scale drops its marks entirely.** `plot/geom/point.rs:287` resolves the
+`shape` channel with `resolve_str_channel_or(shape_ch, None, i, …)` — passing
+`None` where every other channel passes its bound scale (`size` does so on the
+line above, from `ctx.scale_for("size")`). The raw *domain* value (`"Adelie"`)
+is therefore used as a shape name, misses the registry, and `point.rs:302-305`
+`continue`s past the mark. So the layer disappears rather than drawing wrong
+shapes. ggsql's side is correct end to end: the default palette's names match
+hephaestus's registry 1:1 (`plot/scale/palettes.rs:1928-1969` vs `shape.rs:664`),
+`RangeKind::Shape` is registered, and the channel is bound. A literal
+`SETTING shape => 'star'` still works, because that goes through `Raw`.
+Affects `doc/syntax/scale/aesthetic/shape.qmd` and the discrete-scale shape
+example. Fix is `ctx.scale_for("shape")`.
+
+**A `linewidth` of 0 drops a whole polyline.** `plot/geom/line.rs:547-555`
+resolves the mark's width from its *first row* and bails on
+`linewidth_px <= 0.0`, so `SCALE linewidth TO (0, 30)` renders nothing at all —
+even though every later vertex is wide, and even though ribbon mode is otherwise
+active and would interpolate per vertex. `TO (1, 30)` renders correctly, which is
+how to tell this apart from the channel not being wired. The guard wants to be
+per-vertex (or taken from the mark's maximum) once ribbon mode is on.
+Repro: `doc/syntax/layer/type/line.qmd:87-98`.
+
+**Legend keys are sized from the theme's geom defaults, not from their cell.**
+`chrome/legend/render_keys.rs` takes `size_pt`/`linewidth_pt` from the key when
+set and from `theme.geom.*` otherwise, and the cell never grows to fit. Three
+consequences: a *fixed* `size`/`linewidth`/`shape` cannot be shown on a key at
+all (the writer excludes them — `wiring::UNPINNABLE_CHANNELS`); a legend *scaled*
+on `linewidth` overflows its cell at the top of the range; and `render_line`
+(`render_keys.rs:219-262`) draws edge-to-edge with kurbo's default **round** caps,
+so every line key overhangs by `linewidth/2`. `ResolvedKey` has no `cap` field and
+`LegendKeySpec::fixed("cap", …)` is silently swallowed, so there is no writer-side
+escape; the cheapest upstream fix for the last one is
+`Stroke::new(w).with_caps(Cap::Butt)`, as `plot/plot.rs:802-804` already does.
+
+**Facet strips measure unwrapped but draw wrapped.** `StripMeasure::new`
+(`plot/chrome/strip.rs:118-146`) measures the label at `f32::INFINITY` and sizes
+the slot for one line; `draw_strip` renders through `draw_text_element_in_rect`,
+which wraps to the strip's interior width (`plot/plot.rs:2105-2106`) and then
+clips to the background shape. A label wider than the panel therefore wraps to N
+lines inside a one-line slot and lines 2..N are clipped — exactly what ggsql's
+binned facet strips produce, since those carry bin-range labels. There is no
+strip-thickness setter and no way to opt out of wrapping, so the writer can only
+work around it via the theme's `strip_text` size. Real fix: measure with the same
+`max_width` the draw pass uses.
 
 **No scale-level domain expansion / "nice" padding.** Not a gap in practice, and
 no longer one anywhere the writer can reach. ggsql owns expansion:

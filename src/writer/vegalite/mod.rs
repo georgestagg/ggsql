@@ -375,6 +375,12 @@ fn build_layer_encoding(
 
     // Add pos2 offset encoding for vertical jitter (pos2offset column)
     // This column is created by position::Jitter when pos2 axis is discrete
+    //
+    // The domain runs 0.5 → -0.5 rather than -0.5 → 0.5 because a ggsql offset
+    // is positive-up, matching the bottom-up categorical `y` the band domain is
+    // reversed for, while a Vega-Lite `yOffset` is positive-down. Flipping the
+    // domain negates the offset without touching the data, so a 2D dodge grid
+    // reads the same way round as the axis it sits on.
     let pos2offset_col = naming::aesthetic_column("pos2offset");
     if df.column(&pos2offset_col).is_ok() {
         encoding.insert(
@@ -383,7 +389,7 @@ fn build_layer_encoding(
                 "field": pos2offset_col,
                 "type": "quantitative",
                 "scale": {
-                    "domain": [-0.5, 0.5]
+                    "domain": [0.5, -0.5]
                 }
             }),
         );
@@ -1069,6 +1075,17 @@ impl VegaLiteWriter {
             "view": {
                 "stroke": null,
                 "fill": "#EBEBEB"
+            },
+            // A band fraction is a fraction of the full step, as in ggplot2 —
+            // so a bar at `width => 0.9` occupies 90% of its step and the gap
+            // between bars is the remaining 10%. Vega-Lite otherwise subtracts
+            // its own default `bandPaddingInner` from `bandwidth()` first,
+            // narrowing every banded mark a second time: bars, dodge and jitter
+            // spread, violin and boxplot widths, discrete tile extents. ggsql
+            // has no band-padding concept of its own, so pinning this to 0 is
+            // what makes the two writers agree on width.
+            "scale": {
+                "bandPaddingInner": 0
             },
             "axis": {
                 "domain": false,

@@ -73,7 +73,22 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
 /// Categorical bar: x/x2 share the category column; the band edges come from
 /// `width`/dodge as per-row band offsets. The value axis runs baseline→value.
 fn bar(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, Vec<f64>)>) {
-    let half = band_half_width(ctx.layer, 0.9);
+    // A synthetic band — the `__ggsql_stat_dummy` a bar with no category mapping
+    // sits on — has no neighbours to leave a gap for, so it takes the whole band
+    // rather than the layer's `width`. Under polar that band axis is the radius,
+    // where a 0.9 width would open a hole in the middle of a pie and leave a gap
+    // at its rim; on a Cartesian axis it is the single full-width bar ggplot2
+    // draws for an ungrouped count.
+    let band_axis = if ctx.transposed { "pos2" } else { "pos1" };
+    let dummy = ctx
+        .spec
+        .find_scale(band_axis)
+        .is_some_and(|scale| scale.is_dummy());
+    let half = if dummy {
+        0.5
+    } else {
+        band_half_width(ctx.layer, 0.9)
+    };
     if !ctx.transposed {
         let offsets = dodge_offsets(ctx.df, "pos1offset");
         let lo = offsets.iter().map(|o| o - half).collect();

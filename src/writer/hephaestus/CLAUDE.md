@@ -84,7 +84,7 @@ HephaestusWriter::write(&Plot, &HashMap<String, DataFrame>)
  │    ├─ for (layer, df) in slices:  geom::build_into_plot(&mut plot, &Ctx{..})
  │    │      geoms set channels, plot.set_binding(channel, scale), push legends
  │    ├─ projection::apply_projection(plot, spec, panel, &ps)   ← axes live here
- │    ├─ map: plot.aspect_ratio(h/w).aspect_mode(Range)
+ │    ├─ map: plot.aspect_ratio(1.0).aspect_mode(Range)   ← square units
  │    ├─ panel.strip_top / strip_right → plot.strip(AxisSide::…)
  │    └─ view.attach_plot(plot)
  │
@@ -235,7 +235,26 @@ registers nothing rather than fabricating a scale.
   overrides) match ggsql — and therefore the Vega-Lite writer — exactly.
   `apply_minor_breaks` does the same for `numeric_minor_breaks()`, where
   `Some(vec![])` ("resolved to none") must stay distinct from `None` ("not
-  resolved, fall back to hephaestus's automatic minors").
+  resolved, fall back to hephaestus's automatic minors"). A *suppressed* label
+  means different things on either side of the categorical divide, so the two
+  take different accessors: a categorical scale keeps the break and blanks it
+  (`break_labels`, since `RENAMING <level> => null` must not shift the axis),
+  a numeric one drops it whole (`visible_break_labels`, since a binned
+  `oob => 'squish'` terminal is not a real boundary).
+- **`reverse` is the writer's to apply**, like VL's `scale.reverse`: ggsql
+  resolves the property but never touches the domain. hephaestus has no reversal
+  concept either, so it is expressed as the domain read backwards — descending
+  for a continuum, reversed category list otherwise, which flips a position axis
+  and walks a material palette the other way.
+- **Linetypes go through core's `linetype_to_stroke_dash`**, not hephaestus's
+  builtins by name: ggsql resolves an ordinal linetype range to ggplot2-style hex
+  patterns, and core's parser is what VL uses, so routing through it is what keeps
+  the two writers drawing the same dashes.
+- **A null category travels as `channels::NULL_CATEGORY`.** ggsql trains a
+  categorical domain over nulls, but hephaestus's `DataColumn` has no
+  null-carrying variant, so domain and data agree on a sentinel string instead
+  (`scales::category_value` and `column_to_channel`). Labels are unaffected —
+  they travel separately through `with_breaks_labeled`.
 
 ## Faceting and panels
 
@@ -268,11 +287,22 @@ graticules are the chrome). `has_real_axis` suppresses an axis whose position
 scale is a synthetic `__ggsql_stat_dummy` (a pie's radius, a bar with no x),
 mirroring the VL writer's `AxisInfo::suppress`.
 
+A **categorical angle** makes a radar rather than a pie. ggsql resolves that and
+records `properties["radar"]`; the writer swaps `PolarProjection::full_circle`
+for `::radar(n)`, which brings `PolarEdgeStyle::Chord` (polylines bend at each
+category boundary instead of arcing between them) and `theta_break_fracs` at the
+band centres `(i + 0.5) / n` — exactly where `Scale::map` puts a discrete scale's
+categories, so spokes, grid polygons and data line up with no further wiring. The
+radial rail's `theta_frac` is a **0–1 fraction of the sweep**, not an angle.
+
 Map coordinates arrive **pre-projected from SQL**, so hephaestus reprojects
 nothing: a `CustomProjection` takes `computed["panel_boundary"]` as its clip
 surface and `graticule_lon`/`graticule_lat` as its grid, all decoded from WKT by
 `channels::wkt_to_*`. Custom's coordinate math equals Cartesian, which is exactly
-what pre-projected data wants.
+what pre-projected data wants. Because those coordinates are already in one
+linear unit on both axes, the panel's `aspect_ratio` is **1.0** — it is the
+data-space x-unit : y-unit ratio, not a panel width:height ratio, so feeding it
+the bbox's own proportions stretches every map by exactly that factor.
 
 ## Legends
 
@@ -288,11 +318,43 @@ whose scales are equivalent, which is what makes `color AS <var>` (mapped onto
 *both* `fill` and `stroke`, hence two scales) render as one swatch. Do not build
 a writer-side dedup map.
 
-One subtlety in `material_legend`: a legend key paints only what it is told to
-paint, so a non-color scaled channel (`size`, `shape`, `linetype`) needs a fixed
-body color or the swatch comes out empty. `key_color` supplies the layer's
-constant `fill`/`stroke`, skipping a *data-mapped* color aesthetic — its column
-holds domain values, not colors.
+A legend key paints only what it is told to paint — nothing is inherited from the
+plot — so `pin_constants` dresses each key in the layer's own constants, walking
+the same `MaterialSpec` table the geom wired itself from. That table already
+encodes the geom's aliasing (`color` → `fill` for an area, → `stroke` for a
+line), so the key ends up styled like the marks it describes. Three rules:
+
+- **Never pin the scaled channel**, or the key overrides the thing it exists to show.
+- **Never pin a channel a scale owns.** A data-mapped aesthetic's column holds
+  domain values, not visual ones, and it carries its own legend. When that
+  channel is the key's *body* colour, a non-colour legend falls back to a neutral
+  grey; a colour-scaled legend takes no fallback at all, because ggsql maps
+  `color` onto both `fill` and `stroke` and hephaestus only collapses those two
+  legends while their keys stay equivalent.
+- **Never pin `size`, `linewidth` or `shape`** (`UNPINNABLE_CHANNELS`). A key's
+  cell does not grow to fit its glyph, and those three are what hephaestus sizes
+  the glyph from; pinning a length chosen for a 3pt data marker paints a disc
+  across the whole legend. See PLAN.md §9.
+- **Translate a zero *partial* opacity, don't pin it.** A key has a single `alpha`
+  covering fill and stroke together, where a geom has `fill_opacity` and
+  `stroke_opacity` separately. `opacity => 0` on a point geom leaves open circles,
+  so the key must drop its **fill** — pinning the zero instead fades the whole
+  glyph away, which also deletes that layer from a key shared with another geom.
+  `suppressed_channels` handles this; plain `alpha` is a whole-mark value and pins
+  directly.
+
+One legend is recorded per **aesthetic**, not per channel. A geom may drive
+several channels from one aesthetic — a ribbon sends `stroke` to both edge curves
+— and they describe one scale, so they get one swatch. Recording a second does
+not merely duplicate it: the extra key is `scaled` on the mirror channel
+(`stroke2`), which no key kind consumes, so it resolves to nothing and hephaestus
+paints its "row isn't empty" placeholder in ink over the real key. Cross-*layer*
+dedup is still hephaestus's `collapse_legends`.
+
+`ggsql_theme()` is the one hook for chrome the writer overrides — currently just
+suppressing the colorbar frame hephaestus otherwise inherits from its default
+`RectElement`. Anything the two writers must agree on that is neither a scale nor
+a channel belongs there.
 
 ## Adding a geom
 

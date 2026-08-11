@@ -145,8 +145,34 @@ impl Scale {
     /// Labelled breaks: `(numeric_position, display_label)` pairs.
     ///
     /// Delegates to the scale type, then applies `label_mapping` overrides.
-    /// Suppressed labels (`None` in the mapping) become empty strings.
+    /// Suppressed labels (`None` in the mapping) become empty strings — the
+    /// break is kept, but goes unlabelled. Use [`Self::visible_break_labels`]
+    /// when a suppressed break should disappear entirely.
     pub fn break_labels(&self) -> Vec<(f64, String)> {
+        self.labelled_breaks()
+            .into_iter()
+            .map(|(pos, label)| (pos, label.unwrap_or_default()))
+            .collect()
+    }
+
+    /// Labelled breaks with suppressed ones **dropped**, not blanked.
+    ///
+    /// A binned scale under `oob => 'squish'` suppresses its two terminal
+    /// breaks: the outermost bins are open-ended, so the edge values they would
+    /// be labelled with are not real boundaries. Leaving the break in place with
+    /// an empty label still draws its tick and gridline, which reads as a
+    /// boundary that isn't there — so the whole break goes.
+    pub fn visible_break_labels(&self) -> Vec<(f64, String)> {
+        self.labelled_breaks()
+            .into_iter()
+            .filter_map(|(pos, label)| label.map(|l| (pos, l)))
+            .collect()
+    }
+
+    /// Breaks paired with their resolved label, where `None` means the label was
+    /// explicitly suppressed (as opposed to merely empty). The two public break
+    /// accessors differ only in what they do with that `None`.
+    fn labelled_breaks(&self) -> Vec<(f64, Option<String>)> {
         let raw = match &self.scale_type {
             Some(st) => st.break_labels(self),
             None => self
@@ -159,9 +185,9 @@ impl Scale {
         let mut out = Vec::with_capacity(raw.len());
         for (pos, label) in raw {
             match mappings.and_then(|m| m.get(&label)) {
-                Some(Some(renamed)) => out.push((pos, renamed.clone())),
-                Some(None) => out.push((pos, String::new())),
-                None => out.push((pos, label)),
+                Some(Some(renamed)) => out.push((pos, Some(renamed.clone()))),
+                Some(None) => out.push((pos, None)),
+                None => out.push((pos, Some(label))),
             }
         }
         out

@@ -22,9 +22,41 @@ use super::super::channels::{
 use super::super::scales::RangeKind;
 use super::super::wiring::{
     band_edges, constant_number, dodge_offsets, resolve_color, resolve_material, side_sign,
-    BandAxes, Ctx, LegendKind,
+    BandAxes, Ctx, LegendKind, MatDefault, MaterialSpec,
 };
 use crate::{GgsqlError, Result};
+
+/// The layer aesthetics this composite styles, with ggsql's violin defaults.
+/// Used both to resolve them and to dress the legend keys in the layer's look.
+fn material() -> [MaterialSpec; 5] {
+    [
+        MaterialSpec::new(
+            "fill",
+            "fill",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(255, 255, 255)),
+        ),
+        MaterialSpec::new(
+            "stroke",
+            "stroke",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(60, 60, 60)),
+        ),
+        MaterialSpec::new(
+            "linewidth",
+            "linewidth",
+            RangeKind::Number,
+            MatDefault::None,
+        ),
+        MaterialSpec::new(
+            "linetype",
+            "linetype",
+            RangeKind::Linetype,
+            MatDefault::None,
+        ),
+        MaterialSpec::new("opacity", "alpha", RangeKind::Number, MatDefault::None),
+    ]
+}
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
@@ -100,6 +132,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let band2: Vec<f64> = edges.iter().map(|&(_, far)| far).collect();
     let values: Vec<f64> = order.iter().map(|&i| p2[i]).collect();
 
+    // What this composite styles, in one table: the ggsql defaults a legend key
+    // should wear when nothing is mapped, and the aliasing each resolve below
+    // uses. A composite has no `GeomSpec`, so it declares the same table itself.
+    let material = material();
+
     // Resolve fill + stroke once (data-mapped → shared scale/legend, else
     // constant), mirroring the VL writer's shared-encoding model.
     let fill = resolve_color(
@@ -109,6 +146,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "fill",
         rgb8(255, 255, 255),
         LegendKind::Rect,
+        &material,
     )?;
     let stroke = resolve_color(
         ctx,
@@ -117,6 +155,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "stroke",
         rgb8(60, 60, 60),
         LegendKind::Rect,
+        &material,
     )?;
     // Outline width + dash pattern, applied to both ribbon edges.
     let linewidth = resolve_material(
@@ -126,6 +165,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "linewidth",
         RangeKind::Number,
         LegendKind::Line,
+        &material,
     )?;
     let linetype = resolve_material(
         ctx,
@@ -134,7 +174,22 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "linetype",
         RangeKind::Linetype,
         LegendKind::Line,
+        &material,
     )?;
+    // Which of the ribbon's two edges take an outline. Both, normally; only the
+    // far edge under a one-sided `side`, where the near edge is the centreline.
+    let outline_edges: &[&str] = if side.is_some() {
+        &["stroke2", "linewidth2", "linetype2"]
+    } else {
+        &[
+            "stroke",
+            "stroke2",
+            "linewidth",
+            "linewidth2",
+            "linetype",
+            "linetype2",
+        ]
+    };
     // The ribbon's two edges share each outline scale (the `2` suffix is the far
     // edge), so a data-mapped stroke/width/dash styles both sides alike.
     for (source, channel) in [
@@ -162,7 +217,12 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     b.set(frac_ch2, band2);
     b.set(value_ch, values);
     fill.apply(&mut b, "fill", &order);
-    stroke.apply(&mut b, "stroke", &order);
+    // Under a one-sided `side`, `band_edges` collapses curve A onto the band's
+    // centreline, so stroking it would draw a rule down the flat side of every
+    // half-violin. Only the curve that traces the density gets an outline.
+    if outline_edges.contains(&"stroke") {
+        stroke.apply(&mut b, "stroke", &order);
+    }
     stroke.apply(&mut b, "stroke2", &order);
     // `RibbonGeom` resolves its outline channels once per mark (from the mark's
     // first row), so a data-mapped width/dash varies per violin, not per vertex.
@@ -171,7 +231,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         (linetype.as_ref(), ["linetype", "linetype2"]),
     ] {
         if let Some(source) = source {
-            for channel in channels {
+            for channel in channels.iter().filter(|c| outline_edges.contains(c)) {
                 source.apply(&mut b, channel, &order);
             }
         }

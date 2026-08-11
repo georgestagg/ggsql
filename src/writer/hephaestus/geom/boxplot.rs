@@ -19,10 +19,48 @@ use super::super::channels::{
 use super::super::scales::RangeKind;
 use super::super::wiring::{
     band_edges, band_half_width, constant_number, constant_string, dodge_offsets, resolve_color,
-    resolve_material, side_sign, BandAxes, Ctx, LegendKind, MaterialSource,
+    resolve_material, side_sign, BandAxes, Ctx, LegendKind, MatDefault, MaterialSource,
+    MaterialSpec,
 };
 use super::hinge::{caps, hinge_points};
 use crate::{GgsqlError, Result};
+
+/// The layer aesthetics this composite styles, with ggsql's boxplot defaults.
+/// Used both to resolve them and to dress the legend keys in the layer's look.
+fn material() -> [MaterialSpec; 5] {
+    [
+        MaterialSpec::new(
+            "fill",
+            "fill",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(255, 255, 255)),
+        ),
+        MaterialSpec::new(
+            "stroke",
+            "stroke",
+            RangeKind::Color,
+            MatDefault::Color(rgb8(60, 60, 60)),
+        ),
+        MaterialSpec::new(
+            "linewidth",
+            "linewidth",
+            RangeKind::Number,
+            MatDefault::None,
+        ),
+        MaterialSpec::new(
+            "linetype",
+            "linetype",
+            RangeKind::Linetype,
+            MatDefault::None,
+        ),
+        MaterialSpec::new(
+            "opacity",
+            "fill_opacity",
+            RangeKind::Number,
+            MatDefault::None,
+        ),
+    ]
+}
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
@@ -62,6 +100,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         plot.set_binding(channel, scale);
     }
 
+    // What this composite styles, in one table: the ggsql defaults a legend key
+    // should wear when nothing is mapped, and the aliasing each resolve below
+    // uses. A composite has no `GeomSpec`, so it declares the same table itself.
+    let material = material();
+
     // Resolve fill + stroke once (data-mapped → shared scale/legend, else
     // constant), mirroring the VL writer's shared-encoding model: every
     // component draws with the same resolved fill/stroke.
@@ -72,6 +115,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "fill",
         rgb8(255, 255, 255),
         LegendKind::Rect,
+        &material,
     )?;
     let stroke = resolve_color(
         ctx,
@@ -80,6 +124,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "stroke",
         rgb8(60, 60, 60),
         LegendKind::Rect,
+        &material,
     )?;
     // Outline width + dash pattern, resolved the same way and applied to every
     // component — the Vega-Lite writer puts `strokeWidth`/`strokeDash` in the
@@ -91,6 +136,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "linewidth",
         RangeKind::Number,
         LegendKind::Line,
+        &material,
     )?;
     let linetype = resolve_material(
         ctx,
@@ -99,6 +145,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         "linetype",
         RangeKind::Linetype,
         LegendKind::Line,
+        &material,
     )?;
     // `opacity` retargets to the box's fill, mirroring the Vega-Lite writer
     // (`opacity` → `fillOpacity` for a fill-bearing geom); the stroke-only

@@ -1155,17 +1155,18 @@ pub(super) fn categorical_numeric_domain(scale: &super::Scale) -> Option<(f64, f
 }
 
 /// Labelled breaks for categorical scales: pairs position indices with category names.
+///
+/// The label doubles as the lookup key into `label_mapping`, so it must be the
+/// element's `to_key_string()` — the same form `RENAMING` writes its keys in.
+/// Formatting a number through `to_json()` instead yields `"6.0"` against a key
+/// of `"6"`, which silently drops every rename on a non-string domain.
 pub(super) fn categorical_break_labels(scale: &super::Scale) -> Vec<(f64, String)> {
     let Some(range) = scale.input_range.as_ref() else {
         return Vec::new();
     };
     let mut out = Vec::with_capacity(range.len());
     for (i, elem) in range.iter().enumerate() {
-        let label = match elem {
-            ArrayElement::String(s) => s.clone(),
-            other => format!("{}", other.to_json()),
-        };
-        out.push(((i + 1) as f64, label));
+        out.push(((i + 1) as f64, elem.to_key_string()));
     }
     out
 }

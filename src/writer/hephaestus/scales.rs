@@ -9,15 +9,15 @@
 use std::sync::Arc;
 
 use hephaestus::color::{rgba, Color};
-use hephaestus::plot::geom::linetype::{dashdot, dashed, dotted, solid};
+use hephaestus::plot::geom::linetype::{dash, gap, pattern, solid};
 use hephaestus::plot::scale::{self, Scale as HScale, TransformKind as HTransform};
 use hephaestus::scales::value::{
     Date as HDate, DateTime as HDateTime, LinetypeStep, Time as HTime, Value as HValue,
 };
 
-use super::channels::{column_to_f64, column_to_strings};
+use super::channels::{column_to_f64, column_to_strings, NULL_CATEGORY};
 use crate::naming;
-use crate::plot::scale::TransformKind as GTransform;
+use crate::plot::scale::{linetype_to_stroke_dash, TransformKind as GTransform};
 use crate::plot::{ArrayElement, OutputRange, ParameterValue, Scale as GScale, ScaleTypeKind};
 use crate::DataFrame;
 
@@ -49,15 +49,26 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
         .and_then(|s| s.transform.as_ref())
         .map(|t| t.transform_kind());
 
+    // `SETTING reverse => true` is a scale property ggsql resolves but does not
+    // apply — each writer flips its own scale (the Vega-Lite writer emits VL's
+    // `scale.reverse`). hephaestus has no reversal concept either, so it is
+    // expressed as the domain read backwards: a descending continuous domain
+    // normalises to a descending fraction, and a reversed category list both
+    // flips a position axis and walks a material scale's palette the other way
+    // — which is what VL's `reverse` does for each kind.
+    let reversed = is_reversed(scale);
+    let flip = |a: f64, b: f64| if reversed { (b, a) } else { (a, b) };
+
     let mut hs = match type_kind {
-        ScaleTypeKind::Discrete => scale::discrete(domain_values(scale)),
-        ScaleTypeKind::Ordinal => scale::ordinal(domain_values(scale)),
+        ScaleTypeKind::Discrete => scale::discrete(domain_values(scale, reversed)),
+        ScaleTypeKind::Ordinal => scale::ordinal(domain_values(scale, reversed)),
         ScaleTypeKind::Identity => scale::identity(),
         ScaleTypeKind::Binned => {
             let h_transform = transform.and_then(map_transform);
             let (min, max) = continuous_domain(scale);
             let breaks = scale.map(|x| x.numeric_breaks()).unwrap_or(vec![min, max]);
-            let mut c = scale::binned(min..=max, breaks);
+            let (start, end) = flip(min, max);
+            let mut c = scale::binned(start..=end, breaks);
             if let Some(t) = h_transform {
                 c = c.with_transform(t);
             }
@@ -65,14 +76,15 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
         }
         ScaleTypeKind::Continuous => {
             let (min, max) = continuous_domain(scale);
+            let (start, end) = flip(min, max);
             // A temporal channel becomes a calendar-aware scale, so the ticks
             // hephaestus generates for itself (and their labels) are dates
             // rather than epoch numbers. ggsql's own breaks still win where it
             // resolved them — see `apply_breaks`.
-            match temporal_scale(transform, min, max) {
+            match temporal_scale(transform, start, end) {
                 Some(t) => t,
                 None => {
-                    let mut c = scale::continuous(min..=max);
+                    let mut c = scale::continuous(start..=end);
                     if let Some(t) = transform.and_then(map_transform) {
                         c = c.with_transform(t);
                     }
@@ -342,12 +354,35 @@ fn continuous_domain(scale: Option<&GScale>) -> (f64, f64) {
     pad_degenerate(domain.0, domain.1)
 }
 
+/// Whether the scale carries `SETTING reverse => true`.
+fn is_reversed(scale: Option<&GScale>) -> bool {
+    matches!(
+        scale.and_then(|s| s.properties.get("reverse")),
+        Some(ParameterValue::Boolean(true))
+    )
+}
+
 /// Category domain for a discrete/ordinal scale, as hephaestus values.
-fn domain_values(scale: Option<&GScale>) -> Vec<HValue> {
-    scale
+fn domain_values(scale: Option<&GScale>, reversed: bool) -> Vec<HValue> {
+    let mut values: Vec<HValue> = scale
         .and_then(|s| s.input_range.as_ref())
-        .map(|range| range.iter().map(array_element_to_value).collect())
-        .unwrap_or_default()
+        .map(|range| range.iter().map(category_value).collect())
+        .unwrap_or_default();
+    if reversed {
+        values.reverse();
+    }
+    values
+}
+
+/// A categorical domain entry as a hephaestus value. Identical to
+/// [`array_element_to_value`] except that a null level becomes
+/// [`channels::NULL_CATEGORY`], the sentinel the data side substitutes for its
+/// own nulls — see that constant for why the two must agree.
+fn category_value(element: &ArrayElement) -> HValue {
+    match element {
+        ArrayElement::Null => HValue::String(Arc::from(NULL_CATEGORY)),
+        other => array_element_to_value(other),
+    }
 }
 
 /// Attach the resolved output range to a material scale.
@@ -365,14 +400,34 @@ fn apply_output_range(hs: HScale, kind: RangeKind, values: &[ArrayElement]) -> H
     }
 }
 
-/// Map a ggsql linetype name to a hephaestus dash pattern; unknown → solid.
+/// Map a ggsql linetype to a hephaestus dash pattern; unknown → solid.
+///
+/// ggsql accepts both names (`dashed`, `twodash`, …) and ggplot2-style hex
+/// patterns (`"1343"` = 1 on, 3 off, 4 on, 3 off), and resolves an *ordinal*
+/// linetype scale's range entirely to hex. Both forms go through core's
+/// [`linetype_to_stroke_dash`], the same parser the Vega-Lite writer uses, so
+/// the two writers draw a given linetype identically — matching a name against
+/// hephaestus's own builtins would silently render every hex pattern solid and
+/// alias `longdash`/`twodash` onto the wrong ones.
+///
+/// The resulting on/off lengths are points, which is what hephaestus's linetype
+/// steps take.
 pub fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
-    match name {
-        "dashed" | "longdash" => dashed(),
-        "dotted" => dotted(),
-        "dotdash" | "dashdot" | "twodash" => dashdot(),
-        _ => solid(),
+    let Some(lengths) = linetype_to_stroke_dash(name) else {
+        return solid();
+    };
+    // `pattern` requires strict dash/gap alternation, so an odd-length pattern
+    // would panic. The parser doesn't produce one; treat it as unknown anyway.
+    if lengths.is_empty() || lengths.len() % 2 != 0 {
+        return solid();
     }
+    pattern(lengths.iter().enumerate().map(|(i, len)| {
+        if i % 2 == 0 {
+            dash(*len as f64)
+        } else {
+            gap(*len as f64)
+        }
+    }))
 }
 
 /// Feed ggsql's resolved breaks + formatted labels into the hephaestus scale so
@@ -382,20 +437,39 @@ pub fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
 /// ggsql's to own, majors and minors alike, so nothing here invents either.
 fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) -> HScale {
     let hs = apply_minor_breaks(hs, scale, type_kind);
-    let labels = scale.break_labels();
+    let categorical = matches!(
+        type_kind,
+        Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal)
+    );
+    // A suppressed label means different things either side of this line. On a
+    // categorical scale it is `RENAMING <level> => null`, i.e. hide the text but
+    // keep the category — dropping it would misalign the axis. On a numeric one
+    // it is a binned `oob => 'squish'` terminal, where the edge is not a real
+    // boundary and its tick and gridline must go too, exactly as the Vega-Lite
+    // writer filters them out of the axis.
+    let labels = if categorical {
+        scale.break_labels()
+    } else {
+        scale.visible_break_labels()
+    };
     if labels.is_empty() {
         return hs;
     }
     match type_kind {
         Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal) => {
-            // Pair each category value with its (possibly renamed) label.
+            // Pair each label with the category at its resolved position, which
+            // for a categorical scale is the 1-based index into `input_range`.
+            // Keyed by position rather than zipped, so a break set that doesn't
+            // cover every category can't shift every label onto the wrong one.
             let Some(range) = scale.input_range.as_ref() else {
                 return hs;
             };
-            let pairs: Vec<(HValue, String)> = range
-                .iter()
-                .map(array_element_to_value)
-                .zip(labels.into_iter().map(|(_, l)| l))
+            let pairs: Vec<(HValue, String)> = labels
+                .into_iter()
+                .filter_map(|(pos, label)| {
+                    let index = (pos.round() as usize).checked_sub(1)?;
+                    range.get(index).map(|e| (category_value(e), label))
+                })
                 .collect();
             hs.with_breaks_labeled(pairs)
         }

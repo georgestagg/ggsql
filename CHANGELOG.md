@@ -33,8 +33,35 @@
   transformation. This has no Vega-Lite equivalent and is ignored by that writer;
   the hephaestus writer draws them.
 
+### Changed
+
+- Categorical `y` axes now run bottom-up, so the first level sits at the bottom
+  of the panel as it does in ggplot2. This affects every plot with a discrete or
+  ordinal `y` — horizontal bars, boxplots and violins by category, points and
+  2D jitter — and brings the Vega-Lite writer in line with the raster one, which
+  already read this way.
+- Banded marks now measure against the full step in the VegaLite writer. A band fraction
+  (a bar's `width`, a dodge displacement, a jitter spread, a violin or boxplot
+  half-width, a discrete tile's extent) is a fraction of the whole category step,
+  so `width => 0.9` leaves a 10% gap — ggplot2's convention. Vega-Lite previously
+  subtracted its own default band padding first, making every banded mark there
+  narrower than the same query rendered as a raster.
+
 ### Fixed
 
+- `DRAW bar MAPPING <category> AS y` produced a single bar against a synthetic
+  axis instead of horizontal bars. A layer whose geom synthesises its primary
+  position (bar, boxplot) now transposes when the user maps a *discrete* `y`, and
+  stays put when they map a continuous one — that being the value axis, where a
+  lone `DRAW boxplot MAPPING <value> AS y` already belongs.
+- `RENAMING` was ignored on a discrete or ordinal scale over a non-string domain
+  (`SCALE ORDINAL color RENAMING 6 => 'June'` on a numeric month), because the
+  break label was formatted as `6.0` while the rename was keyed on `6`.
+- Minor breaks are no longer extrapolated beyond the outermost major break when
+  the majors are unevenly spaced, as they are when set by hand
+  (`SETTING breaks => (37, 42, 55)`). Their spacing was taken from the first
+  interval alone, so they matched no part of the axis. Evenly spaced majors still
+  extend to the edge of the range.
 - `Scale::break_labels()` — what a writer reads to label an axis, colorbar or
   legend tick — labels a temporal break with its own date (`1973-04-23`) instead
   of the epoch number its position projects to (`1208`), and keys `RENAMING`
@@ -69,18 +96,18 @@
 - Added `radar` setting to polar coordinates for making radar plots (#418).
 - New `side` SETTING on the `boxplot` layer and the `jitter` position, mirroring
   the existing `violin` setting (#439).
-- New `hinge` SETTING on the `boxplot` layer, mirroring the existing `range` 
+- New `hinge` SETTING on the `boxplot` layer, mirroring the existing `range`
   setting (#438)
-- New `DRAW spatial` layer for rendering simple features (WKT/WKB) for drawing 
+- New `DRAW spatial` layer for rendering simple features (WKT/WKB) for drawing
   maps and choropleths (#370).
 - New builtin dataset `ggsql:world` for showcasing spatial examples. Data is
-  a subset of columns from the [Natural Earth](https://www.naturalearthdata.com/) 
+  a subset of columns from the [Natural Earth](https://www.naturalearthdata.com/)
   country data at 1:110m resolution (#370).
-- New `PROJECT TO <map>` family of spatial map projections. For general 
-  projections, one can use `PROJECT TO crs SETTING target => '+proj=...'`. 
-  Several named projections have explicit support using e.g. 
-  `PROJECT TO mollweide`. Works for a subset of layers, notably `spatial`, 
-  `point`, `text`, `path`, `polygon` and `tile`. Requires a spatial backend 
+- New `PROJECT TO <map>` family of spatial map projections. For general
+  projections, one can use `PROJECT TO crs SETTING target => '+proj=...'`.
+  Several named projections have explicit support using e.g.
+  `PROJECT TO mollweide`. Works for a subset of layers, notably `spatial`,
+  `point`, `text`, `path`, `polygon` and `tile`. Requires a spatial backend
   like PostGIS, SpatiaLite, or DuckDB spatial extension (#455).
 
 ### Fixed
@@ -91,7 +118,7 @@
 - Dodging of horizontal violin plots were broken due to a bad orientation
   assumption in the VegaLite writer. We now correctly use the orientation to
   dodge in the correct dimension (#439).
-- Fixed misbehaviour of numeric scale's `RENAMING` clause due to pre-formatting 
+- Fixed misbehaviour of numeric scale's `RENAMING` clause due to pre-formatting
   issues (#461)
 
 ### Changed
