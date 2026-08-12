@@ -28,21 +28,21 @@ LABEL
 
 ##### Scatter plot
 
-![](./gallery/examples/thumbnails/pie-chart.svg)
-
-##### Pie chart
-
 ![](./gallery/examples/thumbnails/minard.svg)
 
 ##### Napoleon’s march to Moscow
+
+![](./gallery/examples/thumbnails/pie-chart.svg)
+
+##### Pie chart
 
 ![](./gallery/examples/thumbnails/line-chart.svg)
 
 ##### Line chart
 
-![](./gallery/examples/thumbnails/bar-chart.svg)
+![](./gallery/examples/thumbnails/boxplot.svg)
 
-##### Bar chart
+##### Box plots
 
 ![](./gallery/examples/thumbnails/violin-plot.svg)
 

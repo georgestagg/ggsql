@@ -8,17 +8,17 @@ Browse examples of ggsql visualizations. Click any example to see the full code 
 
 Basic scatter plot mapping two numeric variables to position
 
-![](../gallery/examples/thumbnails/pie-chart.svg)
-
-##### Pie chart
-
-Visualisation of proportions
-
 ![](../gallery/examples/thumbnails/minard.svg)
 
 ##### Napoleon’s march to Moscow
 
 Re-creating the famous visualisation from Minard.
+
+![](../gallery/examples/thumbnails/pie-chart.svg)
+
+##### Pie chart
+
+Visualisation of proportions
 
 ![](../gallery/examples/thumbnails/line-chart.svg)
 
@@ -26,11 +26,11 @@ Re-creating the famous visualisation from Minard.
 
 Time series visualization with proper date scaling
 
-![](../gallery/examples/thumbnails/bar-chart.svg)
+![](../gallery/examples/thumbnails/boxplot.svg)
 
-##### Bar chart
+##### Box plots
 
-Categorical comparisons using bars
+Showing groups of distributions of single numeric variables
 
 ![](../gallery/examples/thumbnails/violin-plot.svg)
 
@@ -44,17 +44,17 @@ Showing groups of distributions of single numeric variables
 
 Arranging tiles on a grid
 
-![](../gallery/examples/thumbnails/boxplot.svg)
-
-##### Box plots
-
-Showing groups of distributions of single numeric variables
-
 ![](../gallery/examples/thumbnails/density-plot.svg)
 
 ##### Density plots
 
 Showing smooth distributions of single numeric variables
+
+![](../gallery/examples/thumbnails/bar-chart.svg)
+
+##### Bar chart
+
+Categorical comparisons using bars
 
 ![](../gallery/examples/thumbnails/histogram.svg)
 

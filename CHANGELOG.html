@@ -48,9 +48,9 @@ ul.task-list li input[type="checkbox"] {
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-1aee2e77d648057b2d154952fa64afcf.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-622722d5aace4ec1a125de7682190ffa.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-1aee2e77d648057b2d154952fa64afcf.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0eb099264140c91dd9517778053a8802.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-769b07ee8b35def4ca00bdda92b28d1f.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-0eb099264140c91dd9517778053a8802.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script src="site_libs/quarto-contrib/iconify-3.0.0/iconify-icon.min.js"></script>
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
@@ -305,6 +305,7 @@ gradient teal.
 <li>The VS Code / Positron extension now ships a language icon that renders in the session picker, editor tabs and the Explorer. It previously pointed at a file that did not exist, which left the icon blank.</li>
 <li>In plain VS Code, the extension no longer offers run buttons, keybindings or Command Palette entries for commands that need the Positron runtime and so had no handler there.</li>
 <li>Plots in Positron notebooks no longer come out blank when the cell output is rendered before Positron has laid the slot out, which happened on the first execution after a kernel started and when reopening a saved notebook. The plot sizes itself from its container, so a zero-width first measurement drew it at zero size with nothing left to correct it. It now recovers once the container has a real width.</li>
+<li>ggsql interpreter sessions in Positron now come back after an extension host restart as well as after a window reload. A session the user renamed also keeps its name across the restore, and ggsql runtimes are rediscovered on every window open rather than risking a stale cache hit.</li>
 </ul>
 </section>
 </section>
