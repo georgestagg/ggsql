@@ -1286,6 +1286,39 @@ Verified: 191 cells over `doc/syntax/` in ~164 s, 0 problems, eyeballed against
 the Vega-Lite renders; the seven repros above re-rendered individually; 91 writer
 tests pass; fmt and clippy clean.
 
+## Area baselines — status: implemented
+
+An `area` or `density` outlined its baseline as heavily as its curve, so every
+one of them sat on a rule along `y = 0` — clearly wrong with `stroke => 'red'`,
+and a visible black hem on the default stack. The ribbon-edge wiring sends each
+outline aesthetic to *both* curves, which is right for `ribbon` (both edges are
+data) and wrong here, where curve A is usually the axis.
+
+Not right by geom, though, which is what §9 originally proposed: a **centred**
+stack's bottom band rides on `-total/2`, and that baseline is the figure's lower
+silhouette — dropping its outline would leave a streamgraph unbordered along the
+bottom. The rule is therefore about the data, per mark: **a baseline that holds
+one value is the axis; one that wanders is silhouette.** `area::baseline_outline`
+groups the resolved baseline column by the same `partition_by` keys
+`build_and_add` marks with, and emits a per-row `stroke_opacity` for curve A —
+1.0 where the baseline wanders, 0.0 where it doesn't. Opacity is the gate because
+hephaestus strokes curve A whenever its channel is *bound*, and a binding belongs
+to the whole geom; `stroke_opacity` is per-mark (resolved at the mark's first
+row), unmapped by ggsql, and free for the writer.
+
+What that yields, each eyeballed: a plain area and a `density` outline only their
+curve; a normal or `total`-normalised stack loses the hem at zero but keeps every
+band boundary; a centred stack is unchanged from the fully-outlined render it
+already had; `ribbon` is untouched. A transposed area is the same rule on
+`pos1end`. Interior boundaries in a stack are still drawn twice — once as the
+lower band's curve, once as the upper band's baseline — which is invisible while
+the stroke is one colour, and takes the upper band's colour when `stroke` is
+data-mapped.
+
+Verified: five `silhouette_opacity` unit tests (no GPU) cover flat, wandering,
+normal-stack, centred-stack and null baselines; 96 writer tests pass; the seven
+renders above; fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1331,11 +1364,6 @@ here so it survives between efforts.
 - **Legends are captured from the first panel only**, assuming every panel yields
   identical legends. True under fixed scales; unverified for a free-scale facet
   that also maps a material aesthetic.
-- **`area` and `density` stroke their baseline as well as their curve.** The
-  ribbon-edge wiring sends every outline aesthetic to *both* curves, which is
-  right for `ribbon` (both its edges are data) and wrong for the other two, where
-  curve A is the axis rather than part of the shape. Gate the curve-A copies on
-  the geom, the way `violin.rs` gates them on `side`.
 - **A row whose scaled *numeric* value is null is drawn unpainted rather than
   dropped.** `column_to_f64` maps a null to `NaN`, the geom draws the mark anyway,
   and the channel resolves to nothing — so `doc/syntax/layer/position/jitter.qmd:67`

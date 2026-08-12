@@ -129,7 +129,7 @@ for the minimal case):
 | `material: Vec<MaterialSpec>` | ggsql aesthetic → hephaestus channel, a `RangeKind`, and a `MatDefault` fallback matching ggsql's own geom default. Several aesthetics may target one channel (`fill`/`color`/`colour` → `fill`); the first that resolves wins. |
 | `raw_strings` | Unscaled string channels from a mapped aesthetic (text labels). |
 | `raw_numbers` | Constant panel-space values that bypass scales (a rule's 0..1 span), materialised one per row. |
-| `data_channels` | Per-row values the geom computes itself (bar/tile band edges). Channels listed here are *claimed*: `wire_positions` won't overwrite them with the raw offsets, because the geom already folded those in. |
+| `data_channels` | Per-row values the geom computes itself (bar/tile band edges, an area's per-mark baseline-outline gate). Channels listed here are *claimed*: `wire_positions` won't overwrite them with the raw offsets, because the geom already folded those in. |
 | `legend_key: LegendKind` | Point / Line / Rect / Text swatch, so a line legend shows a line and a text legend shows a glyph. |
 | `grouped: bool` | Derive hephaestus `keys` from `layer.partition_by`, for multi-vertex marks (line, area, polygon). |
 
