@@ -311,6 +311,11 @@ linear unit on both axes, the panel's `aspect_ratio` is **1.0** — it is the
 data-space x-unit : y-unit ratio, not a panel width:height ratio, so feeding it
 the bbox's own proportions stretches every map by exactly that factor.
 
+The bbox becomes the `pos1`/`pos2` domains through `map_range`, which pads a real
+span by `MAP_PADDING` (10%, split around its centre) so the framing matches the
+Vega-Lite writer's projection fit (`span * 1.1`) and a shape on the boundary is
+not drawn against the panel edge.
+
 ## Legends
 
 Legends live on the **composition**, never on a per-panel plot, so a faceted plot

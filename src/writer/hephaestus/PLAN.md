@@ -1319,6 +1319,32 @@ Verified: five `silhouette_opacity` unit tests (no GPU) cover flat, wandering,
 normal-stack, centred-stack and null baselines; 96 writer tests pass; the seven
 renders above; fmt and clippy clean.
 
+## Map framing — status: implemented
+
+A map filled its panel edge to edge while the Vega-Lite render of the same query
+kept a margin around the same data: VL fits its projection to `span * 1.1`
+centred on the bbox (`vegalite/projection/map.rs`), and `map_bbox` handed the
+raw bbox straight to `scale::continuous`. So the two writers framed the same
+extent differently, and a shape on the boundary — Antarctica on a world map,
+the disc of an orthographic globe — was drawn hard against the frame.
+
+`nice_range` is now `map_range`, padding a real span by `MAP_PADDING` (0.1)
+split evenly around its centre, which is VL's framing expressed as a domain
+rather than as a projection scale factor. The degenerate branch is unchanged: a
+zero-width extent has no span to take a fraction of, so it is still widened by
+±0.5 to stay mappable. Padding both axes matches VL on the constraining one and
+leaves the other showing more than its own 10%, which is what `min(width/dx,
+height/dy)` does there and what `aspect_mode(Range)` does here.
+
+Only the writer half of §9's item. Whether framing should key off the
+projection's own extent rather than the data's stays a core question in
+`resolve_final_bbox`, with `doc/syntax/coord/crs.qmd` documenting data-framing
+as intended.
+
+Verified: two `map_range` unit tests (no GPU) pin the padded and degenerate
+ranges; 98 writer tests pass; an orthographic globe eyeballed with room on every
+side; fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1372,14 +1398,13 @@ here so it survives between efforts.
   already correct: a **categorical** null is a trained level with its own colour
   and legend key (see `channels::NULL_CATEGORY`), a **continuous or binned** null
   is missing data and the row should not be drawn at all.
-- **A map frames tighter than Vega-Lite does.** Both writers frame to the data
-  bbox and now agree on proportions, but VL pads the fitted extent by 10%
-  (`vegalite/projection/map.rs:135-147`, `dx = (xmax - xmin) * 1.1`) while
-  `map_bbox`/`nice_range` pad not at all — `nice_range` only widens a degenerate
-  span. Matching that 10% is the writer half. Whether framing should key off the
-  projection's own extent instead of the data's is a separate core question in
-  `resolve_final_bbox`, and `doc/syntax/coord/crs.qmd:204-213` currently documents
-  data-framing as intended.
+- **A map frames to the data, not to the projection's own extent.** Both writers
+  now frame the data bbox identically, padding it by 10% (`map_range`, matching
+  VL's `dx = (xmax - xmin) * 1.1`). What remains is a core question in
+  `resolve_final_bbox` — whether an `orthographic` globe should frame to the
+  whole disc rather than to whichever countries the query selected — and it would
+  move both writers together. `doc/syntax/coord/crs.qmd:204-213` currently
+  documents data-framing as intended.
 - **A log scale whose expanded lower bound crosses zero renders blank.** Not a
   writer fault and not "log scales get no expansion" — expansion works whenever it
   stays positive (`body_mass VIA log` resolves `[2520, 6480]`, a real 5% pad). The

@@ -59,6 +59,11 @@ const DEFAULT_DPI: f64 = 300.0;
 /// exhausting GPU memory.
 const MAX_DIMENSION: f64 = 32_768.0;
 
+/// Fraction of a map's bounding-box span added as breathing room around it, so
+/// marks on the boundary are not drawn against the panel edge. Matches the
+/// Vega-Lite writer's projection fit (`span * 1.1`).
+const MAP_PADDING: f64 = 0.1;
+
 /// Option keys [`HephaestusWriter::from_options`] understands.
 const OPTIONS: &[&str] = &["width", "height", "units", "dpi", "background"];
 
@@ -229,14 +234,8 @@ impl Writer for HephaestusWriter {
         // the "writer never invents extents" principle.
         let map_bbox = map_bbox(spec, data)?;
         if let Some((xmin, ymin, xmax, ymax)) = map_bbox {
-            view.insert_scale(
-                "pos1".to_string(),
-                scale::continuous(nice_range(xmin, xmax)),
-            );
-            view.insert_scale(
-                "pos2".to_string(),
-                scale::continuous(nice_range(ymin, ymax)),
-            );
+            view.insert_scale("pos1".to_string(), scale::continuous(map_range(xmin, xmax)));
+            view.insert_scale("pos2".to_string(), scale::continuous(map_range(ymin, ymax)));
         }
 
         // Legends are collected from the first panel only and registered once on
@@ -430,11 +429,17 @@ fn map_bbox(
     )
 }
 
-/// A non-degenerate inclusive range for a continuous position scale, widening a
-/// zero-width or inverted extent so the scale can map it.
-fn nice_range(min: f64, max: f64) -> std::ops::RangeInclusive<f64> {
-    if max - min > f64::EPSILON {
-        min..=max
+/// A non-degenerate inclusive range for a map's continuous position scale.
+///
+/// The extent is padded by [`MAP_PADDING`] around its centre, matching the
+/// Vega-Lite writer, which fits the projection to `span * 1.1` centred on the
+/// bbox (`vegalite/projection/map.rs`). A zero-width or inverted extent is
+/// widened instead, so the scale can still map it.
+fn map_range(min: f64, max: f64) -> std::ops::RangeInclusive<f64> {
+    let span = max - min;
+    if span > f64::EPSILON {
+        let pad = span * MAP_PADDING / 2.0;
+        (min - pad)..=(max + pad)
     } else {
         (min - 0.5)..=(max + 0.5)
     }
@@ -1475,6 +1480,24 @@ mod tests {
              VISUALISE x AS x, y AS y DRAW point FACET g \
              LABEL title => 'One title for all panels'",
         ));
+    }
+
+    #[test]
+    fn map_range_pads_like_vegalite() {
+        // 10% of the span, split evenly around the centre — the same framing
+        // Vega-Lite's projection fit produces from `span * 1.1`.
+        let r = map_range(0.0, 10.0);
+        assert_eq!(*r.start(), -0.5);
+        assert_eq!(*r.end(), 10.5);
+        assert_eq!((r.end() - r.start()) / 10.0, 1.1);
+    }
+
+    #[test]
+    fn map_range_widens_a_degenerate_extent() {
+        // A single point has no span to pad, so it is widened to a mappable one.
+        let r = map_range(3.0, 3.0);
+        assert_eq!(*r.start(), 2.5);
+        assert_eq!(*r.end(), 3.5);
     }
 
     #[test]
