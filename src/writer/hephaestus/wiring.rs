@@ -13,10 +13,10 @@ use hephaestus::scales::chrome::LegendSide;
 use hephaestus::scales::value::Value as HValue;
 
 use super::channels::{
-    aesthetic_column_name, build_group_keys, column_to_channel, column_to_colors, column_to_f64,
-    column_to_strings, ChannelData,
+    aesthetic_column_name, build_group_keys, column_to_bool, column_to_channel, column_to_colors,
+    column_to_f64, column_to_strings, ChannelData,
 };
-use super::scales::{map_linetype, parse_color, RangeKind};
+use super::scales::{map_linetype, parse_color, parse_font_weight, RangeKind};
 use crate::plot::{ParameterValue, ScaleTypeKind};
 use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Plot, Result};
 
@@ -371,8 +371,26 @@ pub fn wire_material<G: BuildableGeom>(
                 RangeKind::Color => {
                     builder.set(m.channel, Raw(column_to_colors(ctx.df, col)?));
                 }
-                RangeKind::Shape => {
+                RangeKind::Shape | RangeKind::Text => {
                     builder.set(m.channel, Raw(column_to_strings(ctx.df, col)?));
+                }
+                RangeKind::Bool => {
+                    builder.set(m.channel, Raw(column_to_bool(ctx.df, col)?));
+                }
+                // A weight column may hold keywords or numbers; both parse.
+                RangeKind::FontWeight => {
+                    let weights: Vec<f64> = column_to_strings(ctx.df, col)?
+                        .iter()
+                        .map(|s| parse_font_weight(s))
+                        .collect();
+                    builder.set(m.channel, Raw(weights));
+                }
+                RangeKind::Angle => {
+                    let radians: Vec<f64> = column_to_f64(ctx.df, col)?
+                        .into_iter()
+                        .map(f64::to_radians)
+                        .collect();
+                    builder.set(m.channel, Raw(radians));
                 }
                 _ => {
                     builder.set(m.channel, Raw(column_to_f64(ctx.df, col)?));
@@ -432,6 +450,29 @@ fn set_literal_channel<G: BuildableGeom>(
         },
         (RangeKind::Shape, ParameterValue::String(s)) => {
             builder.set(channel, Raw(s.clone()));
+            true
+        }
+        // An empty string is not "use the default": it is a lookup (a font family,
+        // say) that misses. Leave the channel unset so hephaestus's default holds.
+        (RangeKind::Text, ParameterValue::String(s)) if !s.is_empty() => {
+            builder.set(channel, Raw(s.clone()));
+            true
+        }
+        (RangeKind::Bool, ParameterValue::Boolean(b)) => {
+            builder.set(channel, Raw(*b));
+            true
+        }
+        // ggsql's `fontweight` takes a keyword or a number; hephaestus takes 100–900.
+        (RangeKind::FontWeight, ParameterValue::String(s)) => {
+            builder.set(channel, Raw(parse_font_weight(s)));
+            true
+        }
+        (RangeKind::FontWeight, ParameterValue::Number(n)) if n.is_finite() => {
+            builder.set(channel, Raw(*n));
+            true
+        }
+        (RangeKind::Angle, ParameterValue::Number(n)) if n.is_finite() => {
+            builder.set(channel, Raw(n.to_radians()));
             true
         }
         (RangeKind::Linetype, ParameterValue::String(s)) => {
@@ -821,15 +862,50 @@ fn constant_material(ctx: &Ctx, aesthetic: &str, kind: RangeKind) -> Option<HVal
                 })?;
             Some(HValue::Linetype(map_linetype(&name)))
         }
-        RangeKind::Shape => {
+        RangeKind::Shape | RangeKind::Text => {
             let name = col
                 .and_then(|c| column_to_strings(ctx.df, c).ok())
                 .and_then(|v| v.first().cloned())
                 .or_else(|| match literal {
                     Some(ParameterValue::String(s)) => Some(s.clone()),
                     _ => None,
-                })?;
+                })
+                .filter(|s| !s.is_empty())?;
             Some(HValue::String(name.into()))
+        }
+        RangeKind::Bool => {
+            if let Some(b) = col
+                .and_then(|c| column_to_bool(ctx.df, c).ok())
+                .and_then(|v| v.first().copied())
+            {
+                return Some(HValue::Bool(b));
+            }
+            match literal {
+                Some(ParameterValue::Boolean(b)) => Some(HValue::Bool(*b)),
+                _ => None,
+            }
+        }
+        RangeKind::FontWeight => {
+            let weight = col
+                .and_then(|c| column_to_strings(ctx.df, c).ok())
+                .and_then(|v| v.first().cloned())
+                .or_else(|| match literal {
+                    Some(ParameterValue::String(s)) => Some(s.clone()),
+                    Some(ParameterValue::Number(n)) => Some(n.to_string()),
+                    _ => None,
+                })?;
+            Some(HValue::Number(parse_font_weight(&weight)))
+        }
+        RangeKind::Angle => {
+            let degrees = col
+                .and_then(|c| column_to_f64(ctx.df, c).ok())
+                .and_then(|v| v.first().copied())
+                .or(match literal {
+                    Some(ParameterValue::Number(n)) => Some(*n),
+                    _ => None,
+                })
+                .filter(|d| d.is_finite())?;
+            Some(HValue::Number(degrees.to_radians()))
         }
     }
 }

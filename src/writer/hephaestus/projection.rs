@@ -62,11 +62,11 @@ fn has_real_axis(spec: &Plot, name: &str) -> bool {
     spec.find_scale(name).is_some_and(|s| !s.is_dummy())
 }
 
-/// Add one bottom/left rail bound to `scale_name`, titled from the plot's labels
-/// (or the first layer's mapped column, keyed by `aesthetic`). Skipped for absent
-/// or dummy scales. `aesthetic` is the ggsql position name (`pos1`/`pos2`);
-/// `scale_name` is the registered scale the rail reads (they differ only for a
-/// free per-panel scale).
+/// Add one bottom/left rail bound to `scale_name`. Skipped for absent or dummy
+/// scales. `aesthetic` is the ggsql position name (`pos1`/`pos2`); `scale_name`
+/// is the registered scale the rail reads (they differ only for a free per-panel
+/// scale). The rail carries no title — that belongs to the composition, see
+/// [`composition_axis_titles`].
 fn add_cartesian_axis(
     plot: &mut HPlot,
     spec: &Plot,
@@ -77,13 +77,33 @@ fn add_cartesian_axis(
     if !has_real_axis(spec, aesthetic) {
         return;
     }
-    let mut rail = Axis::rail(scale_name, AxisPlacement::Cartesian(side));
-    if let Some(layer) = spec.layers.first() {
-        if let Some(title) = aesthetic_label(spec, layer, aesthetic) {
-            rail = rail.title(title);
-        }
+    plot.add_axis(Axis::rail(scale_name, AxisPlacement::Cartesian(side)));
+}
+
+/// The figure's axis titles, as `(side, text)` pairs for the **composition**.
+///
+/// Axis titles live in the outer chrome — one centred title per dimension for
+/// the whole figure — rather than on each panel's rail: a faceted plot would
+/// otherwise title every row and column, and a free dimension (whose axis is
+/// drawn on every panel) would repeat the title inside the grid. That also
+/// matches the plot-level labels, which sit on the composition for the same
+/// reason. Only Cartesian coords carry them: polar rails are untitled and a map
+/// has no rails at all.
+pub fn composition_axis_titles(spec: &Plot) -> Vec<(AxisSide, String)> {
+    match spec.project.as_ref().map(|p| p.coord.coord_kind()) {
+        None | Some(CoordKind::Cartesian) => {}
+        _ => return Vec::new(),
     }
-    plot.add_axis(rail);
+    let Some(layer) = spec.layers.first() else {
+        return Vec::new();
+    };
+    [(AxisSide::Bottom, "pos1"), (AxisSide::Left, "pos2")]
+        .into_iter()
+        .filter(|(_, aesthetic)| has_real_axis(spec, aesthetic))
+        .filter_map(|(side, aesthetic)| {
+            aesthetic_label(spec, layer, aesthetic).map(|title| (side, title))
+        })
+        .collect()
 }
 
 fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelScales) -> HPlot {

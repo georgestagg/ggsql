@@ -1,23 +1,20 @@
 //! `text` geom → hephaestus `TextGeom`. A custom builder (not the generic
-//! position/material path) because several text aesthetics need conversion
-//! before they can be set: `vjust`/`hjust` accept keywords and flip for
-//! hephaestus's top-origin `anchor_y`, `rotation` is degrees → radians,
-//! `fontweight` accepts CSS keywords, and `italic` is boolean. The aesthetics
-//! that need no conversion still go through `wire_material`, so a scaled
-//! `fontsize` maps through its resolved scale like any other geom's.
-
-use std::f64::consts::PI;
+//! position/material path) because `vjust`/`hjust` accept keywords and flip for
+//! hephaestus's top-origin `anchor_y`, and because `offset` is a layer parameter
+//! rather than an aesthetic. Everything else goes through `wire_material`, so a
+//! scaled `fontsize` maps through its resolved scale like any other geom's — and
+//! the font face a layer holds constant reaches its legend key.
 
 use hephaestus::color::rgb8;
 use hephaestus::plot::geom::Raw;
 use hephaestus::plot::{Plot as HPlot, TextGeom};
 
 use super::super::channels::{
-    aesthetic_column_name, column_to_bool, column_to_channel, column_to_f64, column_to_strings,
+    aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_number, constant_string, wire_material, Ctx, LegendKind, MatDefault, MaterialSpec,
+    constant_number, wire_material, Ctx, LegendKind, MatDefault, MaterialSpec,
 };
 use crate::plot::types::{ArrayElement, ParameterValue};
 use crate::plot::AestheticValue;
@@ -44,17 +41,20 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // Label string.
     b.set("text", Raw(column_to_strings(df, label)?));
 
-    // Color, glyph outline, size and opacity: the shared material path, so each
-    // is honored whether it arrives as a `SETTING` literal, a scaled column
-    // (`SCALE fontsize TO (6, 20)` maps through its resolved scale) or an
-    // identity column. `text_stroke` has no default because ggsql's default for
-    // a text geom's `stroke` is Null and hephaestus skips the outline pass
-    // entirely while the channel is unset; its width is hephaestus's theme
-    // default, as ggsql's text geom has no `linewidth` aesthetic.
+    // Color, glyph outline, size, opacity and the font face: the shared material
+    // path, so each is honored whether it arrives as a `SETTING` literal, a
+    // scaled column (`SCALE fontsize TO (6, 20)` maps through its resolved scale)
+    // or an identity column — and so a data-mapped one dresses its legend key in
+    // the constants the layer holds. `text_stroke` and `family` have no default
+    // because ggsql's defaults for `stroke` and `typeface` are Null: hephaestus
+    // skips the outline pass entirely while the channel is unset, and an empty
+    // family is not "use the default" but a font lookup that misses. The glyph
+    // outline's width is hephaestus's theme default, as ggsql's text geom has no
+    // `linewidth` aesthetic.
     wire_material(&mut b, &material(), plot, ctx, LegendKind::Text)?;
 
-    // Aesthetics needing conversion, resolved per row: a mapped column, else the
-    // layer's literal repeated, else the ggsql default.
+    // Justification needs conversion no `RangeKind` covers, so it is resolved per
+    // row here: a mapped column, else the layer's literal repeated, else centred.
     b.set("anchor_x", Raw(justification(ctx, "hjust")));
     // ggsql vjust: 0 = bottom, 1 = top; hephaestus anchor_y: 0 = top, 1 = bottom.
     let anchor_y: Vec<f64> = justification(ctx, "vjust")
@@ -62,20 +62,6 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         .map(|v| 1.0 - v)
         .collect();
     b.set("anchor_y", Raw(anchor_y));
-    // ggsql rotation is in degrees; hephaestus angle is radians (math CCW).
-    let angle: Vec<f64> = numeric_or(ctx, "rotation", 0.0)
-        .iter()
-        .map(|d| d * PI / 180.0)
-        .collect();
-    b.set("angle", Raw(angle));
-    b.set("weight", Raw(weights(ctx, n)?));
-    b.set("italic", Raw(italics(ctx, n)?));
-    // Only set `family` when the layer actually names one: an empty family is
-    // not "use the default", it is a font lookup that misses.
-    let families = strings_or(ctx, "typeface", "");
-    if families.iter().any(|f| !f.is_empty()) {
-        b.set("family", Raw(families));
-    }
 
     // `offset` nudges the label off its anchor point, in points. It is a layer
     // parameter rather than an aesthetic, so it bypasses the material table
@@ -93,8 +79,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
 }
 
 /// The layer aesthetics wired through the shared material path, with ggsql's
-/// text defaults. Everything else this geom sets needs conversion first.
-fn material() -> [MaterialSpec; 4] {
+/// text defaults. This table is also what dresses the legend key, so every
+/// aesthetic hephaestus's `Text` key consumes belongs here — the face a layer
+/// sets is as much part of what a `fontsize` swatch describes as its colour is.
+/// Only justification is left out: the key centres its glyph in the cell.
+fn material() -> [MaterialSpec; 8] {
     [
         MaterialSpec::new(
             "fill",
@@ -115,6 +104,19 @@ fn material() -> [MaterialSpec; 4] {
             RangeKind::Number,
             MatDefault::Number(1.0),
         ),
+        MaterialSpec::new("typeface", "family", RangeKind::Text, MatDefault::None),
+        MaterialSpec::new(
+            "fontweight",
+            "weight",
+            RangeKind::FontWeight,
+            MatDefault::Number(400.0),
+        ),
+        MaterialSpec::new("italic", "italic", RangeKind::Bool, MatDefault::None),
+        // ggsql resolves `rotation` in degrees; hephaestus angles are radians
+        // (math CCW), which `RangeKind::Angle` converts. A rotated layer gets a
+        // rotated key, as ggplot2's `draw_key_text` does — hephaestus sizes the
+        // swatch cell from the rotated glyph, so nothing is clipped.
+        MaterialSpec::new("rotation", "angle", RangeKind::Angle, MatDefault::None),
     ]
 }
 
@@ -137,24 +139,6 @@ fn offset(layer: &crate::Layer) -> (f64, f64) {
 fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
     aesthetic_column_name(layer, aesthetic)
         .ok_or_else(|| GgsqlError::WriterError(format!("text layer has no {aesthetic} mapping")))
-}
-
-/// A per-row numeric aesthetic. Falls back to the layer's constant — a `SETTING`
-/// literal, which is how every fixed value arrives — and only then to `default`.
-fn numeric_or(ctx: &Ctx, aesthetic: &str, default: f64) -> Vec<f64> {
-    match aesthetic_column_name(ctx.layer, aesthetic) {
-        Some(col) => column_to_f64(ctx.df, col).unwrap_or_else(|_| vec![default; ctx.df.height()]),
-        None => vec![constant_number(ctx, aesthetic, default); ctx.df.height()],
-    }
-}
-
-/// A per-row string aesthetic, falling back to the layer's constant literal.
-fn strings_or(ctx: &Ctx, aesthetic: &str, default: &str) -> Vec<String> {
-    match aesthetic_column_name(ctx.layer, aesthetic) {
-        Some(col) => column_to_strings(ctx.df, col)
-            .unwrap_or_else(|_| vec![default.to_string(); ctx.df.height()]),
-        None => vec![constant_string(ctx, aesthetic, default); ctx.df.height()],
-    }
 }
 
 /// A justification aesthetic (`hjust` / `vjust`) as a 0–1 fraction. ggsql accepts
@@ -191,56 +175,5 @@ fn parse_justification(value: &str) -> f64 {
         "left" | "bottom" => 0.0,
         "right" | "top" => 1.0,
         _ => 0.5, // centre / center / middle / unknown
-    }
-}
-
-/// Font weights as numeric 100–900 (CSS keywords parsed), default 400.
-fn weights(ctx: &Ctx, n: usize) -> Result<Vec<f64>> {
-    match aesthetic_column_name(ctx.layer, "fontweight") {
-        Some(col) => Ok(column_to_strings(ctx.df, col)?
-            .iter()
-            .map(|s| parse_weight(s))
-            .collect()),
-        None => Ok(vec![
-            parse_weight(&constant_string(
-                ctx,
-                "fontweight",
-                "normal"
-            ));
-            n
-        ]),
-    }
-}
-
-/// Parse a CSS font-weight keyword or numeric string to 100–900.
-fn parse_weight(value: &str) -> f64 {
-    if let Ok(n) = value.parse::<f64>() {
-        return n;
-    }
-    match value.to_lowercase().replace('-', "").as_str() {
-        "thin" | "hairline" => 100.0,
-        "extralight" | "ultralight" => 200.0,
-        "light" => 300.0,
-        "medium" => 500.0,
-        "semibold" | "demibold" => 600.0,
-        "bold" | "bolder" => 700.0,
-        "extrabold" | "ultrabold" => 800.0,
-        "black" | "heavy" => 900.0,
-        _ => 400.0, // normal / regular / unknown
-    }
-}
-
-/// Italic flags, from a mapped column or the layer's `SETTING italic => true`,
-/// default false.
-fn italics(ctx: &Ctx, n: usize) -> Result<Vec<bool>> {
-    match aesthetic_column_name(ctx.layer, "italic") {
-        Some(col) => column_to_bool(ctx.df, col),
-        None => {
-            let italic = matches!(
-                ctx.layer.mappings.aesthetics.get("italic"),
-                Some(AestheticValue::Literal(ParameterValue::Boolean(true)))
-            );
-            Ok(vec![italic; n])
-        }
     }
 }

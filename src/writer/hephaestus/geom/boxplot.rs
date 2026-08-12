@@ -222,14 +222,17 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         plot.add_geom(b.build());
     }
 
-    // Outliers: hollow points (stroke only, matching VL's `filled = false`)
-    // at their value, honoring the `size`/`shape` aesthetics.
+    // Outliers: points at their value wearing the layer's fill and stroke —
+    // the Vega-Lite writer puts `fill`/`fillOpacity` in the boxplot's shared
+    // encoding, so its outlier marks are filled too. Honors `size`/`shape`.
     if !out_i.is_empty() {
         let mut b = PointGeom::builder();
         cat.select(&out_i).apply(&mut b, band_ch);
         b.set(value_ch, pick(&v1, &out_i));
         b.set(frac_ch, shift(&offsets, &out_i, 0.0));
+        fill.apply(&mut b, "fill", &out_i);
         stroke.apply(&mut b, "stroke", &out_i);
+        b.set("fill_opacity", Raw(alpha));
         // `PointGeom` has no dash pattern — a marker outline can't be dashed.
         outline(&mut b, &linewidth, None, &out_i);
         b.set("size", Raw(constant_number(ctx, "size", 3.0)));

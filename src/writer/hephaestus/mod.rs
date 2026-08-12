@@ -203,6 +203,12 @@ impl Writer for HephaestusWriter {
             view = view.caption(text);
         }
 
+        // Axis titles are composition chrome too: one centred title per
+        // dimension for the whole figure, rather than one per panel rail.
+        for (side, text) in projection::composition_axis_titles(spec) {
+            view = view.axis_title(side, text);
+        }
+
         // Register the fixed (shared) scales once, globally. Every panel binds
         // its position channels to these names, giving fixed-scale faceting.
         for scale in &spec.scales {
@@ -210,6 +216,11 @@ impl Writer for HephaestusWriter {
                 "fill" | "stroke" | "color" | "colour" => scales::RangeKind::Color,
                 "shape" => scales::RangeKind::Shape,
                 "linetype" => scales::RangeKind::Linetype,
+                // The text geom's font aesthetics: a scale over them resolves a
+                // range of family names / weights, not numbers.
+                "typeface" => scales::RangeKind::Text,
+                "fontweight" => scales::RangeKind::FontWeight,
+                "italic" => scales::RangeKind::Bool,
                 _ => {
                     if scale.aesthetic.starts_with("pos") {
                         scales::RangeKind::Position
@@ -602,6 +613,13 @@ mod tests {
             .collect()
     }
 
+    /// The figure's composition-level axis titles. Needs no GPU.
+    fn axis_titles(query: &str) -> Vec<(AxisSide, String)> {
+        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
+        let spec = reader.execute(query).unwrap();
+        projection::composition_axis_titles(spec.plot())
+    }
+
     /// Just the top strip labels, in panel order.
     fn top_strips(query: &str) -> Vec<String> {
         strips(query)
@@ -761,6 +779,33 @@ mod tests {
              UNION ALL SELECT 3, 3, 'z' \
              VISUALISE x AS x, y AS y, lab AS label, 30 AS rotation, \
              'bold' AS fontweight, 22 AS fontsize DRAW text",
+        ));
+    }
+
+    /// A scaled `fontsize` on a layer whose face is set: the legend key is
+    /// dressed from the same material table the glyphs are, so `family` /
+    /// `weight` / `italic` / `angle` all have to reach it.
+    #[test]
+    fn renders_text_font_legend() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, 'a' AS lab, 10 AS sz UNION ALL SELECT 2, 2, 'b', 20 \
+             UNION ALL SELECT 3, 3, 'c', 30 \
+             VISUALISE x AS x, y AS y, lab AS label, sz AS fontsize \
+             DRAW text SETTING typeface => 'Times New Roman', fontweight => 'bold', \
+             italic => true, rotation => 20 SCALE fontsize TO (10, 30)",
+        ));
+    }
+
+    /// The same aesthetics as *columns*, which take the identity path rather than
+    /// the literal one: strings, booleans and degrees, each converted per row.
+    #[test]
+    fn renders_text_mapped_font() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, 'a' AS lab, 'Times New Roman' AS face, 'bold' AS wt, \
+             true AS it, 0 AS rot \
+             UNION ALL SELECT 2, 2, 'b', 'Helvetica', 'light', false, 45 \
+             VISUALISE x AS x, y AS y, lab AS label, face AS typeface, wt AS fontweight, \
+             it AS italic, rot AS rotation DRAW text",
         ));
     }
 
@@ -1088,6 +1133,55 @@ mod tests {
     /// A 6-row fixture whose `g` is categorical and `v` numeric.
     const FACET_DATA: &str = "SELECT g, v, y FROM (VALUES \
          ('a',5,1),('a',7,2),('b',15,3),('b',18,1),('c',25,2),('c',28,3)) t(g,v,y)";
+
+    #[test]
+    fn axis_titles_are_one_per_dimension() {
+        // Axis titles are outer chrome: exactly one per dimension for the whole
+        // figure, however many panels there are and whether or not a dimension
+        // is free (a free dimension draws its rail on every panel, but still
+        // gets a single centred title).
+        let expected = vec![
+            (AxisSide::Bottom, "v".to_string()),
+            (AxisSide::Left, "y".to_string()),
+        ];
+        for facet in [
+            "",
+            "FACET g",
+            "FACET g SETTING free => ('x', 'y')",
+            "FACET g BY y",
+        ] {
+            let query = format!("{FACET_DATA} VISUALISE v AS x, y AS y DRAW point {facet}");
+            assert_eq!(axis_titles(&query), expected, "{facet}");
+        }
+    }
+
+    #[test]
+    fn axis_titles_follow_labels() {
+        assert_eq!(
+            axis_titles(&format!(
+                "{FACET_DATA} VISUALISE v AS x, y AS y DRAW point FACET g \
+                 LABEL x => 'Value', y => 'Count'"
+            )),
+            vec![
+                (AxisSide::Bottom, "Value".to_string()),
+                (AxisSide::Left, "Count".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn axis_titles_skip_untitled_axes() {
+        // A polar coord has no Cartesian rails to title, and a synthetic dummy
+        // position scale has no axis at all.
+        assert!(axis_titles(&format!(
+            "{FACET_DATA} VISUALISE v AS y, g AS fill DRAW bar PROJECT x, y TO polar"
+        ))
+        .is_empty());
+        assert_eq!(
+            axis_titles(&format!("{FACET_DATA} VISUALISE v AS y DRAW bar")),
+            vec![(AxisSide::Left, "v".to_string())]
+        );
+    }
 
     #[test]
     fn facet_strips_rename_discrete() {

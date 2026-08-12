@@ -22,7 +22,9 @@ use crate::plot::{ArrayElement, OutputRange, ParameterValue, Scale as GScale, Sc
 use crate::DataFrame;
 
 /// What kind of visual output a scale's range produces. Selects how a resolved
-/// `OutputRange::Array` is mapped onto a hephaestus range.
+/// `OutputRange::Array` is mapped onto a hephaestus range — and, for the values
+/// a scale never touches, how a literal or an identity column converts into a
+/// hephaestus value (`wiring::set_literal_channel` / `constant_material`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RangeKind {
     /// Position scale — no output range; maps to a `[0, 1]` panel fraction.
@@ -35,6 +37,16 @@ pub enum RangeKind {
     Shape,
     /// Line dash pattern: names → builtin linetype patterns.
     Linetype,
+    /// Free-form string aesthetic (a font family): names passed through, to be
+    /// resolved by whatever consumes them.
+    Text,
+    /// Boolean aesthetic (italic): flags passed through. A boolean has no
+    /// meaningful output range, so only the literal / identity paths use it.
+    Bool,
+    /// CSS font weight: keyword (`bold`) or numeric string → `100..=900`.
+    FontWeight,
+    /// Rotation in degrees, as ggsql resolves it → radians, hephaestus's unit.
+    Angle,
 }
 
 /// Build a hephaestus scale from a resolved ggsql scale. `None` when ggsql
@@ -390,13 +402,26 @@ fn apply_output_range(hs: HScale, kind: RangeKind, values: &[ArrayElement]) -> H
     match kind {
         RangeKind::Color => hs.range_colors(values.iter().filter_map(array_element_to_color)),
         RangeKind::Number => hs.range_numbers(values.iter().filter_map(|e| e.to_f64())),
-        RangeKind::Shape => {
+        RangeKind::Shape | RangeKind::Text => {
             hs.range_strings(values.iter().map(|e| Arc::from(e.to_key_string().as_str())))
         }
         RangeKind::Linetype => {
             hs.range_linetypes(values.iter().map(|e| map_linetype(&e.to_key_string())))
         }
-        RangeKind::Position => hs,
+        // hephaestus takes a font weight as a number and an angle in radians, so
+        // the range converts exactly as a literal on the same channel does.
+        RangeKind::FontWeight => {
+            hs.range_numbers(values.iter().map(|e| parse_font_weight(&e.to_key_string())))
+        }
+        RangeKind::Angle => hs.range_numbers(
+            values
+                .iter()
+                .filter_map(|e| e.to_f64())
+                .map(f64::to_radians),
+        ),
+        // Neither a position nor a boolean has an output range: the former maps to
+        // a panel fraction, the latter is only ever a literal or identity value.
+        RangeKind::Position | RangeKind::Bool => hs,
     }
 }
 
@@ -428,6 +453,26 @@ pub fn map_linetype(name: &str) -> Arc<[LinetypeStep]> {
             gap(*len as f64)
         }
     }))
+}
+
+/// Map a ggsql `fontweight` to hephaestus's numeric CSS weight (100–900);
+/// unknown → 400. ggsql accepts either a keyword or a number, matching the
+/// Vega-Lite writer's `parse_fontweight_to_numeric`.
+pub fn parse_font_weight(value: &str) -> f64 {
+    if let Ok(n) = value.parse::<f64>() {
+        return n;
+    }
+    match value.to_lowercase().replace('-', "").as_str() {
+        "thin" | "hairline" => 100.0,
+        "extralight" | "ultralight" => 200.0,
+        "light" => 300.0,
+        "medium" => 500.0,
+        "semibold" | "demibold" => 600.0,
+        "bold" | "bolder" => 700.0,
+        "extrabold" | "ultrabold" => 800.0,
+        "black" | "heavy" => 900.0,
+        _ => 400.0, // normal / regular / unknown
+    }
 }
 
 /// Feed ggsql's resolved breaks + formatted labels into the hephaestus scale so
@@ -822,5 +867,20 @@ mod tests {
         assert_eq!(bin_at_centre(&bins, 99.0), Some(2));
         assert_eq!(bin_at_centre(&bins, f64::NAN), None);
         assert_eq!(bin_at_centre(&[], 5.0), None);
+    }
+
+    #[test]
+    fn font_weights_parse_like_vegalite() {
+        // Keywords, in either casing and with or without the hyphen.
+        assert_eq!(parse_font_weight("bold"), 700.0);
+        assert_eq!(parse_font_weight("Bold"), 700.0);
+        assert_eq!(parse_font_weight("semi-bold"), 600.0);
+        assert_eq!(parse_font_weight("extralight"), 200.0);
+        // Numbers pass through, as a string or as ggsql's own number formatting.
+        assert_eq!(parse_font_weight("350"), 350.0);
+        assert_eq!(parse_font_weight("350.0"), 350.0);
+        // Anything unrecognised is regular, never a missing glyph.
+        assert_eq!(parse_font_weight("normal"), 400.0);
+        assert_eq!(parse_font_weight("wingdings"), 400.0);
     }
 }

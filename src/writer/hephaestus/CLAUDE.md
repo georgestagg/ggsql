@@ -73,6 +73,7 @@ HephaestusWriter::write(&Plot, &HashMap<String, DataFrame>)
  │      1×1 grid + one Panel when unfaceted; else grid(nrow, ncol, cells)
  ├─ PlotComposition::new(&composition).shape_registry(..)
  ├─ wiring::plot_label → composition title / subtitle / caption
+ ├─ projection::composition_axis_titles → one centred x / y title, outer chrome
  ├─ for scale in spec.scales:            scales::build_scale(scale, RangeKind)
  │      → view.insert_scale(scale.aesthetic, hs)      ← the fixed/shared scales
  ├─ map_bbox → insert continuous "pos1"/"pos2" for a map / spatial plot
@@ -237,6 +238,14 @@ registers nothing rather than fabricating a scale.
   range: `range_colors` / `range_numbers` / `range_strings` / `range_linetypes`,
   and nothing for `Position`. Palettes are already concrete by the time the
   writer runs.
+- **`RangeKind` is also the one place a value converts**, for the aesthetics no
+  scale touches: `wire_material`, `set_literal_channel` and `constant_material`
+  all dispatch on it, so a conversion written once serves the literal, the
+  identity column, *and* the legend key. That is why the text geom's face is
+  expressed as kinds (`Text` for a family, `Bool` for italic, `FontWeight` for a
+  CSS keyword or number, `Angle` for ggsql's degrees → hephaestus's radians)
+  rather than as per-row code in the geom: a channel converted inside a geom
+  cannot be pinned onto a key. A new unit-converted aesthetic belongs here.
 - **Breaks are ggsql's, majors and minors alike.** `apply_breaks` feeds
   `break_labels()` in as `with_breaks_labeled`, so ticks (and `RENAMING`
   overrides) match ggsql — and therefore the Vega-Lite writer — exactly.
@@ -293,6 +302,14 @@ Polar an angular ring + a radial rail, Map neither (the clip boundary and
 graticules are the chrome). `has_real_axis` suppresses an axis whose position
 scale is a synthetic `__ggsql_stat_dummy` (a pie's radius, a bar with no x),
 mirroring the VL writer's `AxisInfo::suppress`.
+
+**Axis titles are not on the rails.** A rail is per panel, so titling it would
+label every facet row and column — and every panel of a free dimension. The
+figure has one x and one y, so it gets one centred title each, installed on the
+composition by `write` from `projection::composition_axis_titles` alongside the
+plot-level labels. Same suppression rules (`has_real_axis`, Cartesian only), and
+no unfaceted special case: a 1×1 composition puts the title where a panel's own
+would have gone.
 
 A **categorical angle** makes a radar rather than a pie. ggsql resolves that and
 records `properties["radar"]`; the writer swaps `PolarProjection::full_circle`
@@ -353,6 +370,16 @@ includes `fill_opacity` / `stroke_opacity`, which a key carries separately just 
 a geom does: `opacity => 0` on a point geom pins straight through and leaves the
 key as open a circle as the marks are.
 
+**A geom's `MaterialSpec` table is therefore the whole vocabulary of what its key
+can wear** — a channel the geom sets outside that table is invisible to
+`pin_constants`, however constant it is. So every aesthetic the key kind consumes
+belongs in the table, even one that needs converting first: a text key takes
+`family`, `weight`, `italic` and `angle`, which is why those are `RangeKind`s
+rather than per-row code in `geom/text.rs`. `SETTING typeface => 'Times New
+Roman', italic => true` dresses the swatch in the same face as the marks, and a
+rotated layer gets a rotated key (as ggplot2's `draw_key_text` does — the cell is
+sized from the rotated glyph, so nothing clips).
+
 One legend is recorded per **aesthetic**, not per channel. A geom may drive
 several channels from one aesthetic — a ribbon sends `stroke` to both edge curves
 — and they describe one scale, so they get one swatch. Recording a second does
@@ -376,9 +403,12 @@ a channel belongs there.
    `MatDefault` only fires when nothing is mapped.
 3. Reach for a **custom builder** (as [`geom/text.rs`](geom/text.rs),
    [`geom/spatial.rs`](geom/spatial.rs) and the composites do) only when the geom
-   has no plain x/y columns, needs unit conversion, or computes its positions.
-   Even then, route materials through `wire_material` / `resolve_material` rather
-   than hand-rolling them — that is what keeps data-mapped aesthetics working.
+   has no plain x/y columns, computes its positions, or reads a layer *parameter*
+   rather than an aesthetic. Even then, route materials through `wire_material` /
+   `resolve_material` — that is what keeps data-mapped aesthetics working and what
+   dresses the legend key. A material aesthetic needing a **unit or keyword
+   conversion** is not a reason to hand-roll it: add a `RangeKind` and keep it in
+   the table (see `text`'s font face).
 4. Check the **densified** path: under a map `PROJECT`, ggsql expands segment /
    rule / ribbon / tile into per-vertex rows and remaps the extent aesthetics
    onto plain `pos1`/`pos2`. [`geom/densified.rs`](geom/densified.rs) runs

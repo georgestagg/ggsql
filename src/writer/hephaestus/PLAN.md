@@ -1345,6 +1345,65 @@ Verified: two `map_range` unit tests (no GPU) pin the padded and degenerate
 ranges; 98 writer tests pass; an orthographic globe eyeballed with room on every
 side; fmt and clippy clean.
 
+## Text legend keys inherit the font — status: implemented
+
+A text layer with a data-mapped aesthetic drew its key in hephaestus's default
+face — upright sans at weight 400 — however the layer was set, so `SETTING
+typeface => 'Times New Roman', fontweight => 'bold', italic => true` styled every
+mark and none of the swatches. Nothing was missing upstream: `LegendKey::Text`
+consumes `family`, `weight`, `italic` and `angle` alongside the colour and size
+channels the writer already pinned. The gap was that `pin_constants` walks the
+geom's `MaterialSpec` table, and `text`'s custom builder set exactly those four
+channels *outside* it, as per-row `Raw` vectors with their conversions inlined —
+so the table the key is dressed from never mentioned them.
+
+The conversions moved into `RangeKind`, which is where every other
+literal/identity conversion already lives (`Color` parses a hex string,
+`Linetype` a dash name). Four kinds cover them: `Text` (a family name), `Bool`
+(italic), `FontWeight` (CSS keyword or number → 100–900), and `Angle` (ggsql's
+degrees → hephaestus's radians). The font aesthetics then join `text`'s material
+table like any other, and three things follow from the one change: the key
+inherits the face, a *mapped* font column travels the identity path rather than a
+bespoke one, and a `SCALE typeface`/`fontweight` would resolve a real range
+(`mod.rs` registers those aesthetics with the matching kind instead of defaulting
+them to numbers). `weights`, `italics`, `strings_or`, `numeric_or` and
+`parse_weight` are gone from `geom/text.rs`; only justification stays custom,
+since hjust/vjust need a keyword parse and the anchor flip that no `RangeKind`
+models — and the key centres its glyph anyway.
+
+`angle` pins too, matching ggplot2's `draw_key_text`; `swatch_dim_for` sizes the
+cell from the rotated glyph, so the rotation costs no clipping.
+
+Verified: 98 writer tests pass; a scaled `fontsize` legend eyeballed with bold
+italic serif keys rotated 20° at each size, a colour-scaled one with the face
+inherited while the key keeps the scale's colour, and a layer mapping all four
+font aesthetics to columns rendered per row; fmt and clippy clean.
+
+## Axis titles are outer chrome — status: implemented
+
+`add_cartesian_axis` titled the rail it created, and rails are created per
+panel, so a faceted plot repeated the axis title once per row and once per
+column — and a `free` dimension, whose rail is drawn on *every* panel, repeated
+it inside the grid. A figure has one x dimension and one y dimension, so it gets
+one centred title each, in the outer chrome.
+
+The title moved off the rail onto the composition, which is where the plot-level
+labels already live for the same reason: `projection::composition_axis_titles`
+resolves `(AxisSide, String)` pairs from the same `aesthetic_label` lookup and
+`write` installs them via `PlotComposition::axis_title` next to
+title/subtitle/caption. The suppression rules are unchanged — `has_real_axis`
+still filters out a synthetic `__ggsql_stat_dummy` scale, and only Cartesian
+coords get titles (polar rails are untitled and a map has no rails). Nothing was
+missing upstream; `axis_title` already spans the whole facet grid.
+
+The unfaceted case needs no branch: its composition is a 1×1 grid, so the shared
+title lands in the same place the panel's own title used to.
+
+Verified: three new no-GPU tests (`axis_titles_*`) pin one title per dimension
+across wrap/grid/free faceting, the `LABEL` override, and the polar/dummy-scale
+suppressions; 107 writer tests pass; wrap, free grid and unfaceted renders
+eyeballed with a single centred title on each axis; fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
