@@ -25,6 +25,20 @@ use crate::{DataFrame, Plot, Result};
 /// Patch id for the single (unfaceted) panel.
 pub const PANEL_ID: &str = "ggsql_panel";
 
+/// The value selecting one facet cell's rows: the facet column's text form,
+/// paired with whether the cell was NULL.
+///
+/// [`column_to_strings`] renders a NULL as `""`, so text alone would make a
+/// genuine empty-string category and a NULL the same panel. The Vega-Lite
+/// writer keeps them apart (a null level labels as `"null"` and gets its own
+/// facet), so this writer carries the null flag alongside the text everywhere a
+/// level is identified or matched.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct LevelKey {
+    text: String,
+    is_null: bool,
+}
+
 /// One facet cell: which facet values it holds, its grid position (for edge-only
 /// axes), and the strip-label text to show.
 pub struct Panel {
@@ -33,9 +47,9 @@ pub struct Panel {
     /// 0-based panel index (order of enumeration), for per-panel scale names.
     pub index: usize,
     /// Facet1 (Wrap panel / Grid row) value selecting this panel's rows.
-    pub facet1: Option<String>,
+    pub facet1: Option<LevelKey>,
     /// Facet2 (Grid column) value; `None` for Wrap.
-    pub facet2: Option<String>,
+    pub facet2: Option<LevelKey>,
     /// Top strip label (Wrap header, or Grid column header on the top row).
     pub strip_top: Option<String>,
     /// Right strip label (Grid row header on the right column).
@@ -63,6 +77,19 @@ impl Panel {
     }
 }
 
+/// The unfaceted layout: one full-size panel, no strips.
+///
+/// Also what a `FACET` over an empty result set collapses to: there are no
+/// levels to lay out, and a grid of zero cells is not a composition hephaestus
+/// will build. The figure then reads like the unfaceted empty plot — one empty
+/// panel with its axes — rather than a bare canvas.
+fn single_panel() -> (Composition, Vec<Panel>) {
+    (
+        grid(1, 1, vec![Element::from(Patch::new(PANEL_ID))]),
+        vec![Panel::single()],
+    )
+}
+
 /// Build the panel grid for a plot. Returns a single-cell composition + one
 /// [`Panel`] when there is no `FACET`, otherwise the faceted grid.
 pub fn build_panels(
@@ -70,10 +97,9 @@ pub fn build_panels(
     data: &std::collections::HashMap<String, DataFrame>,
 ) -> Result<(Composition, Vec<Panel>)> {
     let Some(facet) = &spec.facet else {
-        let comp = grid(1, 1, vec![Element::from(Patch::new(PANEL_ID))]);
-        return Ok((comp, vec![Panel::single()]));
+        return Ok(single_panel());
     };
-    let layer0 = super::layer_dataframe(&spec.layers[0], data)?;
+    let layer0 = super::layer_dataframe(&spec.layers[0], 0, data)?;
     match &facet.layout {
         FacetLayout::Wrap { .. } => build_wrap(spec, facet, layer0),
         FacetLayout::Grid { .. } => build_grid(spec, layer0),
@@ -87,7 +113,10 @@ fn build_wrap(
     layer0: &DataFrame,
 ) -> Result<(Composition, Vec<Panel>)> {
     let levels = ordered_levels(spec, layer0, "facet1")?;
-    let n = levels.len().max(1);
+    if levels.is_empty() {
+        return Ok(single_panel());
+    }
+    let n = levels.len();
     let ncol = wrap_ncol(facet, n);
     let nrow = n.div_ceil(ncol);
 
@@ -126,8 +155,11 @@ fn build_wrap(
 fn build_grid(spec: &Plot, layer0: &DataFrame) -> Result<(Composition, Vec<Panel>)> {
     let rows = ordered_levels(spec, layer0, "facet1")?;
     let cols = ordered_levels(spec, layer0, "facet2")?;
-    let nrow = rows.len().max(1);
-    let ncol = cols.len().max(1);
+    if rows.is_empty() || cols.is_empty() {
+        return Ok(single_panel());
+    }
+    let nrow = rows.len();
+    let ncol = cols.len();
 
     let mut panels = Vec::with_capacity(nrow * ncol);
     let mut cells: Vec<Element> = Vec::with_capacity(nrow * ncol);
@@ -161,27 +193,37 @@ fn wrap_ncol(facet: &crate::plot::Facet, n: usize) -> usize {
     }
 }
 
-/// One distinct facet level: the data-space key selecting its rows, the numeric
-/// form of the same cell (the bin-join key for a binned facet), whether the cell
-/// was NULL, and the strip text to display.
+/// One distinct facet level: the key selecting its rows, the numeric form of the
+/// same cell (the bin-join key for a binned facet), and the strip text.
 struct Level {
-    key: String,
+    key: LevelKey,
     value: f64,
-    is_null: bool,
     label: String,
+}
+
+/// The per-row facet key of one facet column: its text form paired with the null
+/// bitmap, so a NULL cell selects a different panel than an empty-string
+/// category — see [`LevelKey`].
+fn level_keys(df: &DataFrame, column: &str) -> Result<Vec<LevelKey>> {
+    let array = df.column(column)?;
+    Ok(column_to_strings(df, column)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| LevelKey {
+            text,
+            is_null: array.is_null(i),
+        })
+        .collect())
 }
 
 /// Distinct facet levels present in the data, ordered per the facet scale and
 /// labelled for the strip.
 fn ordered_levels(spec: &Plot, df: &DataFrame, internal_aes: &str) -> Result<Vec<Level>> {
     let col = naming::aesthetic_column(internal_aes);
-    let keys = column_to_strings(df, &col)?;
+    let keys = level_keys(df, &col)?;
     // The numeric form of the same column, for the binned join. A text facet
     // column can't cast; `value` is only read for binned scales.
     let values = column_to_f64(df, &col).unwrap_or_else(|_| vec![f64::NAN; keys.len()]);
-    // `column_to_strings` renders NULL as "", indistinguishable from a genuine
-    // empty category, so read the null bitmap directly.
-    let array = df.column(&col)?;
 
     let mut seen = HashSet::new();
     let mut distinct: Vec<Level> = Vec::new();
@@ -190,7 +232,6 @@ fn ordered_levels(spec: &Plot, df: &DataFrame, internal_aes: &str) -> Result<Vec
             distinct.push(Level {
                 key: key.clone(),
                 value: values[i],
-                is_null: array.is_null(i),
                 label: String::new(),
             });
         }
@@ -210,14 +251,7 @@ fn ordered_levels(spec: &Plot, df: &DataFrame, internal_aes: &str) -> Result<Vec
 /// values sorted numeric-aware ascending. Reversed when the scale sets
 /// `reverse => true`.
 fn order_levels(mut distinct: Vec<Level>, scale: Option<&Scale>) -> Vec<Level> {
-    let reverse = scale
-        .map(|s| {
-            matches!(
-                s.properties.get("reverse"),
-                Some(ParameterValue::Boolean(true))
-            )
-        })
-        .unwrap_or(false);
+    let reverse = super::scales::is_reversed(scale);
 
     let mut ordered = if is_binned(scale) {
         // Bin centres sort naturally; NULL (censored) panels go last.
@@ -231,7 +265,7 @@ fn order_levels(mut distinct: Vec<Level>, scale: Option<&Scale>) -> Vec<Level> {
     } else {
         match scale.and_then(|s| s.input_range.as_ref()) {
             Some(range) => {
-                let order: Vec<String> = range.iter().map(element_to_string).collect();
+                let order: Vec<LevelKey> = range.iter().map(element_to_key).collect();
                 let (mut ranked, mut extra): (Vec<Level>, Vec<Level>) = (Vec::new(), Vec::new());
                 for key in &order {
                     if let Some(pos) = distinct.iter().position(|l| &l.key == key) {
@@ -258,13 +292,14 @@ fn order_levels(mut distinct: Vec<Level>, scale: Option<&Scale>) -> Vec<Level> {
 /// Numeric-aware ascending sort by key: numeric when every key parses as `f64`,
 /// otherwise lexical.
 fn sort_levels(levels: &mut [Level]) {
-    if levels.iter().all(|l| l.key.parse::<f64>().is_ok()) {
+    if levels.iter().all(|l| l.key.text.parse::<f64>().is_ok()) {
         levels.sort_by(|a, b| {
-            let (a, b) = (a.key.parse::<f64>().unwrap(), b.key.parse::<f64>().unwrap());
+            let a = a.key.text.parse::<f64>().unwrap();
+            let b = b.key.text.parse::<f64>().unwrap();
             a.partial_cmp(&b).unwrap_or(Ordering::Equal)
         });
     } else {
-        levels.sort_by(|a, b| a.key.cmp(&b.key));
+        levels.sort_by(|a, b| a.key.text.cmp(&b.key.text));
     }
 }
 
@@ -284,7 +319,7 @@ fn is_binned(scale: Option<&Scale>) -> bool {
 fn facet_label(scale: Option<&Scale>, level: &Level) -> String {
     // NULL keys as the literal string "null", matching ggsql's RENAMING key for
     // a null level (`RENAMING null => 'The rest'`).
-    if level.is_null {
+    if level.key.is_null {
         return match scale.and_then(|s| s.label_mapping.as_ref()) {
             Some(mapping) => match mapping.get("null") {
                 Some(Some(label)) => label.clone(),
@@ -300,7 +335,7 @@ fn facet_label(scale: Option<&Scale>, level: &Level) -> String {
         if let Some(i) = super::scales::bin_at_centre(&bins, level.value) {
             return bins[i].label.clone();
         }
-        return level.key.clone();
+        return level.key.text.clone();
     }
     discrete_label(scale, level)
 }
@@ -309,10 +344,10 @@ fn facet_label(scale: Option<&Scale>, level: &Level) -> String {
 /// value, an empty strip when suppressed, else the raw value.
 fn discrete_label(scale: Option<&Scale>, level: &Level) -> String {
     let Some(scale) = scale else {
-        return level.key.clone();
+        return level.key.text.clone();
     };
     let Some(mapping) = scale.label_mapping.as_ref() else {
-        return level.key.clone();
+        return level.key.text.clone();
     };
     // `label_mapping` is keyed on the domain element's `to_key_string()`, which
     // can differ from the column's arrow-cast text (e.g. "5" vs "5.0"), so find
@@ -326,20 +361,22 @@ fn discrete_label(scale: Option<&Scale>, level: &Level) -> String {
                 .find(|e| element_matches(e, level))
                 .map(|e| e.to_key_string())
         })
-        .unwrap_or_else(|| level.key.clone());
+        .unwrap_or_else(|| level.key.text.clone());
     match mapping.get(&key) {
         Some(Some(label)) => label.clone(),
         Some(None) => String::new(),
-        None => level.key.clone(),
+        None => level.key.text.clone(),
     }
 }
 
-/// Whether a domain element denotes the same value as this level: by data-space
-/// string form first, then numerically (a `DOUBLE` column's `"5.0"` still matches
-/// `Number(5.0)`).
+/// Whether a domain element denotes the same value as this level: by key first,
+/// then numerically (a `DOUBLE` column's `"5.0"` still matches `Number(5.0)`).
 fn element_matches(element: &ArrayElement, level: &Level) -> bool {
-    if element_to_string(element) == level.key {
+    if element_to_key(element) == level.key {
         return true;
+    }
+    if level.key.is_null {
+        return false;
     }
     match element.to_f64() {
         Some(n) => level.value.is_finite() && n == level.value,
@@ -347,16 +384,21 @@ fn element_matches(element: &ArrayElement, level: &Level) -> bool {
     }
 }
 
-/// Render an `input_range` element to the string form the facet column carries
-/// (whole numbers as integers, matching an integer column's cast to text).
-fn element_to_string(element: &ArrayElement) -> String {
-    match element {
+/// An `input_range` element as the key the facet column carries for it: the text
+/// form the column casts to (whole numbers as integers, matching an integer
+/// column's cast to text), plus whether the element is the null level.
+fn element_to_key(element: &ArrayElement) -> LevelKey {
+    let text = match element {
         ArrayElement::String(s) => s.clone(),
         ArrayElement::Number(n) if n.fract() == 0.0 && n.is_finite() => format!("{}", *n as i64),
         ArrayElement::Number(n) => n.to_string(),
         ArrayElement::Boolean(b) => b.to_string(),
         ArrayElement::Null => String::new(),
         other => format!("{other:?}"),
+    };
+    LevelKey {
+        text,
+        is_null: matches!(element, ArrayElement::Null),
     }
 }
 
@@ -414,9 +456,9 @@ pub fn panel_dataframe(df: &DataFrame, panel: &Panel) -> Result<DataFrame> {
     if df.column(&f1).is_err() {
         return Ok(df.clone());
     }
-    let c1 = column_to_strings(df, &f1)?;
+    let c1 = level_keys(df, &f1)?;
     let c2 = match &panel.facet2 {
-        Some(_) => Some(column_to_strings(df, &naming::aesthetic_column("facet2"))?),
+        Some(_) => Some(level_keys(df, &naming::aesthetic_column("facet2"))?),
         None => None,
     };
 

@@ -10,23 +10,23 @@ use hephaestus::plot::geom::Raw;
 use hephaestus::plot::{Plot as HPlot, TextGeom};
 
 use super::super::channels::{
-    aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
+    aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings, is_text_column,
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    constant_number, wire_material, Ctx, LegendKind, MatDefault, MaterialSpec,
+    constant_number, require_column, wire_material, Ctx, LegendKind, MatDefault, MaterialSpec,
 };
 use crate::plot::types::{ArrayElement, ParameterValue};
 use crate::plot::AestheticValue;
-use crate::{GgsqlError, Result};
+use crate::Result;
 
 pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let (layer, df) = (ctx.layer, ctx.df);
     let n = df.height();
 
-    let pos1 = require(layer, "pos1")?;
-    let pos2 = require(layer, "pos2")?;
-    let label = require(layer, "label")?;
+    let pos1 = require_column(ctx, "pos1")?;
+    let pos2 = require_column(ctx, "pos2")?;
+    let label = require_column(ctx, "label")?;
 
     let mut b = TextGeom::builder();
 
@@ -136,11 +136,6 @@ fn offset(layer: &crate::Layer) -> (f64, f64) {
     }
 }
 
-fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
-    aesthetic_column_name(layer, aesthetic)
-        .ok_or_else(|| GgsqlError::WriterError(format!("text layer has no {aesthetic} mapping")))
-}
-
 /// A justification aesthetic (`hjust` / `vjust`) as a 0–1 fraction. ggsql accepts
 /// either a number or a keyword, so the keywords are mapped the way the
 /// Vega-Lite writer's `convert_hjust` / `convert_vjust` map them to `align` /
@@ -148,11 +143,15 @@ fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
 fn justification(ctx: &Ctx, aesthetic: &str) -> Vec<f64> {
     let n = ctx.df.height();
     if let Some(col) = aesthetic_column_name(ctx.layer, aesthetic) {
-        if let Ok(values) = column_to_f64(ctx.df, col) {
+        // Dispatch on the column's own type — a keyword column casts to numbers
+        // without erroring, so a numeric read cannot be tried first (see
+        // `is_text_column`).
+        if is_text_column(ctx.df, col) {
+            if let Ok(names) = column_to_strings(ctx.df, col) {
+                return names.iter().map(|s| parse_justification(s)).collect();
+            }
+        } else if let Ok(values) = column_to_f64(ctx.df, col) {
             return values;
-        }
-        if let Ok(names) = column_to_strings(ctx.df, col) {
-            return names.iter().map(|s| parse_justification(s)).collect();
         }
         return vec![0.5; n];
     }

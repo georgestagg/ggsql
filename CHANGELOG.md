@@ -89,6 +89,10 @@
 - `RENAMING` was ignored on a discrete or ordinal scale over a non-string domain
   (`SCALE ORDINAL color RENAMING 6 => 'June'` on a numeric month), because the
   break label was formatted as `6.0` while the rename was keyed on `6`.
+- A temporal axis given a calendar interval (`SETTING breaks => '2 months'`) no
+  longer draws ticks outside its own domain. The generator steps a whole interval
+  past each end, and the filter that trims them back compared only plain numbers,
+  so a date break was never constrained at all.
 - Minor breaks are no longer extrapolated beyond the outermost major break when
   the majors are unevenly spaced, as they are when set by hand
   (`SETTING breaks => (37, 42, 55)`). Their spacing was taken from the first

@@ -14,9 +14,11 @@ use hephaestus::plot::scale::{self, Scale as HScale, TransformKind as HTransform
 use hephaestus::scales::value::{
     Date as HDate, DateTime as HDateTime, LinetypeStep, Time as HTime, Value as HValue,
 };
+use hephaestus::scales::Direction;
 
-use super::channels::{column_to_f64, column_to_strings, NULL_CATEGORY};
+use super::channels::{column_to_channel, column_to_f64, ChannelData, NULL_CATEGORY};
 use crate::naming;
+use crate::plot::aesthetic::POSITION_SUFFIXES;
 use crate::plot::scale::{linetype_to_stroke_dash, TransformKind as GTransform};
 use crate::plot::{ArrayElement, OutputRange, ParameterValue, Scale as GScale, ScaleTypeKind};
 use crate::DataFrame;
@@ -51,52 +53,41 @@ pub enum RangeKind {
 
 /// Build a hephaestus scale from a resolved ggsql scale. `None` when ggsql
 /// resolved no scale type, so there is nothing to register.
-pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
+pub fn build_scale(scale: &GScale, kind: RangeKind) -> Option<HScale> {
     // No resolved scale type → no scale to register. ggsql is the source of scale
     // truth; the writer never fabricates one.
-    let type_kind = scale
-        .and_then(|s| s.scale_type.as_ref())
-        .map(|st| st.scale_type_kind())?;
-    let transform = scale
-        .and_then(|s| s.transform.as_ref())
-        .map(|t| t.transform_kind());
-
-    // `SETTING reverse => true` is a scale property ggsql resolves but does not
-    // apply — each writer flips its own scale (the Vega-Lite writer emits VL's
-    // `scale.reverse`). hephaestus has no reversal concept either, so it is
-    // expressed as the domain read backwards: a descending continuous domain
-    // normalises to a descending fraction, and a reversed category list both
-    // flips a position axis and walks a material scale's palette the other way
-    // — which is what VL's `reverse` does for each kind.
-    let reversed = is_reversed(scale);
-    let flip = |a: f64, b: f64| if reversed { (b, a) } else { (a, b) };
+    let type_kind = scale.scale_type.as_ref().map(|st| st.scale_type_kind())?;
+    let transform = scale.transform.as_ref().map(|t| t.transform_kind());
 
     let mut hs = match type_kind {
-        ScaleTypeKind::Discrete => scale::discrete(domain_values(scale, reversed)),
-        ScaleTypeKind::Ordinal => scale::ordinal(domain_values(scale, reversed)),
+        ScaleTypeKind::Discrete => scale::discrete(domain_values(Some(scale))),
+        ScaleTypeKind::Ordinal => scale::ordinal(domain_values(Some(scale))),
         ScaleTypeKind::Identity => scale::identity(),
         ScaleTypeKind::Binned => {
             let h_transform = transform.and_then(map_transform);
-            let (min, max) = continuous_domain(scale);
-            let breaks = scale.map(|x| x.numeric_breaks()).unwrap_or(vec![min, max]);
-            let (start, end) = flip(min, max);
-            let mut c = scale::binned(start..=end, breaks);
+            let (min, max) = continuous_domain(Some(scale));
+            // A binned scale needs at least two edges to have a bin at all;
+            // resolution normally supplies them, and the domain's own ends are
+            // the only honest stand-in when it hasn't.
+            let breaks = Some(scale.numeric_breaks())
+                .filter(|edges| edges.len() >= 2)
+                .unwrap_or_else(|| vec![min, max]);
+            let mut c = scale::binned(min..=max, breaks);
             if let Some(t) = h_transform {
                 c = c.with_transform(t);
             }
             c
         }
         ScaleTypeKind::Continuous => {
-            let (min, max) = continuous_domain(scale);
-            let (start, end) = flip(min, max);
+            let (min, max) = continuous_domain(Some(scale));
             // A temporal channel becomes a calendar-aware scale, so the ticks
             // hephaestus generates for itself (and their labels) are dates
             // rather than epoch numbers. ggsql's own breaks still win where it
             // resolved them — see `apply_breaks`.
-            match temporal_scale(transform, start, end) {
+            match temporal_scale(transform, min, max) {
                 Some(t) => t,
                 None => {
-                    let mut c = scale::continuous(start..=end);
+                    let mut c = scale::continuous(min..=max);
                     if let Some(t) = transform.and_then(map_transform) {
                         c = c.with_transform(t);
                     }
@@ -106,8 +97,21 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
         }
     };
 
+    // `SETTING reverse => true` is a property ggsql resolves but does not apply,
+    // leaving each writer to flip its own scale — the Vega-Lite writer emits VL's
+    // `scale.reverse`, and this is hephaestus's equivalent. Reversal is a property
+    // of the *mapping*, not of the domain, so one flag covers every scale kind and
+    // both roles: a position axis runs backwards and a material scale walks its
+    // palette from the far end, while the domain (and therefore the breaks, the
+    // bin edges and the order a legend lists its keys in) stays as ggsql resolved
+    // it. That is also what VL's `reverse` means — it flips the range, not the
+    // domain — so the two writers order a reversed legend the same way.
+    if is_reversed(Some(scale)) {
+        hs = hs.with_direction(Direction::Reversed);
+    }
+
     if kind != RangeKind::Position {
-        if let Some(OutputRange::Array(values)) = scale.and_then(|s| s.output_range.as_ref()) {
+        if let Some(OutputRange::Array(values)) = scale.output_range.as_ref() {
             hs = apply_output_range(hs, kind, values);
         }
     }
@@ -117,10 +121,7 @@ pub fn build_scale(scale: Option<&GScale>, kind: RangeKind) -> Option<HScale> {
     // Vega-Lite writer — exactly. ggsql's breaks pair with the same resolved
     // domain hephaestus reads, so they line up. `apply_breaks` is a no-op when
     // the scale has no resolved breaks.
-    if let Some(scale) = scale {
-        hs = apply_breaks(hs, scale, Some(type_kind));
-    }
-    Some(hs)
+    Some(apply_breaks(hs, scale, type_kind))
 }
 
 /// Build a per-panel position scale for a **free** facet dimension, computing
@@ -153,25 +154,36 @@ pub fn free_position_scale(
         .and_then(|s| s.transform.as_ref())
         .map(|t| t.transform_kind());
 
-    match type_kind {
+    let hs = match type_kind {
         ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal => {
-            let vals: Vec<HValue> = panel_categories(dfs, base)
-                .into_iter()
-                .map(|s| HValue::String(Arc::from(s.as_str())))
-                .collect();
-            Some(if matches!(type_kind, ScaleTypeKind::Ordinal) {
+            let vals = panel_categories(global, dfs, base);
+            // An empty cell has no categories to free the dimension over; `None`
+            // sends the panel back to the shared scale (`PanelScales::use_shared`)
+            // rather than registering a domainless axis.
+            if vals.is_empty() {
+                return None;
+            }
+            if matches!(type_kind, ScaleTypeKind::Ordinal) {
                 scale::ordinal(vals)
             } else {
                 scale::discrete(vals)
-            })
+            }
         }
-        ScaleTypeKind::Identity => Some(scale::identity()),
+        ScaleTypeKind::Identity => scale::identity(),
         ScaleTypeKind::Binned => global
             .and_then(|g| free_binned_scale(g, dfs, base))
             // No usable break array → fall back to a plain continuous panel scale.
-            .or_else(|| free_continuous_scale(global, dfs, base, transform)),
-        ScaleTypeKind::Continuous => free_continuous_scale(global, dfs, base, transform),
-    }
+            .or_else(|| free_continuous_scale(global, dfs, base, transform))?,
+        ScaleTypeKind::Continuous => free_continuous_scale(global, dfs, base, transform)?,
+    };
+
+    // The same flag the fixed path sets (see [`build_scale`]): freeing a
+    // dimension narrows its domain, it does not undo `SETTING reverse => true`.
+    Some(if is_reversed(global) {
+        hs.with_direction(Direction::Reversed)
+    } else {
+        hs
+    })
 }
 
 /// A per-panel continuous position scale over the panel's own data extent.
@@ -181,7 +193,7 @@ pub fn free_position_scale(
 /// bin edges, and what the Vega-Lite writer does with a free temporal axis. The
 /// alternative, letting hephaestus pick per-panel calendar ticks, invents breaks
 /// ggsql didn't resolve and packs full ISO labels into a panel too narrow to hold
-/// them (there is no label thinning — see PLAN.md §9). A panel no global break
+/// them (the writer does no label thinning). A panel no global break
 /// falls inside keeps hephaestus's own ticks rather than a bare axis; they are
 /// dates either way, because the scale carries the calendar unit.
 fn free_continuous_scale(
@@ -319,7 +331,11 @@ fn panel_extent(dfs: &[&DataFrame], base: &str) -> Option<(f64, f64)> {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for df in dfs {
-        for suffix in ["", "min", "max", "end"] {
+        // The base aesthetic plus its whole position family, so a panel holding
+        // only extents (a bar's `pos2end`, a ribbon's `pos2min`/`max`) still
+        // sizes its axis — the same family `execute/scale.rs` trains a fixed
+        // scale over.
+        for suffix in std::iter::once("").chain(POSITION_SUFFIXES.iter().copied()) {
             let name = naming::aesthetic_column(&format!("{base}{suffix}"));
             if df.column(&name).is_ok() {
                 if let Ok(values) = column_to_f64(df, &name) {
@@ -334,24 +350,47 @@ fn panel_extent(dfs: &[&DataFrame], base: &str) -> Option<(f64, f64)> {
     (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
 }
 
-/// The distinct category values of a position column across the given slices,
-/// in first-seen order.
-fn panel_categories(dfs: &[&DataFrame], base: &str) -> Vec<String> {
+/// The categories a panel occupies: ggsql's globally resolved domain, narrowed
+/// to the levels these slices actually contain and left in the global order.
+///
+/// Selecting from `input_range` is what keeps a free panel agreeing with a fixed
+/// one — the same level order, the same [`channels::NULL_CATEGORY`] sentinel for
+/// a null level, and the same value *type* [`column_to_channel`] hands over.
+/// Re-deriving the domain from the column's text would break all three. The same
+/// narrowing [`free_binned_scale`] does for bin edges.
+fn panel_categories(global: Option<&GScale>, dfs: &[&DataFrame], base: &str) -> Vec<HValue> {
     let name = naming::aesthetic_column(base);
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
+    let domain = domain_values(global);
+    let mut present = vec![false; domain.len()];
     for df in dfs {
-        if df.column(&name).is_ok() {
-            if let Ok(values) = column_to_strings(df, &name) {
-                for v in values {
-                    if seen.insert(v.clone()) {
-                        out.push(v);
-                    }
-                }
+        let Ok(data) = column_to_channel(df, &name) else {
+            continue;
+        };
+        // Matched with `key_eq`, exactly as hephaestus matches data to domain at
+        // draw time, so a level counts as present here only if it would resolve
+        // there too.
+        for value in channel_values(data) {
+            if let Some(i) = domain.iter().position(|level| level.key_eq(&value)) {
+                present[i] = true;
             }
         }
     }
-    out
+    domain
+        .into_iter()
+        .zip(present)
+        .filter_map(|(level, present)| present.then_some(level))
+        .collect()
+}
+
+/// A column's values as the hephaestus values a scale domain is matched against.
+fn channel_values(data: ChannelData) -> Vec<HValue> {
+    match data {
+        ChannelData::Strings(values) => values
+            .into_iter()
+            .map(|v| HValue::String(Arc::from(v.as_str())))
+            .collect(),
+        ChannelData::Floats(values) => values.into_iter().map(HValue::Number).collect(),
+    }
 }
 
 /// Domain for a continuous scale. ggsql's resolved `numeric_domain` is
@@ -367,55 +406,60 @@ fn continuous_domain(scale: Option<&GScale>) -> (f64, f64) {
 }
 
 /// Whether the scale carries `SETTING reverse => true`.
-fn is_reversed(scale: Option<&GScale>) -> bool {
+pub fn is_reversed(scale: Option<&GScale>) -> bool {
     matches!(
         scale.and_then(|s| s.properties.get("reverse")),
         Some(ParameterValue::Boolean(true))
     )
 }
 
-/// Category domain for a discrete/ordinal scale, as hephaestus values.
-fn domain_values(scale: Option<&GScale>, reversed: bool) -> Vec<HValue> {
-    let mut values: Vec<HValue> = scale
+/// Category domain for a discrete/ordinal scale, as hephaestus values, in the
+/// order ggsql resolved. `reverse` is a direction on the scale rather than a
+/// reordering here — see [`build_scale`].
+fn domain_values(scale: Option<&GScale>) -> Vec<HValue> {
+    scale
         .and_then(|s| s.input_range.as_ref())
         .map(|range| range.iter().map(category_value).collect())
-        .unwrap_or_default();
-    if reversed {
-        values.reverse();
-    }
-    values
+        .unwrap_or_default()
 }
 
 /// A categorical domain entry as a hephaestus value. Identical to
-/// [`array_element_to_value`] except that a null level becomes
-/// [`channels::NULL_CATEGORY`], the sentinel the data side substitutes for its
-/// own nulls — see that constant for why the two must agree.
+/// [`array_element_to_value`] except for the two levels the data side cannot
+/// hand over as themselves, which both sides therefore spell as a string: a
+/// null becomes [`channels::NULL_CATEGORY`], and a boolean its category name
+/// (`column_to_channel` reads a boolean column as strings — see there).
 fn category_value(element: &ArrayElement) -> HValue {
     match element {
         ArrayElement::Null => HValue::String(Arc::from(NULL_CATEGORY)),
+        ArrayElement::Boolean(_) => HValue::String(Arc::from(element.to_key_string().as_str())),
         other => array_element_to_value(other),
     }
 }
 
 /// Attach the resolved output range to a material scale.
 fn apply_output_range(hs: HScale, kind: RangeKind, values: &[ArrayElement]) -> HScale {
+    let values: Vec<&ArrayElement> = values.iter().collect();
     match kind {
-        RangeKind::Color => hs.range_colors(values.iter().filter_map(array_element_to_color)),
-        RangeKind::Number => hs.range_numbers(values.iter().filter_map(|e| e.to_f64())),
-        RangeKind::Shape | RangeKind::Text => {
-            hs.range_strings(values.iter().map(|e| Arc::from(e.to_key_string().as_str())))
-        }
+        RangeKind::Color => hs.range_colors(values.into_iter().filter_map(array_element_to_color)),
+        RangeKind::Number => hs.range_numbers(values.into_iter().filter_map(|e| e.to_f64())),
+        RangeKind::Shape | RangeKind::Text => hs.range_strings(
+            values
+                .into_iter()
+                .map(|e| Arc::from(e.to_key_string().as_str())),
+        ),
         RangeKind::Linetype => {
-            hs.range_linetypes(values.iter().map(|e| map_linetype(&e.to_key_string())))
+            hs.range_linetypes(values.into_iter().map(|e| map_linetype(&e.to_key_string())))
         }
         // hephaestus takes a font weight as a number and an angle in radians, so
         // the range converts exactly as a literal on the same channel does.
-        RangeKind::FontWeight => {
-            hs.range_numbers(values.iter().map(|e| parse_font_weight(&e.to_key_string())))
-        }
+        RangeKind::FontWeight => hs.range_numbers(
+            values
+                .into_iter()
+                .map(|e| parse_font_weight(&e.to_key_string())),
+        ),
         RangeKind::Angle => hs.range_numbers(
             values
-                .iter()
+                .into_iter()
                 .filter_map(|e| e.to_f64())
                 .map(f64::to_radians),
         ),
@@ -480,12 +524,9 @@ pub fn parse_font_weight(value: &str) -> f64 {
 ///
 /// Minor breaks travel the same way, via [`apply_minor_breaks`]: break positions are
 /// ggsql's to own, majors and minors alike, so nothing here invents either.
-fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) -> HScale {
+fn apply_breaks(hs: HScale, scale: &GScale, type_kind: ScaleTypeKind) -> HScale {
     let hs = apply_minor_breaks(hs, scale, type_kind);
-    let categorical = matches!(
-        type_kind,
-        Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal)
-    );
+    let categorical = matches!(type_kind, ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal);
     // A suppressed label means different things either side of this line. On a
     // categorical scale it is `RENAMING <level> => null`, i.e. hide the text but
     // keep the category — dropping it would misalign the axis. On a numeric one
@@ -501,7 +542,7 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
         return hs;
     }
     match type_kind {
-        Some(ScaleTypeKind::Discrete) | Some(ScaleTypeKind::Ordinal) => {
+        ScaleTypeKind::Discrete | ScaleTypeKind::Ordinal => {
             // Pair each label with the category at its resolved position, which
             // for a categorical scale is the 1-based index into `input_range`.
             // Keyed by position rather than zipped, so a break set that doesn't
@@ -528,7 +569,7 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
         // the variant its own generated breaks come back as, so hephaestus formats
         // any break we don't label as a date rather than as an epoch number.
         _ => {
-            let temporal = matches!(type_kind, Some(ScaleTypeKind::Continuous))
+            let temporal = matches!(type_kind, ScaleTypeKind::Continuous)
                 .then(|| scale.transform.as_ref().map(|t| t.transform_kind()))
                 .flatten();
             hs.with_breaks_labeled(
@@ -545,10 +586,10 @@ fn apply_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) ->
 /// ggsql's majors instead of being generated from the domain. Without this a sparse
 /// major set — a fixed temporal axis narrowed to one break in a facet panel — gets
 /// hephaestus's own sub-unit minors, which read as a dotted rail.
-fn apply_minor_breaks(hs: HScale, scale: &GScale, type_kind: Option<ScaleTypeKind>) -> HScale {
+fn apply_minor_breaks(hs: HScale, scale: &GScale, type_kind: ScaleTypeKind) -> HScale {
     // Same variant rule as the majors: a temporal scale's positions go back as
     // typed temporal values, everything else as plain numbers.
-    let temporal = matches!(type_kind, Some(ScaleTypeKind::Continuous))
+    let temporal = matches!(type_kind, ScaleTypeKind::Continuous)
         .then(|| scale.transform.as_ref().map(|t| t.transform_kind()))
         .flatten();
     apply_pinned_minors(hs, scale.numeric_minor_breaks().as_deref(), temporal)
@@ -564,66 +605,24 @@ pub struct Bin {
     pub label: String,
 }
 
-/// The bins of a resolved binned scale, labelled exactly as the Vega-Lite
-/// writer's `build_binned_facet_label_expr` does: `"lower – upper"` (en dash),
-/// with per-edge `RENAMING` overrides, and the open-ended terminal forms implied
-/// by the scale's `closed` side when a terminal edge label is suppressed (which
-/// is what `oob => 'squish'` inserts). Empty when the scale has no resolved
-/// break array.
+/// The bins of a resolved binned scale, in the numeric form the writer needs:
+/// ggsql's own [`Scale::binned_bins`](crate::plot::Scale::binned_bins) labelling
+/// — shared with the Vega-Lite writer, so both name a bin the same way — plus
+/// each bin's centre, which is the value a binned data column carries.
 pub fn binned_bins(scale: &GScale) -> Vec<Bin> {
-    let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") else {
-        return Vec::new();
-    };
-    if breaks.len() < 2 {
-        return Vec::new();
-    }
-    let closed_right = matches!(
-        scale.properties.get("closed"),
-        Some(ParameterValue::String(s)) if s == "right"
-    );
-    let mapping = scale.label_mapping.as_ref();
-    let last = breaks.len() - 2;
-
-    let mut bins = Vec::with_capacity(breaks.len() - 1);
-    for i in 0..=last {
-        let (lower, upper) = (&breaks[i], &breaks[i + 1]);
-        let (Some(lo), Some(hi)) = (lower.to_f64(), upper.to_f64()) else {
-            continue;
-        };
-        let (lo_key, hi_key) = (lower.to_key_string(), upper.to_key_string());
-        // A suppressed terminal edge (`oob => 'squish'`) means the bin is
-        // open-ended in that direction.
-        let suppressed = |key: &str| matches!(mapping.and_then(|m| m.get(key)), Some(None));
-        let label_of = |key: &str| {
-            mapping
-                .and_then(|m| m.get(key))
-                .cloned()
-                .flatten()
-                .unwrap_or_else(|| key.to_string())
-        };
-        let label = if i == 0 && suppressed(&lo_key) {
-            format!(
-                "{} {}",
-                if closed_right { "≤" } else { "<" },
-                label_of(&hi_key)
-            )
-        } else if i == last && suppressed(&hi_key) {
-            format!(
-                "{} {}",
-                if closed_right { ">" } else { "≥" },
-                label_of(&lo_key)
-            )
-        } else {
-            format!("{} – {}", label_of(&lo_key), label_of(&hi_key))
-        };
-        bins.push(Bin {
-            lower: lo,
-            upper: hi,
-            centre: (lo + hi) / 2.0,
-            label,
-        });
-    }
-    bins
+    scale
+        .binned_bins()
+        .into_iter()
+        .filter_map(|bin| {
+            let (lower, upper) = (bin.lower.to_f64()?, bin.upper.to_f64()?);
+            Some(Bin {
+                lower,
+                upper,
+                centre: (lower + upper) / 2.0,
+                label: bin.label,
+            })
+        })
+        .collect()
 }
 
 /// The bin whose centre is closest to `value` — the join from a binned data cell
@@ -749,6 +748,7 @@ mod tests {
     /// and properties, as ggsql's resolution would leave it.
     fn binned_scale(edges: &[f64], props: &[(&str, ParameterValue)]) -> GScale {
         let mut scale = GScale::new("facet1");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
         scale.properties.insert(
             "breaks".to_string(),
             ParameterValue::Array(edges.iter().map(|e| ArrayElement::Number(*e)).collect()),
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn temporal_scale_labels_ggsql_breaks_as_dates() {
         let scale = date_scale((1208, 1264), &[1208, 1236, 1264]);
-        let hs = build_scale(Some(&scale), RangeKind::Position).expect("scale");
+        let hs = build_scale(&scale, RangeKind::Position).expect("scale");
         let locale = hephaestus::scales::locale::Locale::EN_US;
         let labels: Vec<String> = hs.breaks(5).iter().map(|b| hs.format(b, &locale)).collect();
         assert_eq!(labels, vec!["1973-04-23", "1973-05-21", "1973-06-18"]);
@@ -853,6 +853,40 @@ mod tests {
         }
         assert!(temporal_scale(Some(GTransform::Log10), 1.0, 10.0).is_none());
         assert!(temporal_scale(None, 1.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn boolean_domain_matches_the_data_side() {
+        // hephaestus matches data to domain by `Value` variant, so a boolean
+        // column's two representations have to agree: `column_to_channel` reads
+        // one as category strings, and the domain must spell them the same way.
+        let mut scale = GScale::new("fill");
+        scale.scale_type = Some(crate::plot::ScaleType::discrete());
+        scale.input_range = Some(vec![
+            ArrayElement::Boolean(false),
+            ArrayElement::Boolean(true),
+        ]);
+        let domain = domain_values(Some(&scale));
+        let expected = [
+            HValue::String(Arc::from("false")),
+            HValue::String(Arc::from("true")),
+        ];
+        assert_eq!(domain.len(), expected.len());
+        for (got, want) in domain.iter().zip(&expected) {
+            assert!(got.key_eq(want), "expected {want:?}, got {got:?}");
+        }
+
+        let df = crate::df! { "flag" => vec![true, false] }.unwrap();
+        let ChannelData::Strings(values) = column_to_channel(&df, "flag").unwrap() else {
+            panic!("a boolean column should arrive as category strings");
+        };
+        for value in values {
+            let value = HValue::String(Arc::from(value.as_str()));
+            assert!(
+                domain.iter().any(|level| level.key_eq(&value)),
+                "no domain level matches {value:?}"
+            );
+        }
     }
 
     #[test]

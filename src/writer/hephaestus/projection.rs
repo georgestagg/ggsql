@@ -38,8 +38,14 @@ fn apply_proj_cartesian(
         if let Some(ParameterValue::Boolean(false)) = proj.properties.get("clip") {
             plot = plot.clip(false);
         }
+        // The two conventions are inverses: ggsql's `ratio` is ggplot2's
+        // `coord_fixed` (vertical step : horizontal step), while hephaestus's
+        // `aspect_ratio` is the screen space one x unit takes per y unit. ggsql's
+        // parameter constraint keeps it > 0.
         if let Some(ParameterValue::Number(ratio)) = proj.properties.get("ratio") {
-            plot = plot.aspect_ratio(*ratio).aspect_mode(AspectMode::Range);
+            plot = plot
+                .aspect_ratio(1.0 / *ratio)
+                .aspect_mode(AspectMode::Range);
         }
     }
     // Edge-only axes for fixed scales (ggplot2 look): x on the bottom-most panel
@@ -203,7 +209,14 @@ fn apply_proj_map(mut plot: HPlot, proj: &Projection) -> HPlot {
         if let Some(lat) = computed_str("graticule_lat") {
             custom = custom.y_major(wkt_to_lines(lat));
         }
-        plot = plot.projection(HProj::Custom(custom)).clip(true);
+        // `clip` applies to every coord kind, as it does in the Vega-Lite writer
+        // (`apply_clip_to_layers`): the boundary is still the drawing surface
+        // when clipping is off, marks outside it just aren't cut away.
+        let clip = !matches!(
+            proj.properties.get("clip"),
+            Some(ParameterValue::Boolean(false))
+        );
+        plot = plot.projection(HProj::Custom(custom)).clip(clip);
     }
     plot
 }

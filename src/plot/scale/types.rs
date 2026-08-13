@@ -14,6 +14,15 @@ fn default_label_template() -> String {
     "{}".to_string()
 }
 
+/// One bin of a resolved binned scale: the edges bounding it and the text that
+/// names it. See [`Scale::binned_bins`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BinLabel {
+    pub lower: ArrayElement,
+    pub upper: ArrayElement,
+    pub label: String,
+}
+
 /// Scale configuration (from SCALE clause)
 ///
 /// Syntax: `SCALE [TYPE] aesthetic [FROM ...] [TO ...] [VIA ...] [SETTING ...] [RENAMING ...]`
@@ -191,6 +200,66 @@ impl Scale {
             }
         }
         out
+    }
+
+    /// The bins of a binned scale, each with its edges and display label.
+    ///
+    /// One definition of the bin-labelling contract, for every consumer that has
+    /// to name a bin: `"lower – upper"` (en dash) with per-edge `RENAMING`
+    /// applied to each side, and an open form (`≤`/`<` at the bottom, `>`/`≥` at
+    /// the top, per the scale's `closed` side) where a *terminal* edge's label is
+    /// suppressed — which is what `oob => 'squish'` does, because the outermost
+    /// bins then reach past the edge value and it is no longer a real boundary.
+    ///
+    /// Empty for a scale with no resolved break array, and for any scale type
+    /// other than binned.
+    pub fn binned_bins(&self) -> Vec<BinLabel> {
+        if self.scale_type.as_ref().map(|st| st.scale_type_kind())
+            != Some(super::ScaleTypeKind::Binned)
+        {
+            return Vec::new();
+        }
+        let Some(ParameterValue::Array(breaks)) = self.properties.get("breaks") else {
+            return Vec::new();
+        };
+        if breaks.len() < 2 {
+            return Vec::new();
+        }
+        let closed_right = matches!(
+            self.properties.get("closed"),
+            Some(ParameterValue::String(s)) if s == "right"
+        );
+        let mapping = self.label_mapping.as_ref();
+        let last = breaks.len() - 2;
+
+        (0..=last)
+            .map(|i| {
+                let (lower, upper) = (breaks[i].clone(), breaks[i + 1].clone());
+                let (lo_key, hi_key) = (lower.to_key_string(), upper.to_key_string());
+                let suppressed = |key: &str| matches!(mapping.and_then(|m| m.get(key)), Some(None));
+                let label_of = |key: &str| {
+                    mapping
+                        .and_then(|m| m.get(key))
+                        .cloned()
+                        .flatten()
+                        .unwrap_or_else(|| key.to_string())
+                };
+                let label = if i == 0 && suppressed(&lo_key) {
+                    let symbol = if closed_right { "≤" } else { "<" };
+                    format!("{symbol} {}", label_of(&hi_key))
+                } else if i == last && suppressed(&hi_key) {
+                    let symbol = if closed_right { ">" } else { "≥" };
+                    format!("{symbol} {}", label_of(&lo_key))
+                } else {
+                    format!("{} – {}", label_of(&lo_key), label_of(&hi_key))
+                };
+                BinLabel {
+                    lower,
+                    upper,
+                    label,
+                }
+            })
+            .collect()
     }
 
     /// Numeric domain as `(min, max)` from the resolved input range.

@@ -117,7 +117,7 @@ Per-folder CLAUDE.md files cover component-specific test guidance.
 - *How does the parser work? How is a `Plot` built?* → [`src/CLAUDE.md`](src/CLAUDE.md), then `src/parser/`.
 - *How do I add a new geom / scale type / coord?* → [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
 - *How does Vega-Lite output get assembled?* → [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md).
-- *How does the raster (PNG) writer work?* → [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md), with the phase log and deferred work in [`src/writer/hephaestus/PLAN.md`](src/writer/hephaestus/PLAN.md).
+- *How does the raster (PNG) writer work?* → [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md), which also lists its known gaps.
 - *How does a query become rendered output end-to-end?* → [`src/CLAUDE.md`](src/CLAUDE.md) (execution pipeline), then `src/execute/`.
 - *How does the Jupyter kernel route messages?* → [`ggsql-jupyter/CLAUDE.md`](ggsql-jupyter/CLAUDE.md).
 - *How does the VS Code / Positron extension talk to the kernel?* → [`ggsql-vscode/CLAUDE.md`](ggsql-vscode/CLAUDE.md).

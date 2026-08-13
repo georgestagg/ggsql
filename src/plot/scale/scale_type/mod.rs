@@ -980,15 +980,10 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
                     }
                     _ => derive(resolved_transform.default_minor_break_count()),
                 };
-                // Drop anything outside the domain. Compared as f64 rather than via
-                // `filter_breaks_to_range`, which only filters `Number` elements and
-                // so can't constrain a temporal break at all (a gap the majors path
-                // still has — see PLAN.md §9).
-                let minors = match extent {
-                    Some((min, max)) => minors
-                        .into_iter()
-                        .filter(|e| e.to_f64().is_some_and(|v| v >= min && v <= max))
-                        .collect(),
+                // Drop anything outside the domain, the same way the majors are
+                // filtered.
+                let minors = match scale.input_range.as_ref() {
+                    Some(range) => super::super::breaks::filter_breaks_to_range(&minors, range),
                     None => minors,
                 };
                 scale
@@ -1954,16 +1949,6 @@ pub(crate) fn resolve_common_steps<T: ScaleTypeTrait + ?Sized>(
         user_explicit_expand,
     );
 
-    // Record the factors that were actually applied, normalised to [mult, add].
-    // `context.default_expand` (zero for polar full-circle theta) is only visible
-    // here, so a consumer that has to expand a range of its own later — a writer
-    // computing a per-panel domain for a free facet dimension, via
-    // `Scale::expand_range` — would otherwise re-derive the wrong factors.
-    scale.properties.insert(
-        "expand".to_string(),
-        ParameterValue::Array(vec![ArrayElement::Number(mult), ArrayElement::Number(add)]),
-    );
-
     // Track the original user range to know which values are explicit vs inferred
     let original_user_range = scale.input_range.clone();
 
@@ -2007,12 +1992,14 @@ pub(crate) fn resolve_common_steps<T: ScaleTypeTrait + ?Sized>(
     //
     // Then clip to the transform's valid domain to prevent invalid values
     // (e.g., expansion producing negative values for log scales)
+    let mut applied_expand = (0.0, 0.0);
     if let Some(range) = base_range {
         let is_position = is_position_aesthetic(aesthetic);
         let is_deduced = !scale.explicit_input_range
             || input_range_has_nulls(original_user_range.as_deref().unwrap_or(&[]));
 
         if !is_discrete_range && is_position && is_deduced {
+            applied_expand = (mult, add);
             let expanded =
                 expand_numeric_range_selective(&range, mult, add, original_user_range.as_deref());
             scale.input_range = Some(clip_to_transform_domain(&expanded, &resolved_transform));
@@ -2020,6 +2007,28 @@ pub(crate) fn resolve_common_steps<T: ScaleTypeTrait + ?Sized>(
             // No expansion for discrete scales, material aesthetics, or fully explicit ranges
             scale.input_range = Some(range);
         }
+    }
+
+    // Record the factors that were actually applied, normalised to [mult, add],
+    // so a consumer that has to expand a range of its own later — a writer
+    // computing a per-panel domain for a free facet dimension, via
+    // `Scale::expand_range` — pads it exactly as resolution padded the global
+    // one. Two things are only visible from here: `context.default_expand` (zero
+    // for a polar full-circle theta), and the decision *not* to expand at all,
+    // which an explicit `FROM (0, 100)` makes.
+    //
+    // Only where `expand` is a property the scale accepts in the first place
+    // (`resolve_properties` drops the default for a material aesthetic, and a
+    // discrete scale rejects the parameter outright) — recording it elsewhere
+    // would manufacture state that user input could not have produced.
+    if is_position_aesthetic(aesthetic) && scale.properties.contains_key("expand") {
+        scale.properties.insert(
+            "expand".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(applied_expand.0),
+                ArrayElement::Number(applied_expand.1),
+            ]),
+        );
     }
 
     // 4. Convert input_range values using transform (e.g., ISO strings → Date/DateTime/Time)

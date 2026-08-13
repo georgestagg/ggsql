@@ -400,8 +400,9 @@ fn render_spec(spec: Spec, writer: &WriterSpec, output: Option<PathBuf>, verbose
     let render = match writer.name.as_str() {
         "vegalite" => render_vegalite(&spec, &writer.options),
         "hephaestus" => render_hephaestus(&spec, &writer.options),
-        _ => {
-            eprintln!("\nNote: Writer '{}' not yet implemented", writer.name);
+        other => {
+            eprintln!("Unknown writer '{}'", other);
+            eprintln!("Available writers: hephaestus, vegalite");
             std::process::exit(1)
         }
     };

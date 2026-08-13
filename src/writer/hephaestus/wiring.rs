@@ -230,13 +230,8 @@ fn wire_positions<G: BuildableGeom>(
             // A position given as a bare constant. It is repeated per row rather
             // than set as a scalar, because a geom whose geometry varies per row
             // rejects a constant position channel.
-            None => constant_position(ctx, &p.aesthetic).ok_or_else(|| {
-                GgsqlError::WriterError(format!(
-                    "{} layer has no {} mapping",
-                    ctx.layer.geom.geom_type(),
-                    p.aesthetic
-                ))
-            })?,
+            None => constant_position(ctx, &p.aesthetic)
+                .ok_or_else(|| missing_aesthetic(ctx, &p.aesthetic))?,
         };
         data.apply(builder, p.channel);
         plot.set_binding(p.channel, ctx.pos_scale(p.axis));
@@ -653,24 +648,6 @@ pub fn constant_number(ctx: &Ctx, aesthetic: &str, default: f64) -> f64 {
     default
 }
 
-/// A constant string from an aesthetic, or `default` when unmapped. Reads an
-/// annotation column first, then a bare `Literal` string (e.g. `shape =>
-/// 'circle'`). Used for constant shape names on composite geom components.
-pub fn constant_string(ctx: &Ctx, aesthetic: &str, default: &str) -> String {
-    if let Some(s) = aesthetic_column_name(ctx.layer, aesthetic)
-        .and_then(|c| column_to_strings(ctx.df, c).ok())
-        .and_then(|v| v.first().cloned())
-    {
-        return s;
-    }
-    if let Some(AestheticValue::Literal(ParameterValue::String(s))) =
-        ctx.layer.mappings.aesthetics.get(aesthetic)
-    {
-        return s.clone();
-    }
-    default.to_string()
-}
-
 /// A position-adjustment offset column (per-row band fractions), or zeros when
 /// the layer wasn't adjusted along that axis. For geoms that derive their own band
 /// edges and so need the offsets as numbers; the generic path wires the same
@@ -748,6 +725,40 @@ impl MaterialSource {
             MaterialSource::Data { scale, .. } => Some(scale),
             MaterialSource::Constant(_) => None,
         }
+    }
+}
+
+/// The column backing an aesthetic a geom cannot draw without.
+pub fn require_column<'a>(ctx: &'a Ctx, aesthetic: &str) -> Result<&'a str> {
+    aesthetic_column_name(ctx.layer, aesthetic).ok_or_else(|| missing_aesthetic(ctx, aesthetic))
+}
+
+/// The error for a geom that reached the writer without an aesthetic it needs,
+/// named in the user's own terms: `map_internal_to_user` turns `pos1` into `x`
+/// (`y` for a transposed layer, `theta`/`radius` under polar), so the message
+/// reads like the query that produced it. Core validation normally catches this
+/// first; the writer's check is the backstop.
+pub fn missing_aesthetic(ctx: &Ctx, aesthetic: &str) -> GgsqlError {
+    let user = ctx
+        .spec
+        .get_aesthetic_context()
+        .map_internal_to_user(aesthetic);
+    GgsqlError::WriterError(format!(
+        "{} layer has no '{user}' mapping",
+        ctx.layer.geom.geom_type()
+    ))
+}
+
+/// [`MaterialSource::apply`] for an aesthetic that may not have resolved.
+/// `None` leaves the channel unset, so hephaestus's own default stands.
+pub fn apply_material<G: BuildableGeom>(
+    builder: &mut GeomBuilder<G>,
+    source: Option<&MaterialSource>,
+    channel: &str,
+    idx: &[usize],
+) {
+    if let Some(source) = source {
+        source.apply(builder, channel, idx);
     }
 }
 

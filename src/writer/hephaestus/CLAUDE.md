@@ -4,14 +4,10 @@
 [hephaestus](https://github.com/posit-dev/hephaestus), a 2D scene renderer with a
 grammar-of-graphics plot API. Behind the non-default `hephaestus` cargo feature.
 
-Two companion documents, with different jobs:
-
-- **[`PLAN.md`](PLAN.md)** — the design of record and the **phase log**: why this
-  writer exists, what each work item changed, what was verified, and §9's
-  inventory of everything deliberately deferred (bugs, upstream items, accepted
-  constraints). Read it when you need *history* or *known gaps*.
-- **This file** — the **architecture**: the abstractions, the invariants, and how
-  to extend them. Read it when you need to *change the code*.
+This file is the **architecture**: the abstractions, the invariants, and how to
+extend them. For how the writer's behaviour got here, read
+[`/CHANGELOG.md`](../../../CHANGELOG.md) and the commit history; what is
+deliberately not done yet is in [Known gaps](#known-gaps) below.
 
 For ggsql language semantics see [`/doc/syntax/`](../../../doc/syntax/); for the
 sibling writer's internals, [`../vegalite/CLAUDE.md`](../vegalite/CLAUDE.md).
@@ -31,8 +27,8 @@ missing *pass-through*, not a better computation here. The same shape held
 upstream — every hephaestus gap this writer hit was a missing setter, not a
 missing algorithm.
 
-There are exactly **two scoped exceptions**, both flagged in the code and in
-PLAN.md §9 as debt that would disappear if ggsql resolved more:
+There are exactly **two scoped exceptions**, both flagged in the code and both
+debt that would disappear if ggsql resolved more:
 
 | Exception | Where | Why |
 | --- | --- | --- |
@@ -260,10 +256,13 @@ registers nothing rather than fabricating a scale.
   a numeric one drops it whole (`visible_break_labels`, since a binned
   `oob => 'squish'` terminal is not a real boundary).
 - **`reverse` is the writer's to apply**, like VL's `scale.reverse`: ggsql
-  resolves the property but never touches the domain. hephaestus has no reversal
-  concept either, so it is expressed as the domain read backwards — descending
-  for a continuum, reversed category list otherwise, which flips a position axis
-  and walks a material palette the other way.
+  resolves the property but never touches the domain, so the writer sets
+  hephaestus's `Direction::Reversed` on the scale. Reversal is a property of the
+  *mapping*, so one flag covers every scale kind and both roles — a position axis
+  runs backwards, a material scale walks its palette from the far end — while the
+  domain, the breaks, the bin edges, and the order a legend lists its keys in all
+  stay as ggsql resolved them. VL's `reverse` flips the range rather than the
+  domain too, so both writers order a reversed legend the same way.
 - **Linetypes go through core's `linetype_to_stroke_dash`**, not hephaestus's
   builtins by name: ggsql resolves an ordinal linetype range to ggplot2-style hex
   patterns, and core's parser is what VL uses, so routing through it is what keeps
@@ -445,7 +444,7 @@ Two kinds, plus a third that doesn't exist yet:
 - **Exact-text assertions** — `facet_strips_*` and the `binned_bins` /
   `bin_at_centre` / temporal-scale unit tests need no GPU and are the real
   regression net.
-- **Snapshot PNG tests do not exist** (PLAN.md §9). Visual correctness is
+- **Snapshot PNG tests do not exist.** Visual correctness is
   verified by eyeballing, usually against the Vega-Lite render of the same
   query. With a moving pinned hephaestus rev, assume a bump needs re-eyeballing:
 
@@ -484,12 +483,25 @@ so one run inventories every gap at once. Implementation notes:
   change still builds under `cargo +1.86 build` *without* the feature.
 - **The dependency is a pinned git rev** on an unpublished `0.0.1` crate
   (`src/Cargo.toml`). crates.io rejects git dependencies even when optional, so
-  this blocks publishing ggsql — the one item in PLAN.md §9 that is a release
-  blocker rather than polish.
+  this blocks publishing ggsql — the one known gap that is a release blocker
+  rather than polish.
+
+## Known gaps
+
+Deliberately not done, in rough order of how likely they are to bite:
+
+- **No snapshot PNG tests** (see [Testing](#testing)) — visual correctness is
+  checked by eyeballing, with the harness for doing it at scale.
+- **The hephaestus dependency is a pinned git rev**, which blocks publishing
+  ggsql to crates.io (see [Operational constraints](#operational-constraints)).
+  The only release blocker here.
+- **No axis label thinning.** ggsql's resolved breaks are drawn as-is, so a
+  narrow facet panel can crowd or overlap long labels — which is why
+  `free_continuous_scale` narrows the *global* breaks to a panel rather than
+  letting hephaestus invent per-panel ones.
 
 ## See also
 
-- [`PLAN.md`](PLAN.md) — design of record, phase log, and §9's deferred work.
 - [`../vegalite/CLAUDE.md`](../vegalite/CLAUDE.md) — the sibling writer to mirror.
 - [`../../CLAUDE.md`](../../CLAUDE.md) — the core crate: feature flags, pipeline.
 - [`../../plot/CLAUDE.md`](../../plot/CLAUDE.md) — the AST and scale types this

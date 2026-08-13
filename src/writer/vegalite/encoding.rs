@@ -6,7 +6,7 @@
 use crate::array_util::as_str;
 use crate::plot::aesthetic::{is_position_aesthetic, AestheticContext};
 use crate::plot::scale::{linetype_to_stroke_dash, shape_to_svg_path, ScaleTypeKind};
-use crate::plot::ParameterValue;
+use crate::plot::{ParameterValue, Scale};
 use crate::{AestheticValue, DataFrame, GgsqlError, Plot, Result};
 use arrow::array::Array;
 use arrow::datatypes::DataType;
@@ -107,81 +107,31 @@ pub(super) fn build_label_expr(
     parts.join(" : ")
 }
 
-/// Build label mappings for threshold scale symbol legends
+/// Build label mappings for threshold scale symbol legends.
 ///
-/// Maps Vega-Lite's auto-generated range labels to our desired labels.
-/// VL format: "<low> – <high>" for most bins (en-dash U+2013), "≥ <low>" for last bin.
-///
-/// # Arguments
-/// * `breaks` - All break values including terminals [0, 25, 50, 75, 100]
-/// * `label_mapping` - Our desired labels keyed by break value string
-/// * `closed` - Which side of bin is closed: "left" (default) or "right"
-///
-/// # Returns
-/// HashMap mapping Vega-Lite's predicted labels to our replacement labels
-pub(super) fn build_symbol_legend_label_mapping(
-    breaks: &[crate::plot::ArrayElement],
-    label_mapping: &HashMap<String, Option<String>>,
-    closed: &str,
-) -> HashMap<String, Option<String>> {
-    let mut result = HashMap::new();
-
-    // We have N breaks = N-1 bins
-    // legend.values has N-1 entries (last terminal excluded for symbol legends)
-    if breaks.len() < 2 {
-        return result;
-    }
-    let num_bins = breaks.len() - 1;
-
-    for i in 0..num_bins {
-        let lower = &breaks[i];
-        let upper = &breaks[i + 1];
-        let lower_str = lower.to_key_string();
-        let upper_str = upper.to_key_string();
-
-        // Get our desired label for this bin (keyed by lower bound)
-        let our_label = label_mapping.get(&lower_str).cloned().flatten();
-
-        // Predict Vega-Lite's generated label
-        // All but last: "<lower> – <upper>" (en-dash U+2013 with spaces)
-        // Last bin: "≥ <lower>" (greater-than-or-equal U+2265)
-        let vl_label = if i == num_bins - 1 {
-            format!("≥ {}", lower_str)
-        } else {
-            format!("{} – {}", lower_str, upper_str)
-        };
-
-        // Check if terminals are suppressed (mapped to None)
-        let lower_suppressed = label_mapping.get(&lower_str) == Some(&None);
-        let upper_suppressed = label_mapping.get(&upper_str) == Some(&None);
-
-        // Get labels for building range format (fall back to break values)
-        let lower_label = our_label.clone().unwrap_or_else(|| lower_str.clone());
-        let upper_label = label_mapping
-            .get(&upper_str)
-            .cloned()
-            .flatten()
-            .unwrap_or_else(|| upper_str.clone());
-
-        // Determine the replacement label
-        // Priority: terminal suppression → range format with custom labels
-        let replacement = if i == 0 && lower_suppressed {
-            // First bin with suppressed lower terminal → open format
-            let symbol = if closed == "right" { "≤" } else { "<" };
-            Some(format!("{} {}", symbol, upper_label))
-        } else if i == num_bins - 1 && upper_suppressed {
-            // Last bin with suppressed upper terminal → open format
-            let symbol = if closed == "right" { ">" } else { "≥" };
-            Some(format!("{} {}", symbol, lower_label))
-        } else {
-            // Use range format with custom labels: "<lower_label> – <upper_label>"
-            Some(format!("{} – {}", lower_label, upper_label))
-        };
-
-        result.insert(vl_label, replacement);
-    }
-
-    result
+/// Vega-Lite generates its own text for each bin of a symbol legend — a
+/// `"<low> – <high>"` range (en dash U+2013) for every bin but the last, which
+/// it renders as `"≥ <low>"`. Those strings are the keys a `labelExpr` has to
+/// match, so this pairs each with the label ggsql resolved for that bin
+/// ([`Scale::binned_bins`], shared with the raster writer).
+pub(super) fn build_symbol_legend_label_mapping(scale: &Scale) -> HashMap<String, Option<String>> {
+    let bins = scale.binned_bins();
+    let last = bins.len().saturating_sub(1);
+    bins.iter()
+        .enumerate()
+        .map(|(i, bin)| {
+            let vl_label = if i == last {
+                format!("≥ {}", bin.lower.to_key_string())
+            } else {
+                format!(
+                    "{} – {}",
+                    bin.lower.to_key_string(),
+                    bin.upper.to_key_string()
+                )
+            };
+            (vl_label, Some(bin.label.clone()))
+        })
+        .collect()
 }
 
 /// Count the number of binned material scales in the spec.
@@ -569,8 +519,19 @@ fn build_scale_properties(
         }
     }
 
-    // Handle reverse property (SETTING clause)
-    if let Some(ParameterValue::Boolean(true)) = scale.properties.get("reverse") {
+    // Handle reverse property (SETTING clause).
+    //
+    // A free facet dimension emits no domain — Vega-Lite computes one per panel
+    // — so a categorical `y` there cannot be handed over backwards the way a
+    // fixed one is above. `reverse` expresses the same bottom-up default
+    // instead. A user `SETTING reverse => true` composes on top of whichever
+    // default applies, which for the free case means the two cancel.
+    let bottom_up_default = skip_domain && ctx.aesthetic == "pos2" && is_categorical(scale);
+    let user_reverse = matches!(
+        scale.properties.get("reverse"),
+        Some(ParameterValue::Boolean(true))
+    );
+    if user_reverse != bottom_up_default {
         scale_obj.insert("reverse".to_string(), json!(true));
     }
 
@@ -779,12 +740,8 @@ fn apply_label_mapping_to_encoding(
 
     // Symbol legends compare VL's predicted range labels (e.g. "-20 – 0")
     // as strings via datum.label, not as numeric datum.value.
-    let filtered_mapping = if let (true, Some(breaks)) = (is_symbol, breaks) {
-        let closed = match scale.properties.get("closed") {
-            Some(ParameterValue::String(s)) => s.as_str(),
-            _ => "left",
-        };
-        build_symbol_legend_label_mapping(breaks, label_mapping, closed)
+    let filtered_mapping = if is_symbol {
+        build_symbol_legend_label_mapping(scale)
     } else {
         label_mapping.clone()
     };
@@ -1350,7 +1307,13 @@ mod tests {
         label_mapping.insert("-20".to_string(), Some("cold".to_string()));
         label_mapping.insert("0".to_string(), Some("hot".to_string()));
 
-        let symbol_mapping = build_symbol_legend_label_mapping(&breaks, &label_mapping, "left");
+        let mut scale = Scale::new("fill");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale
+            .properties
+            .insert("breaks".to_string(), ParameterValue::Array(breaks));
+        scale.label_mapping = Some(label_mapping);
+        let symbol_mapping = build_symbol_legend_label_mapping(&scale);
 
         // The resulting mapping uses VL's range-style label strings as keys
         let expr = build_label_expr(&symbol_mapping, None, None, "nominal");

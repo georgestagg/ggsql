@@ -10,20 +10,18 @@
 //! `pos2` and its values in the `pos1` family.
 
 use hephaestus::color::rgb8;
-use hephaestus::plot::geom::{BuildableGeom, GeomBuilder, Raw};
+use hephaestus::plot::geom::{BuildableGeom, GeomBuilder};
 use hephaestus::plot::{Plot as HPlot, PointGeom, RectGeom, SegmentGeom};
 
-use super::super::channels::{
-    aesthetic_column_name, column_to_channel, column_to_f64, column_to_strings,
-};
+use super::super::channels::{column_to_channel, column_to_f64, column_to_strings};
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    band_edges, band_half_width, constant_number, constant_string, dodge_offsets, resolve_color,
+    apply_material, band_edges, band_half_width, dodge_offsets, require_column, resolve_color,
     resolve_material, side_sign, BandAxes, Ctx, LegendKind, MatDefault, MaterialSource,
     MaterialSpec,
 };
 use super::hinge::{caps, hinge_points};
-use crate::{GgsqlError, Result};
+use crate::Result;
 
 /// The layer aesthetics this composite styles, with ggsql's boxplot defaults.
 /// Used both to resolve them and to dress the legend keys in the layer's look.
@@ -71,10 +69,10 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let value_aes = axes.value();
     let value2_aes = format!("{value_aes}end");
 
-    let cat_col = require(layer, cat_aes)?;
-    let type_col = require(layer, "type")?;
-    let value_col = require(layer, value_aes)?;
-    let value2_col = require(layer, &value2_aes)?;
+    let cat_col = require_column(ctx, cat_aes)?;
+    let type_col = require_column(ctx, "type")?;
+    let value_col = require_column(ctx, value_aes)?;
+    let value2_col = require_column(ctx, &value2_aes)?;
 
     let cat = column_to_channel(df, cat_col)?;
     let v1 = column_to_f64(df, value_col)?;
@@ -149,8 +147,38 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     )?;
     // `opacity` retargets to the box's fill, mirroring the Vega-Lite writer
     // (`opacity` → `fillOpacity` for a fill-bearing geom); the stroke-only
-    // components have no fill to fade.
-    let alpha = constant_number(ctx, "opacity", 1.0);
+    // components have no fill to fade. Resolved like the rest, so a mapped
+    // column fades each box by its own datum instead of by the first row's.
+    let alpha = resolve_material(
+        ctx,
+        plot,
+        "opacity",
+        "fill_opacity",
+        RangeKind::Number,
+        LegendKind::Rect,
+        &material,
+    )?;
+    // Outlier marker size and shape. Their legend key is a point, since that is
+    // the component they describe; they stay out of `material()` because a box
+    // swatch draws neither.
+    let size = resolve_material(
+        ctx,
+        plot,
+        "size",
+        "size",
+        RangeKind::Number,
+        LegendKind::Point,
+        &material,
+    )?;
+    let shape = resolve_material(
+        ctx,
+        plot,
+        "shape",
+        "shape",
+        RangeKind::Shape,
+        LegendKind::Point,
+        &material,
+    )?;
     // Box width (band fraction, dodge-aware) + per-row dodge offsets. `side`
     // narrows the box to one half of the band; the full `width` is kept for the
     // dodge calculation (ggsql already applied it), so a half-box pairs cleanly
@@ -173,8 +201,8 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set(frac_ch2, shift(&offsets, &box_i, far));
         fill.apply(&mut b, "fill", &box_i);
         stroke.apply(&mut b, "stroke", &box_i);
-        outline(&mut b, &linewidth, linetype.as_ref(), &box_i);
-        b.set("fill_opacity", Raw(alpha));
+        outline(&mut b, linewidth.as_ref(), linetype.as_ref(), &box_i);
+        apply_material(&mut b, alpha.as_ref(), "fill_opacity", &box_i);
         plot.add_geom(b.build());
     }
 
@@ -189,7 +217,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set(frac_ch, shift(&offsets, &whisk_i, 0.0));
         b.set(frac_ch2, shift(&offsets, &whisk_i, 0.0));
         stroke.apply(&mut b, "stroke", &whisk_i);
-        outline(&mut b, &linewidth, linetype.as_ref(), &whisk_i);
+        outline(&mut b, linewidth.as_ref(), linetype.as_ref(), &whisk_i);
         plot.add_geom(b.build());
     }
 
@@ -203,7 +231,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set(frac_ch, shift(&offsets, &med_i, near));
         b.set(frac_ch2, shift(&offsets, &med_i, far));
         stroke.apply(&mut b, "stroke", &med_i);
-        outline(&mut b, &linewidth, linetype.as_ref(), &med_i);
+        outline(&mut b, linewidth.as_ref(), linetype.as_ref(), &med_i);
         plot.add_geom(b.build());
     }
 
@@ -218,7 +246,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
             hinge,
         );
         stroke.apply(&mut b, "stroke", &whisk_i);
-        outline(&mut b, &linewidth, linetype.as_ref(), &whisk_i);
+        outline(&mut b, linewidth.as_ref(), linetype.as_ref(), &whisk_i);
         plot.add_geom(b.build());
     }
 
@@ -232,11 +260,11 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         b.set(frac_ch, shift(&offsets, &out_i, 0.0));
         fill.apply(&mut b, "fill", &out_i);
         stroke.apply(&mut b, "stroke", &out_i);
-        b.set("fill_opacity", Raw(alpha));
+        apply_material(&mut b, alpha.as_ref(), "fill_opacity", &out_i);
         // `PointGeom` has no dash pattern — a marker outline can't be dashed.
-        outline(&mut b, &linewidth, None, &out_i);
-        b.set("size", Raw(constant_number(ctx, "size", 3.0)));
-        b.set("shape", Raw(constant_string(ctx, "shape", "circle")));
+        outline(&mut b, linewidth.as_ref(), None, &out_i);
+        apply_material(&mut b, size.as_ref(), "size", &out_i);
+        apply_material(&mut b, shape.as_ref(), "shape", &out_i);
         plot.add_geom(b.build());
     }
 
@@ -247,21 +275,12 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
 /// rows. `linetype` is `None` for geoms with no dash channel.
 fn outline<G: BuildableGeom>(
     b: &mut GeomBuilder<G>,
-    linewidth: &Option<MaterialSource>,
+    linewidth: Option<&MaterialSource>,
     linetype: Option<&MaterialSource>,
     idx: &[usize],
 ) {
-    if let Some(lw) = linewidth {
-        lw.apply(b, "linewidth", idx);
-    }
-    if let Some(lt) = linetype {
-        lt.apply(b, "linetype", idx);
-    }
-}
-
-fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
-    aesthetic_column_name(layer, aesthetic)
-        .ok_or_else(|| GgsqlError::WriterError(format!("boxplot layer has no {aesthetic} mapping")))
+    apply_material(b, linewidth, "linewidth", idx);
+    apply_material(b, linetype, "linetype", idx);
 }
 
 /// Select rows by index.

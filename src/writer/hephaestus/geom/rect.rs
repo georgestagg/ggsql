@@ -40,8 +40,6 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
                 RangeKind::Color,
                 MatDefault::Color(rgb8(0, 0, 0)),
             ),
-            MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("stroke", "stroke", RangeKind::Color, MatDefault::None),
             MaterialSpec::new(
                 "opacity",
@@ -137,37 +135,47 @@ fn histogram(transposed: bool) -> Vec<PositionSpec> {
     }
 }
 
-/// Tile/heatmap: continuous tiles span min/max extents; discrete tiles occupy a
-/// `width`/`height` fraction of the category band on each axis. ggsql resolves
-/// `width`/`height` into per-row columns (1.0 = full band, like VL's
-/// `datum.width * bandwidth`); each axis's band edges sit at ±fraction/2.
+/// Tile/heatmap. Each direction is parameterised on its own, because ggsql's
+/// tile stat resolves them independently (`tile::process_direction`) and a tile
+/// may be discrete on one axis and continuous on the other — which the
+/// Vega-Lite writer's `TileRenderer` also handles per axis.
 fn tile(ctx: &Ctx) -> (Vec<PositionSpec>, Vec<(&'static str, Vec<f64>)>) {
-    if aesthetic_column_name(ctx.layer, "pos1min").is_some() {
+    let (mut positions, mut bands) = tile_axis(ctx, PanelAxis::X);
+    let (y_positions, y_bands) = tile_axis(ctx, PanelAxis::Y);
+    positions.extend(y_positions);
+    bands.extend(y_bands);
+    (positions, bands)
+}
+
+/// One tile direction: a continuous one spans the explicit min/max extents ggsql
+/// resolved, a discrete one sits on the category centre and occupies a
+/// `width`/`height` fraction of its band (1.0 = full band, like VL's
+/// `datum.width * bandwidth`), so its edges are at ±fraction/2.
+fn tile_axis(ctx: &Ctx, axis: PanelAxis) -> (Vec<PositionSpec>, Vec<(&'static str, Vec<f64>)>) {
+    let (centre, min, max, size, near, far, near_band, far_band) = match axis {
+        PanelAxis::X => (
+            "pos1", "pos1min", "pos1max", "width", "x", "x2", "x_band", "x2_band",
+        ),
+        PanelAxis::Y => (
+            "pos2", "pos2min", "pos2max", "height", "y", "y2", "y_band", "y2_band",
+        ),
+    };
+    if aesthetic_column_name(ctx.layer, min).is_some() {
         (
             vec![
-                PositionSpec::new("x", "pos1min", PanelAxis::X),
-                PositionSpec::new("x2", "pos1max", PanelAxis::X),
-                PositionSpec::new("y", "pos2min", PanelAxis::Y),
-                PositionSpec::new("y2", "pos2max", PanelAxis::Y),
+                PositionSpec::new(near, min, axis),
+                PositionSpec::new(far, max, axis),
             ],
             vec![],
         )
     } else {
-        let (x_lo, x_hi) = band_edges(ctx, "width");
-        let (y_lo, y_hi) = band_edges(ctx, "height");
+        let (lo, hi) = band_edges(ctx, size);
         (
             vec![
-                PositionSpec::new("x", "pos1", PanelAxis::X),
-                PositionSpec::new("x2", "pos1", PanelAxis::X),
-                PositionSpec::new("y", "pos2", PanelAxis::Y),
-                PositionSpec::new("y2", "pos2", PanelAxis::Y),
+                PositionSpec::new(near, centre, axis),
+                PositionSpec::new(far, centre, axis),
             ],
-            vec![
-                ("x_band", x_lo),
-                ("x2_band", x_hi),
-                ("y_band", y_lo),
-                ("y2_band", y_hi),
-            ],
+            vec![(near_band, lo), (far_band, hi)],
         )
     }
 }

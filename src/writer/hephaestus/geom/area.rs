@@ -55,8 +55,6 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
                 RangeKind::Color,
                 MatDefault::Color(rgb8(0, 0, 0)),
             ),
-            MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
             // A ribbon's two edge curves are stroked independently: `stroke`
             // outlines curve A (the baseline / lower edge), `stroke2` curve B
             // (the data curve). Wiring only the first leaves the band's visible

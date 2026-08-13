@@ -9,9 +9,9 @@
 //! titles, and legends. A geom outside [`geom::is_supported`] is rejected by
 //! [`HephaestusWriter::validate`].
 //!
-//! Architecture — the abstractions and the invariants they keep — is documented
-//! in `src/writer/hephaestus/CLAUDE.md`; `PLAN.md` holds the design rationale and
-//! the inventory of deferred work.
+//! Architecture — the abstractions and the invariants they keep — and the
+//! inventory of deferred work are documented in
+//! `src/writer/hephaestus/CLAUDE.md`.
 //!
 //! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
 //! (hardware or software, e.g. lavapipe) is required at render time.
@@ -213,7 +213,7 @@ impl Writer for HephaestusWriter {
         // its position channels to these names, giving fixed-scale faceting.
         for scale in &spec.scales {
             let kind = match scale.aesthetic.as_str() {
-                "fill" | "stroke" | "color" | "colour" => scales::RangeKind::Color,
+                "fill" | "stroke" => scales::RangeKind::Color,
                 "shape" => scales::RangeKind::Shape,
                 "linetype" => scales::RangeKind::Linetype,
                 // The text geom's font aesthetics: a scale over them resolves a
@@ -229,7 +229,7 @@ impl Writer for HephaestusWriter {
                     }
                 }
             };
-            if let Some(hs) = build_scale(Some(scale), kind) {
+            if let Some(hs) = build_scale(scale, kind) {
                 view.insert_scale(scale.aesthetic.clone(), hs);
             }
         }
@@ -265,10 +265,11 @@ impl Writer for HephaestusWriter {
             let slices: Vec<(&Layer, DataFrame)> = spec
                 .layers
                 .iter()
-                .map(|layer| {
+                .enumerate()
+                .map(|(idx, layer)| {
                     Ok((
                         layer,
-                        facet::panel_dataframe(layer_dataframe(layer, data)?, panel)?,
+                        facet::panel_dataframe(layer_dataframe(layer, idx, data)?, panel)?,
                     ))
                 })
                 .collect::<Result<_>>()?;
@@ -437,8 +438,13 @@ fn map_bbox(
         f64::NEG_INFINITY,
         f64::NEG_INFINITY,
     );
-    for layer in spec.layers.iter().filter(|l| is_spatial(l)) {
-        let df = layer_dataframe(layer, data)?;
+    for (idx, layer) in spec
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_spatial(l))
+    {
+        let df = layer_dataframe(layer, idx, data)?;
         if df.column(&geom_col).is_err() {
             continue;
         }
@@ -473,13 +479,20 @@ fn map_range(min: f64, max: f64) -> std::ops::RangeInclusive<f64> {
     }
 }
 
-/// Look up the DataFrame backing a layer by its execution-assigned data key.
+/// Look up the DataFrame backing a layer by its execution-assigned data key,
+/// falling back to the conventional key for its index as the Vega-Lite writer
+/// does. Execution always assigns the key; the fallback is for a hand-built
+/// `Plot`.
 fn layer_dataframe<'a>(
     layer: &Layer,
+    idx: usize,
     data: &'a HashMap<String, DataFrame>,
 ) -> Result<&'a DataFrame> {
-    let key = layer.data_key.as_deref().unwrap_or("__ggsql_layer_0__");
-    data.get(key)
+    let key = layer
+        .data_key
+        .clone()
+        .unwrap_or_else(|| naming::layer_key(idx));
+    data.get(&key)
         .ok_or_else(|| GgsqlError::WriterError(format!("no data found for layer key '{key}'")))
 }
 
@@ -980,6 +993,30 @@ mod tests {
     }
 
     #[test]
+    fn renders_tile_mixed_discrete_and_continuous_axes() {
+        // The tile stat parameterises each direction on its own, so a tile can be
+        // banded on one axis and spanned by extents on the other.
+        let data =
+            "SELECT c, n, v FROM (VALUES ('x',1.0,1),('y',2.0,2),('x',2.0,3),('y',1.0,4)) t(c,n,v)";
+        assert_png_or_skip(render(&format!(
+            "{data} VISUALISE c AS x, n AS y, v AS fill DRAW tile"
+        )));
+        assert_png_or_skip(render(&format!(
+            "{data} VISUALISE n AS x, c AS y, v AS fill DRAW tile"
+        )));
+    }
+
+    #[test]
+    fn renders_text_keyword_justification_column() {
+        // A `vjust` column of keywords is read as keywords: casting it to numbers
+        // first would silently make every anchor NaN.
+        assert_png_or_skip(render(
+            "SELECT x, y, l, j FROM (VALUES (1,1,'one','top'),(2,2,'two','bottom')) t(x,y,l,j) \
+             VISUALISE x AS x, y AS y, l AS label, j AS vjust DRAW text",
+        ));
+    }
+
+    #[test]
     fn renders_violin() {
         assert_png_or_skip(render(
             "SELECT g, y FROM (VALUES ('a',1),('a',5),('a',3),('a',9),('a',2), \
@@ -1354,6 +1391,33 @@ mod tests {
             )),
             vec!["1973-05-01 – 1973-06-01", "1973-06-01 – 1973-07-01"]
         );
+    }
+
+    #[test]
+    fn facet_strips_null_and_empty_are_separate_panels() {
+        // `column_to_strings` renders both a NULL and an empty category as "",
+        // so they need the null flag to stay apart — the Vega-Lite writer gives
+        // them a panel each.
+        let data = "SELECT g, v FROM (VALUES ('', 1), (NULL, 2), ('a', 3)) t(g, v)";
+        assert_eq!(
+            top_strips(&format!(
+                "{data} VISUALISE v AS x, v AS y DRAW point FACET g"
+            )),
+            vec!["", "a", "null"]
+        );
+    }
+
+    #[test]
+    fn facet_over_empty_data_is_one_panel() {
+        // No levels to lay out: both layouts collapse to the unfaceted single
+        // panel rather than building a grid of zero cells.
+        let empty = "SELECT g, h, v FROM (VALUES ('a','b',1)) t(g,h,v) WHERE false";
+        for query in [
+            format!("{empty} VISUALISE v AS x, v AS y DRAW point FACET g"),
+            format!("{empty} VISUALISE v AS x, v AS y DRAW point FACET g BY h"),
+        ] {
+            assert_eq!(strips(&query), vec![(None, None)], "for: {query}");
+        }
     }
 
     #[test]

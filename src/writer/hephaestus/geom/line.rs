@@ -31,8 +31,6 @@ pub fn spec(ctx: &Ctx) -> GeomSpec {
                 RangeKind::Color,
                 MatDefault::Color(stroke),
             ),
-            MaterialSpec::new("color", "stroke", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("colour", "stroke", RangeKind::Color, MatDefault::None),
             MaterialSpec::new(
                 "linewidth",
                 "linewidth",

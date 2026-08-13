@@ -289,24 +289,26 @@ pub fn integer_breaks(min: f64, max: f64, n: usize, pretty: bool) -> Vec<f64> {
 }
 
 /// Filter breaks to only those within the given range.
+///
+/// Both sides are compared through [`ArrayElement::to_f64`], which is the space a
+/// scale's domain and breaks share once its transform has parsed them, so a
+/// temporal break is constrained by a temporal domain just as a number is by a
+/// numeric one. An element with no numeric form (a category, a boolean) is kept.
 pub fn filter_breaks_to_range(
     breaks: &[ArrayElement],
     range: &[ArrayElement],
 ) -> Vec<ArrayElement> {
-    let (min, max) = match (range.first(), range.last()) {
-        (Some(ArrayElement::Number(min)), Some(ArrayElement::Number(max))) => (*min, *max),
-        _ => return breaks.to_vec(), // Can't filter non-numeric
+    let (min, max) = match (
+        range.first().and_then(|e| e.to_f64()),
+        range.last().and_then(|e| e.to_f64()),
+    ) {
+        (Some(min), Some(max)) => (min, max),
+        _ => return breaks.to_vec(), // Can't filter against a non-numeric range
     };
 
     breaks
         .iter()
-        .filter(|b| {
-            if let ArrayElement::Number(v) = b {
-                *v >= min && *v <= max
-            } else {
-                true // Keep non-numeric breaks
-            }
-        })
+        .filter(|b| b.to_f64().is_none_or(|v| v >= min && v <= max))
         .cloned()
         .collect()
 }

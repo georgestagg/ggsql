@@ -74,8 +74,6 @@ fn material() -> Vec<MaterialSpec> {
             RangeKind::Color,
             MatDefault::Color(rgb8(0, 0, 0)),
         ),
-        MaterialSpec::new("color", "stroke", RangeKind::Color, MatDefault::None),
-        MaterialSpec::new("colour", "stroke", RangeKind::Color, MatDefault::None),
         MaterialSpec::new(
             "linewidth",
             "linewidth",

@@ -13,18 +13,17 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use hephaestus::color::rgb8;
-use hephaestus::plot::geom::Raw;
 use hephaestus::plot::{Plot as HPlot, RibbonGeom};
 
 use super::super::channels::{
-    aesthetic_column_name, build_group_keys, column_to_channel, column_to_f64, column_to_strings,
+    build_group_keys, column_to_channel, column_to_f64, column_to_strings,
 };
 use super::super::scales::RangeKind;
 use super::super::wiring::{
-    band_edges, constant_number, dodge_offsets, resolve_color, resolve_material, side_sign,
-    BandAxes, Ctx, LegendKind, MatDefault, MaterialSpec,
+    apply_material, band_edges, dodge_offsets, require_column, resolve_color, resolve_material,
+    side_sign, BandAxes, Ctx, LegendKind, MatDefault, MaterialSpec,
 };
-use crate::{GgsqlError, Result};
+use crate::Result;
 
 /// The layer aesthetics this composite styles, with ggsql's violin defaults.
 /// Used both to resolve them and to dress the legend keys in the layer's look.
@@ -70,9 +69,9 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     let band_aes = axes.band();
     let value_aes = axes.value();
 
-    let band_col = require(layer, band_aes)?;
-    let value_col = require(layer, value_aes)?;
-    let offset = require(layer, "offset")?;
+    let band_col = require_column(ctx, band_aes)?;
+    let value_col = require_column(ctx, value_aes)?;
+    let offset = require_column(ctx, "offset")?;
 
     let p1 = column_to_channel(df, band_col)?;
     let cat = column_to_strings(df, band_col)?;
@@ -181,6 +180,17 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         LegendKind::Line,
         &material,
     )?;
+    // Resolved like the rest, so a mapped column fades each violin by its own
+    // datum rather than by the first row's.
+    let alpha = resolve_material(
+        ctx,
+        plot,
+        "opacity",
+        "fill_opacity",
+        RangeKind::Number,
+        LegendKind::Rect,
+        &material,
+    )?;
     // Which of the ribbon's two edges take an outline. Both, normally; only the
     // far edge under a one-sided `side`, where the near edge is the centreline.
     let outline_edges: &[&str] = if side.is_some() {
@@ -241,13 +251,8 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
             }
         }
     }
-    b.set("fill_opacity", Raw(constant_number(ctx, "opacity", 1.0)));
+    apply_material(&mut b, alpha.as_ref(), "fill_opacity", &order);
     plot.add_geom(b.build());
 
     Ok(())
-}
-
-fn require<'a>(layer: &'a crate::Layer, aesthetic: &str) -> Result<&'a str> {
-    aesthetic_column_name(layer, aesthetic)
-        .ok_or_else(|| GgsqlError::WriterError(format!("violin layer has no {aesthetic} mapping")))
 }

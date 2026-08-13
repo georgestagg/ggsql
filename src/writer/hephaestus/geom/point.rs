@@ -20,8 +20,6 @@ pub fn spec(_ctx: &Ctx) -> GeomSpec {
                 RangeKind::Color,
                 MatDefault::Color(rgb8(0, 0, 0)),
             ),
-            MaterialSpec::new("color", "fill", RangeKind::Color, MatDefault::None),
-            MaterialSpec::new("colour", "fill", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("stroke", "stroke", RangeKind::Color, MatDefault::None),
             MaterialSpec::new("size", "size", RangeKind::Number, MatDefault::Number(3.0)),
             MaterialSpec::new(

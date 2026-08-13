@@ -69,19 +69,38 @@ pub fn aesthetic_column_name<'a>(layer: &'a Layer, aesthetic: &str) -> Option<&'
 /// with it.
 pub const NULL_CATEGORY: &str = "__ggsql_null__";
 
-/// Extract a column as the channel type implied by its arrow dtype: text →
-/// category strings, everything else → `f64`.
+/// Extract a column as the channel type implied by its arrow dtype: text and
+/// booleans → category strings, everything else → `f64`.
 ///
 /// This is the *scaled* path — the values here are looked up in a scale's
 /// domain — so a null becomes [`NULL_CATEGORY`] rather than the empty string
 /// [`column_to_strings`] uses for raw, unscaled text.
+///
+/// A boolean is a category, not a number: ggsql trains a discrete domain over
+/// it (as the Vega-Lite writer's `nominal` type does) and hephaestus matches
+/// data to domain by `Value` variant, so a `true` handed over as `1.0` would
+/// find no `Bool` entry and resolve to nothing. Both sides therefore agree on
+/// the category name — [`scales::category_value`] renders the domain the same
+/// way, and `wiring::constant_position` a literal.
 pub fn column_to_channel(df: &DataFrame, name: &str) -> Result<ChannelData> {
     let array = df.column(name)?;
-    if matches!(array.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+    if is_text_column(df, name) || matches!(array.data_type(), DataType::Boolean) {
         Ok(ChannelData::Strings(read_strings(df, name, NULL_CATEGORY)?))
     } else {
         Ok(ChannelData::Floats(column_to_f64(df, name)?))
     }
+}
+
+/// Whether a column holds text, and so must be read with [`column_to_strings`]
+/// rather than cast to `f64`.
+///
+/// Arrow's cast is a *safe* one: a text column cast to `Float64` comes back as
+/// all-nulls — an `Ok` full of `NaN` — rather than an error. A caller that
+/// accepts either a number or a keyword therefore has to ask this first; trying
+/// [`column_to_f64`] and falling back on `Err` never reaches the keywords.
+pub fn is_text_column(df: &DataFrame, name: &str) -> bool {
+    df.column(name)
+        .is_ok_and(|array| matches!(array.data_type(), DataType::Utf8 | DataType::LargeUtf8))
 }
 
 /// Read a numeric column as `f64`, casting from any numeric/temporal source

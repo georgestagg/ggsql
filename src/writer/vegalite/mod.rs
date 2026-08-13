@@ -738,7 +738,7 @@ fn apply_facet_label_renaming(
 
     let label_expr = if is_binned {
         // For binned facets: reuse build_symbol_legend_label_mapping and build_label_expr
-        build_binned_facet_label_expr(label_mapping, scale)
+        build_binned_facet_label_expr(scale)
     } else {
         // For discrete facets: compare datum.value against string values
         build_discrete_facet_label_expr(label_mapping)
@@ -748,98 +748,28 @@ fn apply_facet_label_renaming(
     facet_def["header"] = json!({ "labelExpr": label_expr });
 }
 
-/// Build labelExpr for binned facet values.
+/// Build a `labelExpr` naming each panel of a binned facet by its bin's range.
 ///
-/// For binned facets, `datum.value` contains the bin midpoint (e.g., 25 for bin [20-30)).
-/// This function maps midpoint values to range-style labels like "Lower – Upper",
-/// using custom labels from label_mapping when available.
-///
-/// Unlike `build_symbol_legend_label_mapping` which maps Vega-Lite's auto-generated
-/// range labels, this function maps numeric midpoints to our range labels.
-fn build_binned_facet_label_expr(
-    label_mapping: Option<&HashMap<String, Option<String>>>,
-    scale: Option<&Scale>,
-) -> String {
+/// Unlike `build_symbol_legend_label_mapping`, which keys on Vega-Lite's
+/// auto-generated range labels, this keys on the numeric midpoints the facet
+/// column carries.
+fn build_binned_facet_label_expr(scale: Option<&Scale>) -> String {
     let Some(scale) = scale else {
         return "datum.value".to_string();
     };
-
-    let breaks = match scale.properties.get("breaks") {
-        Some(ParameterValue::Array(arr)) => arr,
-        _ => return "datum.value".to_string(),
-    };
-
-    if breaks.len() < 2 {
-        return "datum.value".to_string();
-    }
-
-    // Get closed property for determining open-format labels
-    let closed = scale
-        .properties
-        .get("closed")
-        .and_then(|v| match v {
-            ParameterValue::String(s) => Some(s.as_str()),
-            _ => None,
+    // A facet column carries each bin's midpoint, so the expression compares
+    // `datum.value` against those rather than against Vega-Lite's own range
+    // text. The labels themselves are ggsql's, shared with the symbol legend and
+    // the raster writer via `Scale::binned_bins`.
+    let midpoint_to_range: Vec<(String, Option<String>)> = scale
+        .binned_bins()
+        .iter()
+        .filter_map(|bin| {
+            let midpoint =
+                calculate_midpoint_string(&bin.lower, &bin.upper, scale.transform.as_ref())?;
+            Some((midpoint, Some(bin.label.clone())))
         })
-        .unwrap_or("left");
-
-    let num_bins = breaks.len() - 1;
-
-    // Build mapping from midpoint to range label
-    let mut midpoint_to_range: Vec<(String, Option<String>)> = Vec::new();
-
-    for i in 0..num_bins {
-        let lower = &breaks[i];
-        let upper = &breaks[i + 1];
-
-        // Calculate midpoint for comparison
-        let midpoint_str = calculate_midpoint_string(lower, upper, scale.transform.as_ref());
-        let Some(midpoint_str) = midpoint_str else {
-            continue;
-        };
-
-        // Get break values as strings (for default labels)
-        let lower_str = lower.to_key_string();
-        let upper_str = upper.to_key_string();
-
-        // Build the range label
-        let range_label = if let Some(label_mapping) = label_mapping {
-            // Check if terminals are suppressed
-            let lower_suppressed = label_mapping.get(&lower_str) == Some(&None);
-            let upper_suppressed = label_mapping.get(&upper_str) == Some(&None);
-
-            // Get custom labels (fall back to break values)
-            let lower_label = label_mapping
-                .get(&lower_str)
-                .cloned()
-                .flatten()
-                .unwrap_or_else(|| lower_str.clone());
-            let upper_label = label_mapping
-                .get(&upper_str)
-                .cloned()
-                .flatten()
-                .unwrap_or_else(|| upper_str.clone());
-
-            // Determine label format based on terminal suppression
-            if i == 0 && lower_suppressed {
-                // First bin with suppressed lower terminal → open format
-                let symbol = if closed == "right" { "≤" } else { "<" };
-                Some(format!("{} {}", symbol, upper_label))
-            } else if i == num_bins - 1 && upper_suppressed {
-                // Last bin with suppressed upper terminal → open format
-                let symbol = if closed == "right" { ">" } else { "≥" };
-                Some(format!("{} {}", symbol, lower_label))
-            } else {
-                // Standard range format: "lower – upper"
-                Some(format!("{} – {}", lower_label, upper_label))
-            }
-        } else {
-            // No label mapping - use default range format with break values
-            Some(format!("{} – {}", lower_str, upper_str))
-        };
-
-        midpoint_to_range.push((midpoint_str, range_label));
-    }
+        .collect();
 
     if midpoint_to_range.is_empty() {
         return "datum.value".to_string();
@@ -1306,6 +1236,25 @@ mod tests {
                 _ => c,
             })
             .collect()
+    }
+
+    /// A resolved binned scale, as `resolve` would leave one.
+    fn binned_scale(
+        breaks: Vec<ArrayElement>,
+        label_mapping: HashMap<String, Option<String>>,
+        closed: &str,
+    ) -> Scale {
+        let mut scale = Scale::new("fill");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale
+            .properties
+            .insert("breaks".to_string(), ParameterValue::Array(breaks));
+        scale.properties.insert(
+            "closed".to_string(),
+            ParameterValue::String(closed.to_string()),
+        );
+        scale.label_mapping = Some(label_mapping);
+        scale
     }
 
     fn rewrite_refs(val: &mut Value) {
@@ -2138,7 +2087,8 @@ mod tests {
         label_mapping.insert("75".to_string(), Some("Very High".to_string()));
         label_mapping.insert("100".to_string(), Some("Max".to_string())); // Will be excluded
 
-        let result = build_symbol_legend_label_mapping(&breaks, &label_mapping, "left");
+        let result =
+            build_symbol_legend_label_mapping(&binned_scale(breaks, label_mapping, "left"));
 
         // VL generates: "0 – 25", "25 – 50", "50 – 75", "≥ 75"
         // We map to range format using custom labels: "lower_label – upper_label"
@@ -2272,7 +2222,11 @@ mod tests {
         label_mapping.insert("100".to_string(), None); // Suppressed
 
         // Test with closed='left' (default)
-        let result_left = build_symbol_legend_label_mapping(&breaks, &label_mapping, "left");
+        let result_left = build_symbol_legend_label_mapping(&binned_scale(
+            breaks.clone(),
+            label_mapping.clone(),
+            "left",
+        ));
 
         // First bin: suppressed lower terminal → "< 25" (open format)
         assert_eq!(
@@ -2288,7 +2242,8 @@ mod tests {
         );
 
         // Test with closed='right'
-        let result_right = build_symbol_legend_label_mapping(&breaks, &label_mapping, "right");
+        let result_right =
+            build_symbol_legend_label_mapping(&binned_scale(breaks, label_mapping, "right"));
 
         // First bin: suppressed lower terminal → "≤ 25" (right-closed means upper included)
         assert_eq!(
@@ -2719,7 +2674,8 @@ mod tests {
         label_mapping.insert("40".to_string(), Some("High".to_string()));
         label_mapping.insert("60".to_string(), Some("Very High".to_string()));
 
-        let expr = build_binned_facet_label_expr(Some(&label_mapping), Some(&scale));
+        scale.label_mapping = Some(label_mapping);
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // Should contain midpoint comparisons:
         // Bin [0, 20) -> midpoint 10
@@ -2782,7 +2738,8 @@ mod tests {
         label_mapping.insert("50".to_string(), Some("High".to_string()));
         label_mapping.insert("100".to_string(), Some("Max".to_string()));
 
-        let expr = build_binned_facet_label_expr(Some(&label_mapping), Some(&scale));
+        scale.label_mapping = Some(label_mapping);
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // First bin with suppressed lower terminal → open format "< 50" or "< High"
         // (uses upper bound label since lower is suppressed)
@@ -2817,7 +2774,7 @@ mod tests {
         );
 
         // No label_mapping - should use break values in range format
-        let expr = build_binned_facet_label_expr(None, Some(&scale));
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // Should use default range format with break values
         assert!(
