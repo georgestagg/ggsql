@@ -350,6 +350,33 @@ fn insert_legend_property(encoding: &mut Value, key: &str, value: Value) {
     }
 }
 
+/// Encode a band-fraction offset column on a position offset channel.
+///
+/// The offsets ggsql resolves — dodge and jitter displacements, a violin's
+/// density half-width, a half-boxplot's side shift — are fractions of the band,
+/// which is what a `[-0.5, 0.5]` domain makes of them: the scale's range is the
+/// band width, so a value of `w` shifts the mark by `w` bands.
+///
+/// For the **secondary** channel the domain runs `0.5 → -0.5` instead, because a
+/// ggsql offset is positive-up (matching the bottom-up categorical `y` the band
+/// domain is reversed for) while a Vega-Lite `yOffset` is positive-down.
+/// Flipping the domain negates the offset without touching the data, so every
+/// mark — and every component of a composite one — reads the same way round as
+/// the axis it sits on. The primary channel needs no flip: `xOffset` is
+/// positive-right, as ggsql's offsets are.
+pub(super) fn offset_encoding(field: &str, is_secondary: bool) -> Value {
+    let domain = if is_secondary {
+        json!([0.5, -0.5])
+    } else {
+        json!([-0.5, 0.5])
+    };
+    json!({
+        "field": field,
+        "type": "quantitative",
+        "scale": { "domain": domain }
+    })
+}
+
 // =============================================================================
 // Phase 2: Logical Section Helpers
 // =============================================================================
@@ -797,6 +824,10 @@ pub(super) struct EncodingContext<'a> {
     pub spec: &'a Plot,
     pub titled_families: &'a mut HashSet<String>,
     pub primary_aesthetics: &'a HashSet<String>,
+    /// `calculate` transforms the built encodings need on their layer, in the
+    /// order they were requested. Currently only the unit conversion an
+    /// identity-scaled column needs — see [`identity_unit_conversion`].
+    pub transforms: &'a mut Vec<Value>,
 }
 
 /// Build encoding channel from aesthetic mapping
@@ -861,9 +892,22 @@ fn build_column_encoding(
     // Binned legend = binned + material (needs threshold scale)
     let is_binned_legend = is_binned && !is_position_aesthetic(aesthetic);
 
+    // An identity scale hands the column to the aesthetic untouched, so each value
+    // means what the same value written as a literal means. Convert it exactly as
+    // `build_literal_encoding` converts that literal, per row.
+    let field = match identity_conversion(aesthetic, col, ctx.spec.find_scale(primary)) {
+        Some(expr) if identity_scale => {
+            let converted = format!("{col}_visual");
+            ctx.transforms
+                .push(json!({"calculate": expr, "as": converted.clone()}));
+            converted
+        }
+        _ => col.to_string(),
+    };
+
     // Build base encoding
     let mut encoding = json!({
-        "field": col,
+        "field": field,
         "type": field_type,
     });
 
@@ -938,6 +982,77 @@ fn build_column_encoding(
     }
 
     Ok(encoding)
+}
+
+/// The conversion an identity-scaled column needs, as a Vega expression over
+/// `datum`, or `None` for an aesthetic Vega-Lite already takes in ggsql's own terms.
+///
+/// `SCALE IDENTITY <aes>` passes the data through unscaled, which means each value is
+/// read the way the same value written as a `SETTING` literal is — so it needs the
+/// conversion [`build_literal_encoding`] gives that literal and [`convert_range_element`]
+/// gives a resolved output range. All three paths must agree. Two shapes of conversion:
+///
+/// - **Units.** `size` is a radius in points and Vega-Lite wants a symbol area in px²;
+///   `linewidth` / `fontsize` are points and it wants px. Plain arithmetic per row.
+/// - **Names.** `shape` and `linetype` are ggsql names (`'star'`, `'dashed'`) and
+///   Vega-Lite wants an SVG path and a dash array. Vega has no lookup function over an
+///   inline table, so the mapping is a conditional chain over the values the scale
+///   resolved, with anything unrecognised passed through — a column may already hold
+///   paths or dash arrays, exactly as a literal may.
+///
+/// Either way the arithmetic is per-datum, which in Vega-Lite only exists as a
+/// transform, hence a `calculate` feeding a derived field rather than a scale.
+fn identity_conversion(aesthetic: &str, col: &str, scale: Option<&crate::Scale>) -> Option<String> {
+    let datum = format!("datum['{}']", super::escape_vega_string(col));
+    match aesthetic {
+        // Size: radius (points) → area (pixels²)
+        "size" => Some(format!("{datum} * {datum} * {POINTS_TO_AREA}")),
+        // Linewidth: points → pixels
+        "linewidth" | "fontsize" => Some(format!("{datum} * {POINTS_TO_PIXELS}")),
+        // Shape name → SVG path
+        "shape" => identity_lookup_expr(&datum, scale, |name| {
+            shape_to_svg_path(name).map(|path| json!(path))
+        }),
+        // Linetype name → dash array
+        "linetype" => identity_lookup_expr(&datum, scale, |name| {
+            linetype_to_stroke_dash(name).map(|dashes| json!(dashes))
+        }),
+        _ => None,
+    }
+}
+
+/// A Vega conditional chain mapping each value an identity scale resolved to its
+/// Vega-Lite equivalent, falling through to the datum itself.
+///
+/// `None` when nothing needs converting — no resolved values, or none of them is a
+/// name `convert` recognises — so no transform is emitted and the column reaches the
+/// mark untouched, which is what a column of ready-made paths or dash arrays wants.
+fn identity_lookup_expr(
+    datum: &str,
+    scale: Option<&crate::Scale>,
+    convert: impl Fn(&str) -> Option<Value>,
+) -> Option<String> {
+    let values = scale?.input_range.as_ref()?;
+    let mut parts: Vec<String> = Vec::new();
+
+    for value in values {
+        let crate::plot::ArrayElement::String(name) = value else {
+            continue;
+        };
+        if let Some(converted) = convert(name) {
+            parts.push(format!(
+                "{datum} == '{}' ? {}",
+                super::escape_vega_string(name),
+                converted
+            ));
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+    parts.push(datum.to_string());
+    Some(parts.join(" : "))
 }
 
 /// Build encoding for a literal aesthetic value

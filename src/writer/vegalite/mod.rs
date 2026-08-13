@@ -201,11 +201,15 @@ fn build_layers(
             }));
         }
 
+        // Build encoding for this layer. Some encodings need a `calculate` of their
+        // own — an identity-scaled column is converted per row — and those run after
+        // the source filter, so they are appended to the same array.
+        let (mut encoding, encoding_transforms) =
+            build_layer_encoding(layer, df, spec, projection)?;
+        transforms.extend(encoding_transforms);
+
         // Set transform array on layer spec
         layer_spec["transform"] = json!(transforms);
-
-        // Build encoding for this layer
-        let mut encoding = build_layer_encoding(layer, df, spec, projection)?;
 
         // For point marks, remove fill: null from encoding — Vega-Lite point marks
         // are unfilled by default, so omitting it achieves the same visual result
@@ -245,13 +249,17 @@ fn build_layers(
 ///
 /// The `projection` determines how internal position aesthetics (pos1, pos2) are
 /// mapped to Vega-Lite encoding channel names (x/y for cartesian, theta/radius for polar).
+///
+/// Returns the encoding plus any `calculate` transforms its channels depend on (see
+/// `EncodingContext::transforms`), which the caller must add to the layer.
 fn build_layer_encoding(
     layer: &crate::plot::Layer,
     df: &DataFrame,
     spec: &Plot,
     projection: &dyn ProjectionRenderer,
-) -> Result<serde_json::Map<String, Value>> {
+) -> Result<(serde_json::Map<String, Value>, Vec<Value>)> {
     let mut encoding = serde_json::Map::new();
+    let mut transforms: Vec<Value> = Vec::new();
 
     // Get aesthetic context for name transformation
     let aesthetic_ctx = spec.get_aesthetic_context();
@@ -280,6 +288,7 @@ fn build_layer_encoding(
         spec,
         titled_families: &mut titled_families,
         primary_aesthetics: &primary_aesthetics,
+        transforms: &mut transforms,
     };
 
     // Build encoding channels for each aesthetic mapping
@@ -355,43 +364,23 @@ fn build_layer_encoding(
         encoding::RenderContext::new(&spec.scales, projection, spec.get_aesthetic_context());
     let (_, _, pos1_offset, pos2, _, pos2_offset) = &context.channels;
 
-    // Add pos1 offset encoding for dodged positions (pos1offset column)
-    // This column is created by position::apply_dodge() for Position::Dodge
-    // The offset values are centered around 0 (e.g., -0.3, 0, +0.3 for 3 groups)
-    // We set domain [-0.5, 0.5] to ensure the scale is symmetric and maps to full band width
+    // Add the offset encodings for dodged and jittered positions (the
+    // pos1offset / pos2offset columns, created by the position adjustment).
+    // The offset values are centered around 0 (e.g., -0.3, 0, +0.3 for 3
+    // groups) and read as band fractions — see `encoding::offset_encoding`.
     let pos1offset_col = naming::aesthetic_column("pos1offset");
     if df.column(&pos1offset_col).is_ok() {
         encoding.insert(
             pos1_offset.clone(),
-            json!({
-                "field": pos1offset_col,
-                "type": "quantitative",
-                "scale": {
-                    "domain": [-0.5, 0.5]
-                }
-            }),
+            encoding::offset_encoding(&pos1offset_col, false),
         );
     }
 
-    // Add pos2 offset encoding for vertical jitter (pos2offset column)
-    // This column is created by position::Jitter when pos2 axis is discrete
-    //
-    // The domain runs 0.5 → -0.5 rather than -0.5 → 0.5 because a ggsql offset
-    // is positive-up, matching the bottom-up categorical `y` the band domain is
-    // reversed for, while a Vega-Lite `yOffset` is positive-down. Flipping the
-    // domain negates the offset without touching the data, so a 2D dodge grid
-    // reads the same way round as the axis it sits on.
     let pos2offset_col = naming::aesthetic_column("pos2offset");
     if df.column(&pos2offset_col).is_ok() {
         encoding.insert(
             pos2_offset.clone(),
-            json!({
-                "field": pos2offset_col,
-                "type": "quantitative",
-                "scale": {
-                    "domain": [0.5, -0.5]
-                }
-            }),
+            encoding::offset_encoding(&pos2offset_col, true),
         );
     }
 
@@ -412,7 +401,7 @@ fn build_layer_encoding(
     let renderer = get_renderer(&layer.geom);
     renderer.modify_encoding(&mut encoding, layer, &context)?;
 
-    Ok(encoding)
+    Ok((encoding, transforms))
 }
 
 /// Apply faceting to Vega-Lite spec
@@ -1084,8 +1073,16 @@ impl VegaLiteWriter {
             // spread, violin and boxplot widths, discrete tile extents. ggsql
             // has no band-padding concept of its own, so pinning this to 0 is
             // what makes the two writers agree on width.
+            //
+            // A band scale carrying a nested `xOffset`/`yOffset` — every dodged,
+            // jittered, half-boxplot or violin layer — takes its padding from
+            // `bandWithNestedOffsetPadding*` instead, which defaults to 0.2/0.2.
+            // Left alone it shrinks each offset to 80% of the fraction ggsql
+            // resolved *and* insets the band centres, moving the category ticks.
             "scale": {
-                "bandPaddingInner": 0
+                "bandPaddingInner": 0,
+                "bandWithNestedOffsetPaddingInner": 0,
+                "bandWithNestedOffsetPaddingOuter": 0
             },
             "axis": {
                 "domain": false,
@@ -1769,6 +1766,187 @@ mod tests {
         // Should be 10 and 20 converted to pixels, NOT ~31 and ~126 (which would be area-converted)
         assert_eq!(range[0].as_f64().unwrap(), 10.0 * POINTS_TO_PIXELS);
         assert_eq!(range[1].as_f64().unwrap(), 20.0 * POINTS_TO_PIXELS);
+    }
+
+    /// An identity-scaled column is a per-row literal, so it must reach Vega-Lite
+    /// in the same unit a literal does: `size` as a radius in points, converted to
+    /// an area in px². The conversion is a `calculate` transform because Vega-Lite
+    /// has no per-datum arithmetic in an encoding.
+    #[test]
+    fn test_identity_column_converts_like_literal() {
+        use crate::plot::{Scale, ScaleType};
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        spec.layers.push(
+            Layer::new(Geom::point())
+                .with_aesthetic(
+                    "pos1".to_string(),
+                    AestheticValue::standard_column("x".to_string()),
+                )
+                .with_aesthetic(
+                    "pos2".to_string(),
+                    AestheticValue::standard_column("y".to_string()),
+                )
+                .with_aesthetic(
+                    "size".to_string(),
+                    AestheticValue::standard_column("radius".to_string()),
+                ),
+        );
+        let mut scale = Scale::new("size");
+        scale.scale_type = Some(ScaleType::identity());
+        spec.scales.push(scale);
+
+        let df = df! {
+            "x" => vec![1, 2],
+            "y" => vec![1, 2],
+            "radius" => vec![3.0, 3.0],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+        let layer = &vl_spec["layer"][0];
+
+        // The encoding reads the derived field, unscaled
+        let size = &layer["encoding"]["size"];
+        assert_eq!(size["field"].as_str().unwrap(), "radius_visual");
+        assert!(size["scale"].is_null(), "identity scale stays unscaled");
+
+        // ... which a calculate transform fills with the literal conversion
+        let calculate = layer["transform"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|t| t.get("calculate").and_then(|c| c.as_str()))
+            .expect("identity size needs a calculate transform");
+        assert_eq!(
+            calculate,
+            format!("datum['radius'] * datum['radius'] * {POINTS_TO_AREA}")
+        );
+
+        // A radius of 3 pt is the same area whether it arrives as a column or a literal
+        let literal = build_spec_with_size_literal(&writer);
+        assert_eq!(3.0 * 3.0 * POINTS_TO_AREA, literal);
+    }
+
+    /// A name-valued identity column (`shape`, `linetype`) needs the same name →
+    /// Vega-Lite value mapping a literal gets: without it `'star'` reaches Vega as a
+    /// symbol name it cannot parse, and `'dashed'` as a dash array it cannot read.
+    #[test]
+    fn test_identity_names_convert_like_literals() {
+        use crate::plot::scale::{linetype_to_stroke_dash, shape_to_svg_path};
+        use crate::plot::{ArrayElement, Scale, ScaleType};
+
+        let writer = VegaLiteWriter::new();
+
+        for (aesthetic, geom, names) in [
+            ("shape", Geom::point(), ["star", "square"]),
+            ("linetype", Geom::line(), ["dashed", "dotted"]),
+        ] {
+            let mut spec = Plot::new();
+            spec.layers.push(
+                Layer::new(geom)
+                    .with_aesthetic(
+                        "pos1".to_string(),
+                        AestheticValue::standard_column("x".to_string()),
+                    )
+                    .with_aesthetic(
+                        "pos2".to_string(),
+                        AestheticValue::standard_column("y".to_string()),
+                    )
+                    .with_aesthetic(
+                        aesthetic.to_string(),
+                        AestheticValue::standard_column("name".to_string()),
+                    ),
+            );
+            let mut scale = Scale::new(aesthetic);
+            scale.scale_type = Some(ScaleType::identity());
+            scale.input_range = Some(
+                names
+                    .iter()
+                    .map(|n| ArrayElement::String(n.to_string()))
+                    .collect(),
+            );
+            spec.scales.push(scale);
+
+            let df = df! {
+                "x" => vec![1, 2],
+                "y" => vec![1, 2],
+                "name" => names.to_vec(),
+            }
+            .unwrap();
+
+            let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+            let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+            let layer = &vl_spec["layer"][0];
+
+            let calculate = layer["transform"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|t| t.get("calculate").and_then(|c| c.as_str()))
+                .unwrap_or_else(|| panic!("identity {aesthetic} needs a calculate transform"));
+
+            // Every resolved name maps to the value its literal would have produced,
+            // and an unrecognised one falls through to the datum
+            for name in names {
+                let expected = match aesthetic {
+                    "shape" => json!(shape_to_svg_path(name).unwrap()),
+                    _ => json!(linetype_to_stroke_dash(name).unwrap()),
+                };
+                assert!(
+                    calculate.contains(&format!("== '{name}' ? {expected}")),
+                    "{aesthetic}: {name} should map to {expected} in {calculate}"
+                );
+            }
+            assert!(
+                calculate.ends_with("datum['name']"),
+                "{aesthetic}: unrecognised values should pass through: {calculate}"
+            );
+
+            let channel = if aesthetic == "shape" {
+                "shape"
+            } else {
+                "strokeDash"
+            };
+            assert_eq!(
+                layer["encoding"][channel]["field"].as_str().unwrap(),
+                "name_visual"
+            );
+            assert!(layer["encoding"][channel]["scale"].is_null());
+        }
+    }
+
+    /// The `size` value Vega-Lite receives for `SETTING size => 3`.
+    fn build_spec_with_size_literal(writer: &VegaLiteWriter) -> f64 {
+        let mut spec = Plot::new();
+        let mut layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "pos1".to_string(),
+                AestheticValue::standard_column("x".to_string()),
+            )
+            .with_aesthetic(
+                "pos2".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            );
+        layer.mappings.insert(
+            "size".to_string(),
+            AestheticValue::Literal(crate::plot::ParameterValue::Number(3.0)),
+        );
+        spec.layers.push(layer);
+
+        let df = df! {
+            "x" => vec![1, 2],
+            "y" => vec![1, 2],
+        }
+        .unwrap();
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+        vl_spec["layer"][0]["encoding"]["size"]["value"]
+            .as_f64()
+            .unwrap()
     }
 
     #[test]

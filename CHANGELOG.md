@@ -35,6 +35,16 @@
 
 ### Changed
 
+- Dodging now only takes effect where groups actually meet on a position. A
+  layer whose grouping gives every group a position of its own — `colour` mapped
+  to the same column as the discrete axis, say — is drawn at its full width
+  instead of being squeezed into `1/n` of the band and shifted off its own
+  category, which made a coloured ridgeline plot (`DRAW violin SETTING side =>
+  'top'`) land its violins between the axis ticks or outside the panel
+  altogether. Groups in different facet panels don't meet either. Where any
+  position does hold several groups the whole layer still dodges, so an element
+  keeps the same slot in every position. Jitter, which dodges before jittering,
+  follows the same rule.
 - Categorical `y` axes now run bottom-up, so the first level sits at the bottom
   of the panel as it does in ggplot2. This affects every plot with a discrete or
   ordinal `y` — horizontal bars, boxplots and violins by category, points and
@@ -45,10 +55,32 @@
   half-width, a discrete tile's extent) is a fraction of the whole category step,
   so `width => 0.9` leaves a 10% gap — ggplot2's convention. Vega-Lite previously
   subtracted its own default band padding first, making every banded mark there
-  narrower than the same query rendered as a raster.
+  narrower than the same query rendered as a raster. This applies to dodged,
+  jittered and half-sided layers too, where Vega-Lite reserved a further 20% of
+  every step: their marks were narrower, their displacements smaller, and their
+  category ticks pulled toward the middle of the panel.
 
 ### Fixed
 
+- A dodged violin or half-boxplot on a categorical `y` axis is no longer flipped
+  in the Vega-Lite writer. Both took their band displacement from an encoding of
+  their own that read a ggsql offset as pointing down the screen, so their groups
+  came out in the opposite order to every other mark — a violin put the first
+  group above the second where a boxplot of the same data put it below, and a
+  half-boxplot's box parted company with its own whiskers once dodged. Violins
+  are also clipped to the panel now, as every other mark is.
+
+- An identity-scaled column is now read exactly like the equivalent literal.
+  `SCALE IDENTITY <aes>` hands its values straight to the aesthetic, so they mean
+  what the same value written with `SETTING` means, but several were passed to the
+  renderer unconverted: a `size` column was read as a symbol area in pixels²
+  rather than the radius in points `SETTING size => 3` gives (markers far too
+  small), a `shape` column of names such as `'star'` made Vega-Lite fail to render
+  at all, and a `linetype` column of names such as `'dashed'` drew a solid line in
+  both writers. `size`, `linewidth`, `fontsize`, `shape` and `linetype` identity
+  columns now convert per row, so an identity column and a setting produce the
+  same drawing. A value the aesthetic already understands still passes through
+  untouched.
 - `DRAW bar MAPPING <category> AS y` produced a single bar against a synthetic
   axis instead of horizontal bars. A layer whose geom synthesises its primary
   position (bar, boxplot) now transposes when the user maps a *discrete* `y`, and

@@ -257,9 +257,11 @@ impl Writer for HephaestusWriter {
         let mut legends_captured = false;
 
         for panel in &panels {
-            // Slice each layer's data to this panel. Skip panels with no data in
-            // any layer (e.g. a Grid cell absent under `missing => 'null'`) so the
-            // grid cell stays an empty framed panel rather than erroring.
+            // Slice each layer's data to this panel. A Grid cell whose facet
+            // combination doesn't occur in the data still becomes a panel — framed,
+            // axed and strip-labelled like any other, just with no marks — so the
+            // grid stays rectangular and its strips keep describing every row and
+            // column (the ggplot2 look).
             let slices: Vec<(&Layer, DataFrame)> = spec
                 .layers
                 .iter()
@@ -270,49 +272,64 @@ impl Writer for HephaestusWriter {
                     ))
                 })
                 .collect::<Result<_>>()?;
-            if slices.iter().all(|(_, df)| df.height() == 0) {
-                continue;
-            }
+            let empty = slices.iter().all(|(_, df)| df.height() == 0);
 
             // Fixed dimensions bind the shared `pos1`/`pos2`; free dimensions get
             // a per-panel scale whose domain is computed from this panel's slices
             // (the one place the writer computes extents — free facets only).
-            let ps = facet::PanelScales::new(spec, panel);
+            let mut ps = facet::PanelScales::new(spec, panel);
             let layer_dfs: Vec<&DataFrame> = slices.iter().map(|(_, df)| df).collect();
             if ps.free_x {
-                if let Some(hs) =
-                    scales::free_position_scale(spec.find_scale("pos1"), &layer_dfs, "pos1")
-                {
-                    view.insert_scale(ps.pos1.clone(), hs);
+                match scales::free_position_scale(spec.find_scale("pos1"), &layer_dfs, "pos1") {
+                    Some(hs) => view.insert_scale(ps.pos1.clone(), hs),
+                    // No panel extent to free the dimension over (an empty cell),
+                    // so read the shared scale rather than leave the axis and the
+                    // channel bindings pointing at a scale that was never inserted.
+                    None => ps.use_shared("pos1"),
                 }
             }
             if ps.free_y {
-                if let Some(hs) =
-                    scales::free_position_scale(spec.find_scale("pos2"), &layer_dfs, "pos2")
-                {
-                    view.insert_scale(ps.pos2.clone(), hs);
+                match scales::free_position_scale(spec.find_scale("pos2"), &layer_dfs, "pos2") {
+                    Some(hs) => view.insert_scale(ps.pos2.clone(), hs),
+                    None => ps.use_shared("pos2"),
                 }
             }
 
             // Build every layer's geom into this panel; geoms bind channels and
             // record legends (first panel only) into `legend_sink`, drawing in
-            // layer (DRAW) = z-order.
+            // layer (DRAW) = z-order. An empty panel builds no geoms — a hephaestus
+            // geom over zero rows has nothing to draw — and so must not count as
+            // the legend-capturing panel either.
             let panel_legends = (!legends_captured).then_some(&legend_sink);
             let mut plot = HPlot::new(&composition, panel.id.as_str())
                 .shape_registry(ShapeRegistry::with_builtins());
-            for (layer, df) in &slices {
-                let ctx = Ctx {
-                    spec,
-                    layer,
-                    df,
-                    transposed: is_transposed(layer),
-                    pos1_scale: &ps.pos1,
-                    pos2_scale: &ps.pos2,
-                    legends: panel_legends,
-                };
-                geom::build_into_plot(&mut plot, &ctx)?;
+            if !empty {
+                for (layer, df) in &slices {
+                    let ctx = Ctx {
+                        spec,
+                        layer,
+                        df,
+                        transposed: is_transposed(layer),
+                        pos1_scale: &ps.pos1,
+                        pos2_scale: &ps.pos2,
+                        legends: panel_legends,
+                    };
+                    geom::build_into_plot(&mut plot, &ctx)?;
+                }
+                legends_captured = true;
+            } else {
+                // hephaestus draws a panel's grid lines from the scales bound to
+                // the projection's channels — which a geom would have bound. With
+                // no geoms to do it, bind the position channels here so an empty
+                // cell carries the same grid as its populated neighbours. A
+                // position ggsql resolved no scale for stays unbound, since a
+                // binding to an unregistered scale fails validation.
+                for (channel, name) in [("x", &ps.pos1), ("y", &ps.pos2)] {
+                    if view.scale(name).is_some() {
+                        plot.set_binding(channel, name.clone());
+                    }
+                }
             }
-            legends_captured = true;
 
             // Axes are created per coordinate system, edge-only for fixed scales.
             plot = apply_projection(plot, spec, panel, &ps);
@@ -686,6 +703,18 @@ mod tests {
         ));
     }
 
+    /// An identity column is a per-row literal, so a `linetype` column holds ggsql
+    /// names or hex patterns and must go through `map_linetype` exactly as the
+    /// literal does — the channel takes dash patterns, not strings, so passing the
+    /// names through drew a solid line.
+    #[test]
+    fn renders_identity_linetype() {
+        assert_png_or_skip(render(
+            "SELECT x, y, lt FROM (VALUES (1,2,'dashed'),(2,3,'dashed'),(1,1,'dotted'),(2,2,'dotted')) t(x,y,lt) \
+             VISUALISE x AS x, y AS y, lt AS linetype DRAW line SCALE IDENTITY linetype",
+        ));
+    }
+
     #[test]
     fn renders_colorbar_beside_size_legend() {
         // Two distinct scales: a merged colorbar for `color` plus a keyed size
@@ -994,6 +1023,29 @@ mod tests {
             "SELECT 1 AS x, 2 AS y, 'a' AS r, 'p' AS c UNION ALL SELECT 2, 3, 'b', 'p' \
              UNION ALL SELECT 3, 1, 'a', 'q' UNION ALL SELECT 4, 5, 'b', 'q' \
              VISUALISE x AS x, y AS y DRAW point FACET r BY c",
+        ));
+    }
+
+    #[test]
+    fn renders_sparse_grid_facet() {
+        // A grid whose row × column combinations are not all present: the absent
+        // cells are still drawn — framed, gridded, axed and strip-labelled — so the
+        // grid stays rectangular. `('b','q')` has no rows here.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS r, 'p' AS c UNION ALL SELECT 2, 3, 'b', 'p' \
+             UNION ALL SELECT 3, 1, 'a', 'q' \
+             VISUALISE x AS x, y AS y DRAW point FACET r BY c",
+        ));
+    }
+
+    #[test]
+    fn renders_sparse_grid_facet_free() {
+        // An empty cell has no extent of its own, so a free dimension falls back to
+        // the shared scale there — the axis and channel bindings must still resolve.
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y, 'a' AS r, 'p' AS c UNION ALL SELECT 2, 3, 'b', 'p' \
+             UNION ALL SELECT 3, 1, 'a', 'q' \
+             VISUALISE x AS x, y AS y DRAW point FACET r BY c SETTING free => ['x','y']",
         ));
     }
 

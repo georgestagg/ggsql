@@ -536,8 +536,8 @@ scales). Works under Cartesian, Polar, and Map projections.
   the VL writer's `resolve_facet_ordering` (facet scale `input_range`, then
   `reverse`; numeric-aware ascending otherwise). Per-panel **data slicing** reuses
   `DataFrame::take` on the row indices matching the panel's facet value(s); a
-  layer with no facet column is used whole. Grid cells with no data (e.g.
-  `missing => 'null'`) are skipped, leaving an empty framed panel.
+  layer with no facet column is used whole. Grid cells with no data were skipped
+  at this point — superseded, see *Empty facet cells are panels* below.
 - **The write loop is now panel-based** (`mod.rs`): unfaceted and faceted share
   one path (`Vec<Panel>`, length 1 when there's no FACET). Fixed scales are
   registered once globally; each panel builds one `HPlot`, applies the
@@ -1404,6 +1404,130 @@ across wrap/grid/free faceting, the `LABEL` override, and the polar/dummy-scale
 suppressions; 107 writer tests pass; wrap, free grid and unfaceted renders
 eyeballed with a single centred title on each axis; fmt and clippy clean.
 
+## Identity columns are per-row literals — status: implemented
+
+`SCALE IDENTITY <aes>` passes data through unscaled, so each value means what the
+same value written as a `SETTING` literal means: for `size` the radius in points
+that `doc/syntax/scale/aesthetic/size.qmd` names, for `shape` and `linetype` one of
+ggsql's own names. There was no open question about the convention, only writers
+disagreeing about whether an identity column got the same treatment as a literal.
+
+Three aesthetics reached a renderer unconverted, in two writers:
+
+| | Vega-Lite | hephaestus |
+| --- | --- | --- |
+| `size` (radius in pt) | read as an area in px² — `flipper_len` (172–231) drew ≈15 px markers where the literals would have drawn ≈500 px | correct (same `Raw(n)` as the literal) |
+| `shape` (`'star'`) | render **throws** `Invalid SVG path, incorrect parameter type` | correct |
+| `linetype` (`'dashed'`) | emits `stroke-dasharray="dashed"` → invalid, silently solid | read as `f64` via `wire_material`'s fallback arm → solid |
+
+**Vega-Lite.** `identity_conversion` returns the Vega expression an identity column
+needs and `build_column_encoding` emits it as a layer `calculate` feeding a derived
+`<col>_visual` field. A transform is the only option — Vega-Lite has no per-datum
+arithmetic in an encoding, and faking the unit case with a `pow` scale would need
+`clamp: false` + `legend: null` to stay identity-like. Two shapes of conversion:
+arithmetic for the unit aesthetics (`size`, `linewidth`, `fontsize`), and for the
+name aesthetics a conditional chain built by `identity_lookup_expr` over the values
+the scale resolved into `input_range`, since Vega has no lookup over an inline
+table. Anything unrecognised falls through to the datum, so a column already
+holding SVG paths or dash arrays still passes through — as a literal does. The
+transforms travel out of `build_layer_encoding` on `EncodingContext::transforms`
+and are appended after the source filter.
+
+**hephaestus.** `wire_material`'s identity branch had an arm per `RangeKind` except
+`Linetype`, which fell into the numeric default. It now maps each row through
+`map_linetype`, the same parser the literal uses, as a `DataColumn` — hephaestus
+implements `Raw(DataColumn)` but has no `Raw(Vec<Arc<[LinetypeStep]>>)` conversion.
+Every other kind already mirrored its literal (colors parse, strings pass, weights
+and angles convert per row).
+
+Verified by rendering each aesthetic both ways and comparing the output, not the
+spec: VL symbol diameter 68.1 px for `size => 36` and for an identity column of
+`36`, identical `d` attributes for `'star'`, `stroke-dasharray="6,4"` for
+`'dashed'` (measured off `vl2svg`); byte-identical hephaestus PNGs for the shape and
+linetype pairs. `test_identity_column_converts_like_literal` and
+`test_identity_names_convert_like_literals` pin the transforms and their agreement
+with the literal path, `renders_identity_linetype` covers the hephaestus arm; 148 VL
+tests, 105 hephaestus tests and the full `ggsql` suite pass; fmt and clippy clean.
+
+Deliberately **not** changed: the absolute marker size. Measured against the
+documented "radius in points", both writers are undersized — VL renders `0.709 · n`
+and hephaestus `0.806 · n` — because core's shapes are emitted at reference radius
+0.8 (`src/plot/scale/shape.rs`) while Vega scales a custom symbol path by
+`√size / 2` and hephaestus scales its shape path by `pt_to_px(size)`. Correcting
+either would resize every existing plot (VL +41%, hephaestus +25%), so the two
+factors stand as accepted constraints; see §9.
+
+## hephaestus bump `aec4e1b` → `51b4632` — status: implemented
+
+Two upstream fixes, neither needing a change on this side.
+
+- **A line splits at a missing value.** `LineGeom` ends the run in progress when a
+  row's `x` or `y` doesn't resolve to a finite position and starts the next one
+  after the gap, rather than bridging it; runs left with one vertex drop out, and
+  endpoint markers stay on the mark's terminals rather than appearing at each gap
+  edge. `channels::column_to_f64` already maps a null cell to `NaN`, so this
+  needed no wiring: `Ozone` against `Day` breaks at exactly the days with no
+  reading, which is where the Vega-Lite render has always broken it — the raster
+  used to draw straight through them.
+- **Legend text resolves against the same defaults as axis text.** `LegendTheme`
+  pinned its title at 11 pt; it now inherits the axis-title element, and legend
+  break labels take the axis break-label size and colour. The writer sets none of
+  these — `ggsql_theme` only suppresses the colorbar frame — so the legend came
+  into line with the Vega-Lite config, where legend and axis titles are both 15 px
+  and both kinds of label 12 px. A legend column is a few pixels narrower as a
+  result, which widens the panel beside it: 144 of the 246 corpus renders differ
+  by that relayout alone.
+
+Verified: 253 cells over `doc/syntax/` + `doc/gallery/` in ~223 s, 0 problems; the
+null-line and legend cases re-rendered beside their Vega-Lite counterparts (the
+gaps coincide; legend labels now measure the same as axis tick labels, 26 px
+against 26 px, where they were visibly larger before); the colorbar still draws
+unframed, so the one theme override survived the resolution change; 105 writer
+tests pass; fmt and clippy clean.
+
+## Empty facet cells are panels — status: implemented
+
+A `FACET <a> BY <b>` grid whose row × column combinations are not all populated —
+`species BY island` on penguins, where only 5 of 9 cells occur — rendered as a
+scatter of panels rather than a grid: the write loop `continue`d on a panel whose
+every layer slice was empty. Dropping the panel drops everything attached to it,
+so two of the three row strips disappeared with their cells, the edge-axis rule
+("bottom-most panel of the column") landed on whichever panel happened to be last
+in a column, and the surviving panels floated at unrelated grid positions. The
+Vega-Lite render of the same query draws all nine cells, gridded and fully
+strip-labelled, as does ggplot2's `facet_grid`.
+
+`facet.rs` already built the full cross product of levels, so the fix is in the
+write loop: attach every panel, and give an empty one the two things a geom would
+otherwise have provided.
+
+- **Bindings.** hephaestus draws the panel grid from the scales bound to the
+  projection's consumed channels (`Plot::draw_panel_chrome_into` → `PanelScales`),
+  and with no geoms nothing binds them — so an empty cell came out a flat grey
+  rectangle beside gridded neighbours. The panel now binds `x`/`y` to its own
+  position scale names itself, guarded on the scale being registered, since a
+  binding to an unregistered scale is a `MissingScale` validation failure. `x`/`y`
+  are the right names under every projection: Polar and Custom both name their
+  consumed channels from these, and ggsql's pos1→`x` / pos2→`y` assignment is what
+  `apply_proj_polar` already encodes.
+- **Free dimensions.** `free_position_scale` computes a per-panel extent and
+  returns `None` when there are no rows to compute one from, which would leave the
+  axis and the bindings pointing at a `pos1__p{index}` that was never inserted.
+  `PanelScales::use_shared` points the dimension back at the global scale for that
+  panel — the dimension stays flagged free, so the axis is still drawn there like
+  on every other panel.
+- **Legend capture.** Legends are captured from the *first* panel; an empty first
+  panel builds no geoms and so must not set `legends_captured`, or the figure loses
+  its legend whenever cell (0,0) is one of the absent combinations.
+
+Verified against the Vega-Lite render of `species BY island`: nine panels, three
+row strips and three column strips, x-axes across the bottom row and y-axes down
+the left column, empty cells carrying the same grid as populated ones — and with
+`free => ['x','y']`, empty cells showing the global axis while populated ones keep
+their own. `renders_sparse_grid_facet` and `renders_sparse_grid_facet_free` cover
+both (the free one fails on the missing scale even headless); 107 writer tests
+pass; fmt and clippy clean.
+
 ## 8. Key source references
 
 ggsql:
@@ -1531,15 +1655,6 @@ resolved per-panel domains and spatial position scales:
   path should do the same.
 - **`bar` on a numeric primary axis stays continuous** (no `pos1end`), so
   band-fraction bars get no width; VL hits the same wall (`bandwidth('x')` is 0).
-- **An identity `size` column has no agreed unit**, so the two writers cannot
-  agree on it. `SCALE IDENTITY size` bypasses scaling by design and both writers
-  receive the same raw numbers (`flipper_len`, 172–231); VL reads `size` as an
-  *area in px²* (≈15 px markers), hephaestus as a *pt diameter* (≈230–310 px, so
-  the panel becomes one undifferentiated field). Neither is wrong on its own
-  terms — VL converts pt→area only for *literals* (`encoding.rs:558`), never for
-  an identity column, so the conversion has nowhere to live but core. Settling it
-  means deciding what unit ggsql promises for an identity material column, then
-  having both writers honour it. `doc/syntax/scale/type/identity.qmd:15`.
 - **A data-mapped `linewidth` on a boxplot/violin is rejected by ggsql**: the stat
   drops the column, so `linewidth AS w` fails validation for *both* writers
   ("Column `linewidth` … does not exist"). Grouping aesthetics (fill/stroke)
@@ -1567,9 +1682,20 @@ Pinned at rev `aec4e1b`. The shape of everything that got resolved here: the
 writer's job is to pass resolved values through, so wherever hephaestus had to
 compute something itself, the fix was a missing *setter*, not a better algorithm.
 
-Every item this section previously listed is now fixed upstream, verified by
+**A scene that over-covers the panel renders as a blank frame, silently.** vello's
+coarse-raster buffers overflow and the frame comes back empty — no panel, no axes,
+no error, exit 0 — so the failure is indistinguishable from an empty plot. Repro:
+`DRAW point SETTING size => 200` over the 342-row penguins set at the default
+`dpi=300` (a shape-unit scale of 833 px per marker). It is a *capacity* limit, not a
+size limit: the same query renders at `-D dpi=96`, at `LIMIT 200`, or at
+`size => 150`, and two rows render at `size => 300`. Fix belongs upstream — vello
+only reports bump-allocation failure through the async render path, so hephaestus
+could detect it and re-render with larger buffers rather than returning Ok on an
+empty frame. Until then an absurd size silently produces nothing.
+
+Every other item this section previously listed is now fixed upstream, verified by
 re-rendering its repro (see the bump entry in the phase log for the writer-side
-changes the bump required). One item remains, and it costs nothing in practice:
+changes the bump required). One more remains, and it costs nothing in practice:
 
 **No scale-level domain expansion / "nice" padding.** Not a gap anywhere the
 writer can reach. ggsql owns expansion: `resolve_common_steps` applies
@@ -1592,6 +1718,14 @@ at all still gets no padding from hephaestus.
 
 ### Standing constraints (accepted)
 
+- **The two writers draw a given `size` at different absolute scales**, and neither
+  matches the documented radius: measured, a `size` of `n` renders at radius
+  `0.709 · n` pt in VL and `0.806 · n` pt in hephaestus (14% apart). Both trace to
+  core emitting shapes at reference radius 0.8 while Vega scales a custom symbol path
+  by `√size / 2` and hephaestus by `pt_to_px(size)`. Each writer is *internally*
+  consistent across literal, identity column and output range, which is what
+  `SETTING`↔`SCALE IDENTITY` parity needs; making them agree with each other and with
+  the doc means resizing every existing plot, so it is a deliberate non-goal.
 - **Raster only.** `vello`/wgpu is the sole working backend; `svg`/`pdf`/`blend2d`
   are declared placeholders. No vector output.
 - **Needs a GPU adapter at render time.** CI installs lavapipe; this operational

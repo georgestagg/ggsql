@@ -40,7 +40,7 @@ use std::time::Instant;
 )]
 struct Args {
     /// Directories to scan for `.qmd` files, or individual `.qmd` files
-    #[arg(default_value = "doc/syntax")]
+    #[arg(default_values = ["doc/syntax", "doc/gallery"])]
     paths: Vec<PathBuf>,
 
     /// Directory to write the report and its images into
@@ -88,6 +88,8 @@ struct Source {
     /// Path as given on the command line, used as the report's label
     label: String,
     title: String,
+    /// The file's own directory, which its cells run in
+    dir: PathBuf,
     cells: Vec<Cell>,
 }
 
@@ -245,11 +247,31 @@ struct SourceResult {
 ///
 /// The reader is per file, not per cell, because the docs rely on it: a page
 /// may build a table in one cell and plot it in the next.
+///
+/// The cells run in their own file's directory, because a page reads its data
+/// by a path relative to itself (`FROM 'minard_troops.csv'`) — that is how
+/// Quarto executes them. `assets` is therefore resolved to an absolute path by
+/// the caller, since it outlives that switch.
 fn run_source(source: Source, args: &Args, assets: &Path) -> SourceResult {
+    let restore = std::env::current_dir().ok();
+    if let Err(e) = std::env::set_current_dir(&source.dir) {
+        eprintln!("warning: cannot enter {}: {e}", source.dir.display());
+    }
+
+    let result = run_cells(source, args, assets);
+
+    if let Some(dir) = restore {
+        let _ = std::env::set_current_dir(dir);
+    }
+    result
+}
+
+fn run_cells(source: Source, args: &Args, assets: &Path) -> SourceResult {
     let Source {
         label,
         title,
         cells,
+        ..
     } = source;
 
     let reader = match DuckDBReader::from_connection_string("duckdb://memory") {
@@ -713,6 +735,9 @@ fn main() {
         eprintln!("Could not create {}: {e}", assets.display());
         std::process::exit(1);
     }
+    // Cells run in their own page's directory, so the renders have to land at a
+    // path that does not move with them.
+    let assets = fs::canonicalize(&assets).unwrap_or(assets);
 
     let mut sources = Vec::new();
     for path in paths {
@@ -729,9 +754,14 @@ fn main() {
         }
         let label = path.to_string_lossy().replace('\\', "/");
         let title = front_matter_title(&text).unwrap_or_else(|| label.clone());
+        let dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
         sources.push(Source {
             label,
             title,
+            dir,
             cells,
         });
     }

@@ -10,7 +10,7 @@ use hephaestus::plot::geom::{BuildableGeom, Geom, GeomBuilder, Raw};
 use hephaestus::plot::theme::{Element, Length, RectElement, Theme};
 use hephaestus::plot::Plot as HPlot;
 use hephaestus::scales::chrome::LegendSide;
-use hephaestus::scales::value::Value as HValue;
+use hephaestus::scales::value::{DataColumn, Value as HValue};
 
 use super::channels::{
     aesthetic_column_name, build_group_keys, column_to_bool, column_to_channel, column_to_colors,
@@ -373,6 +373,18 @@ pub fn wire_material<G: BuildableGeom>(
                 }
                 RangeKind::Shape | RangeKind::Text => {
                     builder.set(m.channel, Raw(column_to_strings(ctx.df, col)?));
+                }
+                // A linetype column holds ggsql names or hex patterns, which the
+                // channel cannot read as strings — it takes dash patterns. Map each
+                // row through the same parser a literal goes through. Built as a
+                // `DataColumn` because hephaestus has no `Raw(Vec<Arc<[LinetypeStep]>>)`
+                // conversion, only the `Raw(DataColumn)` one.
+                RangeKind::Linetype => {
+                    let patterns: Vec<_> = column_to_strings(ctx.df, col)?
+                        .iter()
+                        .map(|s| map_linetype(s))
+                        .collect();
+                    builder.set(m.channel, Raw(DataColumn::from(patterns)));
                 }
                 RangeKind::Bool => {
                     builder.set(m.channel, Raw(column_to_bool(ctx.df, col)?));

@@ -82,7 +82,7 @@ Library-level coverage lives in `ggsql` itself — this crate is thin glue, so i
 [`examples/visual_test.rs`](examples/visual_test.rs) is a **developer harness, not a shipped feature**: it treats every executable ```` ```{ggsql} ```` cell in [`/doc/`](../doc/) as a test corpus, renders each one, and writes a single HTML report pairing every query with its output. It lives here because this is the crate that already owns clap and the public `ggsql` API; it adds nothing to the binary.
 
 ```sh
-cargo run -p ggsql-cli --features hephaestus --example visual_test              # doc/syntax
+cargo run -p ggsql-cli --features hephaestus --example visual_test              # doc/syntax + doc/gallery
 cargo run -p ggsql-cli --features hephaestus --example visual_test -- --compare # + Vega-Lite side by side
 cargo run -p ggsql-cli --features hephaestus --example visual_test -- doc/gallery -f pie
 open target/visual-test/index.html
@@ -90,9 +90,10 @@ open target/visual-test/index.html
 
 `[[example]]`'s `required-features` keeps it out of `cargo test --workspace`, so a build without a GPU stack never compiles it.
 
-Three properties are worth preserving when changing it:
+Four properties are worth preserving when changing it:
 
 - **One reader per source file, cells in document order.** Doc pages build a table in one cell and plot it in the next, so per-cell isolation would break the corpus. A cell with no `VISUALISE` (`validate(..).has_visual()` is false) runs as setup through `execute_sql`.
+- **Cells run in their own page's directory**, as Quarto runs them, so a query reading `FROM 'minard_troops.csv'` finds the CSV sitting beside the `.qmd`. The report and its `assets/` are resolved to an absolute path up front, since they outlive that switch.
 - **Nothing aborts the run.** Execution errors, render errors and *panics* inside a writer are captured per cell (`capture`), so one report surfaces every problem in the corpus at once. This is the point of the tool — a run that stops at the first failure tells you almost nothing.
 - **Renders are files, specs are inline.** PNGs are written to `assets/`; Vega-Lite specs are embedded in `<script type="application/json">` and mounted lazily, so the report works opened straight off disk (`fetch` would be blocked on `file://`) without paying for 200 charts up front.
 

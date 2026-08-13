@@ -186,8 +186,10 @@ channel always drives the same panel axis; only the column feeding it moves.
 
 `side_sign` + `band_edges(half, side)` halve a mark onto one side of the band
 (`'both'` → `±half`, else centreline → `±half`). hephaestus band offsets are
-positive-right on x and positive-up on y, so `'top'`/`'right'` are positive in
-*either* orientation — one predicate, where the Vega-Lite writer flips the sign
+positive-right on x and positive-up on y — the convention every ggsql offset
+uses — so `'top'`/`'right'` are positive in *either* orientation and one
+predicate covers both. The Vega-Lite writer's `side_is_positive` reads the same
+way; it reverses the *scale domain* of a `yOffset` channel rather than the sign,
 because VL's y offsets point down.
 
 ## Channel naming
@@ -283,8 +285,17 @@ Unfaceted is the same path with one panel, so there is no branch.
   facets by bin centre, else the facet scale's `input_range` then numeric-aware
   ascending, then `reverse`.
 - **Slicing** is `DataFrame::take` on matching row indices. A layer with no facet
-  column is used whole in every panel; a grid cell with no data in any layer is
-  skipped, leaving an empty framed panel.
+  column is used whole in every panel.
+- **Every cell is a panel, empty or not.** A Grid row × column combination absent
+  from the data still gets its `HPlot` — background, grid, edge axis and strip —
+  because the grid must stay rectangular and the strips must keep describing every
+  row and column (ggplot2's `facet_grid`, and the Vega-Lite writer). Two things
+  follow, both in the `write` loop: the panel builds no geoms (nothing to draw over
+  zero rows), so it must bind `x`/`y` itself — hephaestus derives the panel grid
+  from the scales bound to the projection's channels, which a geom would otherwise
+  have bound — and it must not count as the legend-capturing panel. A **free**
+  dimension has no extent to compute there either, so `PanelScales::use_shared`
+  points that dimension back at the global scale.
 - **Strip labels** come from `Level { key, value, is_null, label }` — `key`
   selects rows, `label` is the text. Discrete levels honour `RENAMING`
   (suppressed → `Some("")`, *not* `None`, so hephaestus still reserves the strip

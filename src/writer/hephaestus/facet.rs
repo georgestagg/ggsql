@@ -390,6 +390,18 @@ impl PanelScales {
             free_y,
         }
     }
+
+    /// Point one dimension back at the shared `pos1`/`pos2` scale, for a panel
+    /// whose free per-panel scale could not be built (an empty facet cell has no
+    /// extent to free the dimension over). The dimension stays flagged free, so
+    /// its axis is still drawn on this panel like on every other.
+    pub fn use_shared(&mut self, aesthetic: &str) {
+        match aesthetic {
+            "pos1" => self.pos1 = "pos1".to_string(),
+            "pos2" => self.pos2 = "pos2".to_string(),
+            _ => {}
+        }
+    }
 }
 
 /// The rows of `df` belonging to `panel`, sliced via `DataFrame::take`. A layer
