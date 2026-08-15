@@ -320,8 +320,8 @@ impl GgsqlContext {
 
     /// Register all known builtin datasets (e.g. ggsql:penguins)
     pub async fn register_builtin_datasets(&self) -> Result<(), JsValue> {
-        for &name in ggsql::reader::data::KNOWN_DATASETS {
-            if let Some(bytes) = ggsql::reader::data::builtin_parquet_bytes(name) {
+        for &name in ggsql::reader::builtin_data::KNOWN_DATASETS {
+            if let Some(bytes) = ggsql::reader::builtin_data::builtin_parquet_bytes(name) {
                 let table_name = ggsql::naming::builtin_data_table(name);
                 let columns_js = convert_parquet_js(bytes).await.map_err(|e| {
                     JsValue::from_str(&format!("Parquet error for '{}': {:?}", name, e))
@@ -335,6 +335,23 @@ impl GgsqlContext {
         }
         Ok(())
     }
+
+    // TODO: implement `register_online_datasets` to support `online:world` etc.
+    //
+    // Expected signature:
+    //   pub async fn register_online_datasets(&self, sql: &str) -> Result<(), JsValue>
+    //
+    // Implementation:
+    //   1. Extract names via:
+    //      ggsql::reader::builtin_data::extract_prefixed_dataset_names(sql, "online")
+    //   2. For each name, skip if already registered (check table_exists on reader).
+    //   3. Resolve URL via ggsql::reader::online_data::resolve_online_dataset(name).
+    //   4. Fetch bytes via browser fetch() (wasm_bindgen_futures + web_sys::Request).
+    //   5. Parse with convert_parquet_js(bytes).await + columns_js_to_dataframe().
+    //   6. Register under ggsql::naming::online_data_table(name).
+    //
+    // Then call this from `execute()` and `execute_sql()` before the reader runs,
+    // which requires making those methods async (or calling from JS before execute).
 
     /// Load a previously installed SQLite extension.
     ///

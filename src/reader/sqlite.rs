@@ -371,18 +371,31 @@ impl Reader for SqliteReader {
         // Handle ggsql:name namespaced identifiers (builtin datasets)
         #[cfg(all(feature = "builtin-data", feature = "parquet"))]
         {
-            let dataset_names = super::data::extract_builtin_dataset_names(sql)?;
+            let dataset_names = super::builtin_data::extract_prefixed_dataset_names(sql, "ggsql")?;
             for name in &dataset_names {
                 let table_name = naming::builtin_data_table(name);
                 if !self.table_exists(&table_name) {
-                    let df = super::data::load_builtin_dataframe(name)?;
+                    let df = super::builtin_data::load_builtin_dataframe(name)?;
+                    self.register(&table_name, df, true)?;
+                }
+            }
+        }
+
+        // Register online datasets if referenced
+        #[cfg(feature = "parquet")]
+        {
+            let online_names = super::builtin_data::extract_prefixed_dataset_names(sql, "online")?;
+            for name in &online_names {
+                let table_name = naming::online_data_table(name);
+                if !self.table_exists(&table_name) {
+                    let df = super::online_data::load_online_dataframe(name)?;
                     self.register(&table_name, df, true)?;
                 }
             }
         }
 
         // Rewrite ggsql:name → __ggsql_data_name__ in SQL
-        let sql = super::data::rewrite_namespaced_sql(sql)?;
+        let sql = super::builtin_data::rewrite_namespaced_sql(sql)?;
 
         if !super::returns_rows(&sql) {
             self.conn

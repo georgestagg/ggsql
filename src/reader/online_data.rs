@@ -1,0 +1,265 @@
+use const_format::concatcp;
+
+use crate::{DataFrame, GgsqlError};
+
+// =============================================================================
+// Dataset registry
+// =============================================================================
+
+/// Resolve an online dataset name to its download URL.
+pub fn resolve_online_dataset(name: &str) -> Option<&'static str> {
+    let name = name.replace('-', "_");
+    const BASE: &str = "https://github.com/ggsql-dev/datasets/releases/latest/download";
+    let url = match name.as_str() {
+        "world" | "world_110m" | "countries" | "countries_110m" => {
+            concatcp!(BASE, "/ne_110m_admin_0_countries.parquet")
+        }
+        "world_50m" | "countries_50m" => {
+            concatcp!(BASE, "/ne_50m_admin_0_countries.parquet")
+        }
+        "world_10m" | "countries_10m" => {
+            concatcp!(BASE, "/ne_10m_admin_0_countries.parquet")
+        }
+        // Only US is included in the 110m dataset
+        "us_states" | "us_states_110m" => {
+            concatcp!(BASE, "/ne_110m_admin_1_states_provinces.parquet")
+        }
+        // Only includes large countries Russia, US, Canada, Brazil, China, and some others
+        // Notably missing are many European, African, South American countries
+        "states_50m" | "provinces_50m" => {
+            concatcp!(BASE, "/ne_50m_admin_1_states_provinces.parquet")
+        }
+        // Includes all countries
+        "states_10m" | "provinces_10m" => {
+            concatcp!(BASE, "/ne_10m_admin_1_states_provinces.parquet")
+        }
+        "us_counties" | "us_counties_10m" => {
+            concatcp!(BASE, "/ne_10m_admin_2_counties.parquet")
+        }
+        _ => return None,
+    };
+    Some(url)
+}
+
+// =============================================================================
+// Native download + cache (not available on wasm32)
+// =============================================================================
+//
+// Wasm integration lives in `ggsql-wasm/src/lib.rs` and must provide an
+// equivalent of `load_online_dataframe` using the browser fetch API:
+//
+//   1. Call `resolve_online_dataset(name)` to get the URL.
+//   2. Fetch the bytes via browser `fetch()` (async).
+//   3. Parse parquet via `convert_parquet_js` + `columns_js_to_dataframe`
+//      (same as `register_parquet` / `register_builtin_datasets`).
+//   4. Register the DataFrame under `naming::online_data_table(name)`.
+//
+// The method should be called `register_online_datasets` on `GgsqlWasm`,
+// following the shape of `register_builtin_datasets`. It should extract
+// `online:` dataset names from the SQL (via
+// `builtin_data::extract_prefixed_dataset_names(sql, "online")`), skip
+// any that are already registered, and fetch + register the rest.
+//
+// Caching: the native path uses the filesystem. In the browser, consider
+// the Cache API or simply re-fetch per session. This is a UX decision.
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "parquet"))]
+mod native {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    pub(super) fn cache_dir() -> Result<PathBuf, GgsqlError> {
+        let dir = platform_cache_dir().join("ggsql").join("online");
+        fs::create_dir_all(&dir).map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "Failed to create cache directory '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
+        Ok(dir)
+    }
+
+    fn platform_cache_dir() -> PathBuf {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
+                return PathBuf::from(dir);
+            }
+            if let Ok(home) = std::env::var("HOME") {
+                return PathBuf::from(home).join(".cache");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                return PathBuf::from(home).join("Library").join("Caches");
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(dir) = std::env::var("LOCALAPPDATA") {
+                return PathBuf::from(dir);
+            }
+        }
+
+        std::env::temp_dir()
+    }
+
+    fn cache_filename(url: &str) -> String {
+        url.rsplit('/')
+            .next()
+            .unwrap_or("dataset.parquet")
+            .to_string()
+    }
+
+    fn ensure_downloaded(url: &str) -> Result<PathBuf, GgsqlError> {
+        let filename = cache_filename(url);
+        let parquet_path = cache_dir()?.join(&filename);
+
+        if parquet_path.exists() {
+            return Ok(parquet_path);
+        }
+
+        let partial_path = parquet_path.with_extension("parquet.partial");
+
+        // Clean up prior failed attempt
+        let _ = fs::remove_file(&partial_path);
+
+        let response = ureq::get(url).call().map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "Failed to download '{}': {}. Are you connected to the internet?",
+                url, e
+            ))
+        })?;
+
+        let bytes = response.into_body().read_to_vec().map_err(|e| {
+            GgsqlError::ReaderError(format!("Failed to read response from '{}': {}", url, e))
+        })?;
+
+        fs::write(&partial_path, &bytes).map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "Failed to write cache file '{}': {}",
+                partial_path.display(),
+                e
+            ))
+        })?;
+
+        fs::rename(&partial_path, &parquet_path).map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "Failed to finalize cache file '{}': {}",
+                parquet_path.display(),
+                e
+            ))
+        })?;
+
+        Ok(parquet_path)
+    }
+
+    /// Load an online dataset by name, downloading and caching as needed.
+    pub fn load_online_dataframe(name: &str) -> Result<DataFrame, GgsqlError> {
+        let url = resolve_online_dataset(name).ok_or_else(|| {
+            GgsqlError::ReaderError(format!("Unknown online dataset: '{}'", name))
+        })?;
+
+        let parquet_path = ensure_downloaded(url)?;
+
+        let bytes = fs::read(&parquet_path).map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "Failed to read cached parquet '{}': {}",
+                parquet_path.display(),
+                e
+            ))
+        })?;
+
+        crate::reader::builtin_data::dataframe_from_parquet_bytes(name, bytes::Bytes::from(bytes))
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "parquet"))]
+pub use native::load_online_dataframe;
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_world() {
+        let url = resolve_online_dataset("world").unwrap();
+        assert!(url.contains("110m_admin_0_countries"));
+    }
+
+    #[test]
+    fn test_resolve_world_50m() {
+        let url = resolve_online_dataset("world_50m").unwrap();
+        assert!(url.contains("50m_admin_0_countries"));
+    }
+
+    #[test]
+    fn test_resolve_world_10m() {
+        let url = resolve_online_dataset("world_10m").unwrap();
+        assert!(url.contains("10m_admin_0_countries"));
+    }
+
+    #[test]
+    fn test_resolve_countries_alias() {
+        let world = resolve_online_dataset("world").unwrap();
+        let countries = resolve_online_dataset("countries").unwrap();
+        assert_eq!(world, countries);
+    }
+
+    #[test]
+    fn test_resolve_us_states() {
+        let url = resolve_online_dataset("us_states").unwrap();
+        assert!(url.contains("110m_admin_1_states_provinces"));
+    }
+
+    #[test]
+    fn test_resolve_states_10m() {
+        let url = resolve_online_dataset("states_10m").unwrap();
+        assert!(url.contains("10m_admin_1_states_provinces"));
+    }
+
+    #[test]
+    fn test_resolve_provinces_alias() {
+        let states_10m = resolve_online_dataset("states_10m").unwrap();
+        let provinces_10m = resolve_online_dataset("provinces_10m").unwrap();
+        assert_eq!(states_10m, provinces_10m);
+    }
+
+    #[test]
+    fn test_resolve_us_counties() {
+        let url = resolve_online_dataset("us_counties").unwrap();
+        assert!(url.contains("10m_admin_2_counties"));
+    }
+
+    #[test]
+    fn test_resolve_us_counties_hyphen() {
+        let url = resolve_online_dataset("us-counties").unwrap();
+        assert!(url.contains("10m_admin_2_counties"));
+    }
+
+    #[test]
+    fn test_resolve_unknown() {
+        assert!(resolve_online_dataset("nonexistent").is_none());
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "parquet"))]
+    mod native_tests {
+        use super::super::native;
+
+        #[test]
+        fn test_cache_dir_exists() {
+            let dir = native::cache_dir().unwrap();
+            assert!(dir.exists());
+        }
+    }
+}

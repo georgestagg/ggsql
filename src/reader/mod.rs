@@ -429,8 +429,9 @@ pub mod odbc;
 #[cfg(feature = "adbc")]
 pub mod adbc;
 
+pub mod builtin_data;
 pub mod connection;
-pub mod data;
+pub mod online_data;
 mod spec;
 
 #[cfg(feature = "duckdb")]
