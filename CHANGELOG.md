@@ -2,9 +2,8 @@
 
 ### Added
 
-- New `HephaestusWriter` renders a plot to a PNG raster image via
-  [hephaestus](https://github.com/posit-dev/hephaestus), behind a new
-  off-by-default `hephaestus` feature (`--writer hephaestus` in the CLI). Covers
+- New `PngWriter` renders a plot to a PNG raster image, behind a new
+  off-by-default `png` feature (`--writer png` in the CLI). Covers
   every layer type except `arrow`, all scale types and transforms, layer settings
   and position adjustments, multi-layer plots, `FACET` (Wrap/Grid, fixed and free
   scales), Cartesian/polar/map projections, spatial geometry, and plot chrome
@@ -18,7 +17,7 @@
   `--writer-option key=value` flag on `exec` and `run` (short `-D`, also
   spellable `--writer-options`). Several settings can be collapsed into one flag
   separated by `;` — `-D 'width=1600;dpi=150'`, quoted because shells read `;`
-  themselves — and the two forms mix. The hephaestus writer
+  themselves — and the two forms mix. The png writer
   takes `width`, `height`, `units` (`px`, `in`, `cm`, `mm`, `pt`), `dpi`, and
   `background` (any CSS color, including `transparent`), defaulting to a
   1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An
@@ -31,7 +30,7 @@
   two breaks* (`0` removes them), an array of exact positions, or — for temporal
   scales — an interval such as `'week'`. Defaults to a value chosen by the
   transformation. This has no Vega-Lite equivalent and is ignored by that writer;
-  the hephaestus writer draws them.
+  the png writer draws them.
 
 ### Changed
 

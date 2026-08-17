@@ -15,8 +15,8 @@ use std::path::PathBuf;
 #[cfg(feature = "vegalite")]
 use ggsql::writer::VegaLiteWriter;
 
-#[cfg(feature = "hephaestus")]
-use ggsql::writer::HephaestusWriter;
+#[cfg(feature = "png")]
+use ggsql::writer::PngWriter;
 
 mod docs {
     include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
@@ -35,7 +35,7 @@ enum Output {
     Text(String),
     /// Only a raster writer produces bytes, so nothing constructs this when no
     /// such writer is compiled in.
-    #[cfg_attr(not(feature = "hephaestus"), allow(dead_code))]
+    #[cfg_attr(not(feature = "png"), allow(dead_code))]
     Bin(Vec<u8>),
 }
 
@@ -68,15 +68,15 @@ pub enum Commands {
         #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
-        /// `hephaestus` feature and a GPU adapter)
+        /// Output format: vegalite (JSON), or png (raster image; requires the
+        /// `png` feature and a GPU adapter)
         #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
         /// Settings for the chosen writer, as `key=value`. Repeatable, and one
         /// flag may carry several settings separated by `;` (quote it, as most
         /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
-        /// hephaestus writer takes width, height, units, dpi, and background;
+        /// png writer takes width, height, units, dpi, and background;
         /// the vegalite writer takes none.
         #[arg(
             short = 'D',
@@ -104,15 +104,15 @@ pub enum Commands {
         #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format: vegalite (JSON), or hephaestus (PNG; requires the
-        /// `hephaestus` feature and a GPU adapter)
+        /// Output format: vegalite (JSON), or png (raster image; requires the
+        /// `png` feature and a GPU adapter)
         #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
         /// Settings for the chosen writer, as `key=value`. Repeatable, and one
         /// flag may carry several settings separated by `;` (quote it, as most
         /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
-        /// hephaestus writer takes width, height, units, dpi, and background;
+        /// png writer takes width, height, units, dpi, and background;
         /// the vegalite writer takes none.
         #[arg(
             short = 'D',
@@ -399,10 +399,10 @@ fn render_spec(spec: Spec, writer: &WriterSpec, output: Option<PathBuf>, verbose
 
     let render = match writer.name.as_str() {
         "vegalite" => render_vegalite(&spec, &writer.options),
-        "hephaestus" => render_hephaestus(&spec, &writer.options),
+        "png" => render_png(&spec, &writer.options),
         other => {
             eprintln!("Unknown writer '{}'", other);
-            eprintln!("Available writers: hephaestus, vegalite");
+            eprintln!("Available writers: png, vegalite");
             std::process::exit(1)
         }
     };
@@ -812,30 +812,30 @@ fn render_vegalite(spec: &Spec, options: &WriterOptions) -> Output {
     }
 }
 
-fn render_hephaestus(spec: &Spec, options: &WriterOptions) -> Output {
-    #[cfg(feature = "hephaestus")]
+fn render_png(spec: &Spec, options: &WriterOptions) -> Output {
+    #[cfg(feature = "png")]
     {
         // Configure from --writer-option, then render
-        let hs_writer = unwrap_writer(HephaestusWriter::from_options(options));
-        match hs_writer.render(spec) {
+        let png_writer = unwrap_writer(PngWriter::from_options(options));
+        match png_writer.render(spec) {
             Ok(png) => Output::Bin(png),
             Err(e) => {
-                eprintln!("Failed to generate Hephaestus output: {}", e);
+                eprintln!("Failed to generate PNG output: {}", e);
                 std::process::exit(1);
             }
         }
     }
-    #[cfg(not(feature = "hephaestus"))]
+    #[cfg(not(feature = "png"))]
     {
         let _ = (spec, options);
-        eprintln!("Hephaestus writer not compiled in. Rebuild with --features hephaestus");
+        eprintln!("PNG writer not compiled in. Rebuild with --features png");
         std::process::exit(1)
     }
 }
 
 /// A writer built from its options, or the option error on stderr and a
 /// non-zero exit — an unusable setting is the user's mistake, not a warning.
-#[cfg(any(feature = "vegalite", feature = "hephaestus"))]
+#[cfg(any(feature = "vegalite", feature = "png"))]
 fn unwrap_writer<W>(writer: ggsql::Result<W>) -> W {
     writer.unwrap_or_else(|e| {
         eprintln!("{}", e);

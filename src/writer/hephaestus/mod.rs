@@ -1,13 +1,14 @@
-//! Hephaestus raster writer.
+//! PNG raster writer.
 //!
 //! Renders a resolved ggsql `Spec` to PNG bytes via the [`hephaestus`] 2D scene
-//! renderer.
+//! renderer. Only [`PngWriter`] is public; the renderer behind it is an
+//! implementation detail.
 //!
 //! **Scope**: multi-layer plots under Cartesian, Polar, and Map projections,
 //! with `FACET` faceting (Wrap/Grid, fixed + free scales); every geom except
 //! `arrow`; all scale types and transforms, material aesthetics, plot and axis
 //! titles, and legends. A geom outside [`geom::is_supported`] is rejected by
-//! [`HephaestusWriter::validate`].
+//! [`PngWriter::validate`].
 //!
 //! Architecture — the abstractions and the invariants they keep — and the
 //! inventory of deferred work are documented in
@@ -64,17 +65,17 @@ const MAX_DIMENSION: f64 = 32_768.0;
 /// Vega-Lite writer's projection fit (`span * 1.1`).
 const MAP_PADDING: f64 = 0.1;
 
-/// Option keys [`HephaestusWriter::from_options`] understands.
+/// Option keys [`PngWriter::from_options`] understands.
 const OPTIONS: &[&str] = &["width", "height", "units", "dpi", "background"];
 
 /// Units a `width` / `height` option may be given in.
 const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
 
-/// Writer that renders a ggsql plot to a PNG image via hephaestus.
+/// Writer that renders a ggsql plot to a PNG image.
 ///
 /// Configured with a target pixel size and DPI because raster rendering needs
 /// concrete dimensions, unlike the resolution-independent Vega-Lite writer.
-/// [`HephaestusWriter::from_options`] builds the same configuration from
+/// [`PngWriter::from_options`] builds the same configuration from
 /// key–value [`WriterOptions`]:
 ///
 /// | Option | Value | Default |
@@ -85,14 +86,14 @@ const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
 /// | `dpi` | Pixels per inch; converts physical sizes, including `units` | 300 |
 /// | `background` | Any CSS color, e.g. `white`, `#ff0000`, `transparent` | `white` |
 #[derive(Debug, Clone, PartialEq)]
-pub struct HephaestusWriter {
+pub struct PngWriter {
     width: u32,
     height: u32,
     dpi: f64,
     background: Color,
 }
 
-impl HephaestusWriter {
+impl PngWriter {
     /// Create a writer for the given pixel dimensions and DPI, white background.
     pub fn new(width: u32, height: u32, dpi: f64) -> Self {
         Self {
@@ -110,13 +111,13 @@ impl HephaestusWriter {
     }
 }
 
-impl Default for HephaestusWriter {
+impl Default for PngWriter {
     fn default() -> Self {
         Self::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI)
     }
 }
 
-impl Writer for HephaestusWriter {
+impl Writer for PngWriter {
     type Output = Vec<u8>;
 
     fn from_options(options: &WriterOptions) -> Result<Self> {
@@ -163,14 +164,14 @@ impl Writer for HephaestusWriter {
     fn validate(&self, spec: &Plot) -> Result<()> {
         if spec.layers.is_empty() {
             return Err(GgsqlError::WriterError(
-                "hephaestus writer requires at least one layer".into(),
+                "png writer requires at least one layer".into(),
             ));
         }
         for layer in &spec.layers {
             let geom_type = layer.geom.geom_type();
             if !geom::is_supported(geom_type) {
                 return Err(GgsqlError::WriterError(format!(
-                    "hephaestus writer does not support the '{geom_type}' geom yet"
+                    "png writer does not support the '{geom_type}' geom yet"
                 )));
             }
         }
@@ -367,7 +368,7 @@ impl Writer for HephaestusWriter {
         let issues = view.validate();
         if !issues.is_empty() {
             return Err(GgsqlError::WriterError(format!(
-                "hephaestus composition validation failed: {issues:?}"
+                "png writer composition validation failed: {issues:?}"
             )));
         }
 
@@ -505,7 +506,7 @@ fn render_png(
     background: Color,
 ) -> Result<Vec<u8>> {
     let mut renderer = VelloRenderer::new().map_err(|e| {
-        GgsqlError::WriterError(format!("could not initialise hephaestus GPU renderer: {e}"))
+        GgsqlError::WriterError(format!("could not initialise the GPU renderer: {e}"))
     })?;
     {
         let scene = renderer.scene();
@@ -515,7 +516,7 @@ fn render_png(
     let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
     renderer
         .render_to_buffer(width, height, background, &mut pixels)
-        .map_err(|e| GgsqlError::WriterError(format!("hephaestus render failed: {e}")))?;
+        .map_err(|e| GgsqlError::WriterError(format!("png render failed: {e}")))?;
 
     // `render_to_buffer` hands out straight (un-premultiplied) alpha, which is
     // exactly what PNG stores, so the buffer encodes as-is.
@@ -529,8 +530,8 @@ fn render_png(
 mod option_tests {
     use super::*;
 
-    fn writer(pairs: &[&str]) -> Result<HephaestusWriter> {
-        HephaestusWriter::from_options(&WriterOptions::parse(pairs)?)
+    fn writer(pairs: &[&str]) -> Result<PngWriter> {
+        PngWriter::from_options(&WriterOptions::parse(pairs)?)
     }
 
     /// The writer's canvas as `(width, height, dpi)`.
@@ -542,7 +543,7 @@ mod option_tests {
     #[test]
     fn no_options_gives_the_defaults() {
         assert_eq!(canvas(&[]), (DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI));
-        let default = HephaestusWriter::default();
+        let default = PngWriter::default();
         assert_eq!(canvas(&[]), (default.width, default.height, default.dpi));
         // White, as `new()` sets it.
         let background = writer(&[]).unwrap().background;
@@ -628,7 +629,7 @@ mod tests {
     fn render(query: &str) -> Result<Vec<u8>> {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
         let spec = reader.execute(query).unwrap();
-        HephaestusWriter::new(640, 480, 96.0).render(&spec)
+        PngWriter::new(640, 480, 96.0).render(&spec)
     }
 
     /// The panels' `(top, right)` strip labels, in panel order. Exercises the
@@ -1719,7 +1720,7 @@ mod tests {
                  VISUALISE x AS x, y AS y, xend AS xend, yend AS yend DRAW arrow",
             )
             .unwrap();
-        let writer = HephaestusWriter::new(320, 240, 96.0);
+        let writer = PngWriter::new(320, 240, 96.0);
         assert!(matches!(
             writer.validate(spec.plot()),
             Err(GgsqlError::WriterError(_))

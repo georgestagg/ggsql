@@ -42,9 +42,9 @@ ggsql query  ──►  parser  ──►  Plot AST  ──►  executor  ──
 
 - The parser splits the query at the `VISUALISE` boundary. SQL goes to a pluggable `Reader` (DuckDB, SQLite, ODBC); the VISUALISE part becomes a typed `Plot`.
 - The executor ties the two together: SQL → DataFrame, AST resolved against actual schema, stats and scales applied per layer.
-- The writer renders the resolved `Spec` to an output format: Vega-Lite JSON (default), or PNG via the hephaestus renderer (non-default `hephaestus` feature).
+- The writer renders the resolved `Spec` to an output format: Vega-Lite JSON (default), or PNG (non-default `png` feature). The PNG writer is implemented on top of the hephaestus renderer — a name that stays internal; users see `png`.
 
-For details — module layout, traits, where extension points live — see [`src/CLAUDE.md`](src/CLAUDE.md). For a specific renderer, [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md) (Vega-Lite) or [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md) (raster). For the AST types, [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
+For details — module layout, traits, where extension points live — see [`src/CLAUDE.md`](src/CLAUDE.md). For a specific renderer, [`src/writer/vegalite/CLAUDE.md`](src/writer/vegalite/CLAUDE.md) (Vega-Lite) or [`src/writer/hephaestus/CLAUDE.md`](src/writer/hephaestus/CLAUDE.md) (PNG). For the AST types, [`src/plot/CLAUDE.md`](src/plot/CLAUDE.md).
 
 ## Building
 

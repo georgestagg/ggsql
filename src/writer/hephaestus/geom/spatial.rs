@@ -24,7 +24,7 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     b.set("geometry", geoms);
 
     // Coordinates map through the panel's pos1/pos2 scales (bbox-framed; see
-    // `HephaestusWriter::write`). GeometryGeom has no x/y channel, but its draw
+    // `PngWriter::write`). GeometryGeom has no x/y channel, but its draw
     // resolves each coordinate against these bound scales.
     plot.set_binding("x", ctx.pos1_scale);
     plot.set_binding("y", ctx.pos2_scale);

@@ -19,7 +19,7 @@ path = "src/main.rs"
 [[example]]
 name = "visual_test"
 path = "examples/visual_test.rs"
-required-features = ["hephaestus", "duckdb", "vegalite", "builtin-data"]
+required-features = ["png", "duckdb", "vegalite", "builtin-data"]
 
 [dependencies]
 ggsql = { workspace = true }
@@ -50,7 +50,7 @@ parquet = ["ggsql/parquet"]
 sqlite = ["ggsql/sqlite"]
 odbc = ["ggsql/odbc"]
 vegalite = ["ggsql/vegalite"]
-hephaestus = ["ggsql/hephaestus"]
+png = ["ggsql/png"]
 builtin-data = ["ggsql/builtin-data"]
 all-readers = ["duckdb", "sqlite", "odbc"]
 

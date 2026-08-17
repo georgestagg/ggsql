@@ -42,11 +42,14 @@ pub mod vegalite;
 #[cfg(feature = "vegalite")]
 pub use vegalite::VegaLiteWriter;
 
-#[cfg(feature = "hephaestus")]
-pub mod hephaestus;
+// The raster writer is backed by the hephaestus renderer, which the module name
+// records. That is an implementation detail: the writer is public as `PngWriter`
+// and the module itself is not part of the API.
+#[cfg(feature = "png")]
+mod hephaestus;
 
-#[cfg(feature = "hephaestus")]
-pub use hephaestus::{rgba, Color, HephaestusWriter};
+#[cfg(feature = "png")]
+pub use hephaestus::{rgba, Color, PngWriter};
 
 /// Trait for visualization output writers
 ///

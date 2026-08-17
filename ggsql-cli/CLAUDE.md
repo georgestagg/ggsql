@@ -82,9 +82,9 @@ Library-level coverage lives in `ggsql` itself — this crate is thin glue, so i
 [`examples/visual_test.rs`](examples/visual_test.rs) is a **developer harness, not a shipped feature**: it treats every executable ```` ```{ggsql} ```` cell in [`/doc/`](../doc/) as a test corpus, renders each one, and writes a single HTML report pairing every query with its output. It lives here because this is the crate that already owns clap and the public `ggsql` API; it adds nothing to the binary.
 
 ```sh
-cargo run -p ggsql-cli --features hephaestus --example visual_test              # doc/syntax + doc/gallery
-cargo run -p ggsql-cli --features hephaestus --example visual_test -- --compare # + Vega-Lite side by side
-cargo run -p ggsql-cli --features hephaestus --example visual_test -- doc/gallery -f pie
+cargo run -p ggsql-cli --features png --example visual_test              # doc/syntax + doc/gallery
+cargo run -p ggsql-cli --features png --example visual_test -- --compare # + Vega-Lite side by side
+cargo run -p ggsql-cli --features png --example visual_test -- doc/gallery -f pie
 open target/visual-test/index.html
 ```
 
@@ -102,7 +102,7 @@ The report itself is plain HTML with a client-side filter and an *only problems*
 ## See also
 
 - [`/CLAUDE.md`](../CLAUDE.md) — workspace overview.
-- [`/src/writer/hephaestus/CLAUDE.md`](../src/writer/hephaestus/CLAUDE.md) — the raster writer this harness is mostly used to check.
+- [`/src/writer/hephaestus/CLAUDE.md`](../src/writer/hephaestus/CLAUDE.md) — the PNG writer this harness is mostly used to check.
 - [`/src/CLAUDE.md`](../src/CLAUDE.md) — the underlying `ggsql` library.
 - [`/INSTALLERS.md`](../INSTALLERS.md) — cross-platform installer build (Windows/Linux from this crate's packager metadata; macOS via `pkgbuild`).
 - [`/doc/get_started/tooling.qmd`](../doc/get_started/tooling.qmd) — user-facing CLI docs.

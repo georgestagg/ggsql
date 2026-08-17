@@ -67,12 +67,12 @@ col_a,  col_b, col_c
 
 ## Output format
 
-`ggsql exec` and `ggsql run` render with the writer named by `--writer` (short `-w`), defaulting to `--writer vegalite` (the Vega-Lite JSON above). A build that includes the optional `hephaestus` writer can also render straight to a PNG image with `--writer hephaestus`, which needs a GPU adapter available where it runs.
+`ggsql exec` and `ggsql run` render with the writer named by `--writer` (short `-w`), defaulting to `--writer vegalite` (the Vega-Lite JSON above). A build that includes the optional `png` writer can also render straight to a PNG image with `--writer png`, which needs a GPU adapter available where it runs.
 
 A writer is configured with `--writer-option key=value`, repeated once per setting:
 
 ```bash
-ggsql exec --writer hephaestus \
+ggsql exec --writer png \
   --writer-option width=6 \
   --writer-option height=4 \
   --writer-option units=in \
@@ -84,7 +84,7 @@ ggsql exec --writer hephaestus \
 Several settings can also be collapsed into one flag, separated by `;`. With `-D` short for `--writer-option` (and `--writer-options` accepted as well), plus `-w` for `--writer` and `-o` for `--output`, the same call reads:
 
 ```bash
-ggsql exec -w hephaestus -D 'width=6;height=4;units=in;dpi=150' -o chart.png \
+ggsql exec -w png -D 'width=6;height=4;units=in;dpi=150' -o chart.png \
   "VISUALISE species AS fill FROM ggsql:penguins DRAW bar"
 ```
 
@@ -92,7 +92,7 @@ ggsql exec -w hephaestus -D 'width=6;height=4;units=in;dpi=150' -o chart.png \
 
 `;` is the only separator; `,` is not, because values contain commas — `background='rgb(255, 0, 0)'` has to survive intact.
 
-The hephaestus writer understands these options:
+The png writer understands these options:
 
 | Option | Value | Default |
 | --- | --- | --- |

@@ -416,7 +416,7 @@ key=value`). Keys are normalised: trimmed, lowercased, `-` folded to `_`.
 
 ```rust
 let options = WriterOptions::parse(["width=1600", "height=1200", "units=px"])?;
-let png = HephaestusWriter::from_options(&options)?.render(&spec)?;
+let png = PngWriter::from_options(&options)?.render(&spec)?;
 
 // One string may carry several options, separated by `;`. Equivalent to the above:
 let options = WriterOptions::parse(["width=1600;height=1200;units=px"])?;
@@ -439,6 +439,6 @@ let options = WriterOptions::new().set("dpi", "150");
 | `is_empty()` | Whether any option was supplied |
 
 Which keys a writer accepts is the writer's own business:
-`VegaLiteWriter` takes none, `HephaestusWriter` takes `width`, `height`, `units`,
+`VegaLiteWriter` takes none, `PngWriter` takes `width`, `height`, `units`,
 `dpi`, and `background`.
 

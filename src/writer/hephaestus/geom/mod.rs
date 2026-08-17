@@ -60,7 +60,7 @@ pub fn build_into_plot(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
         GeomType::Boxplot => boxplot::build(plot, ctx),
         GeomType::Violin => violin::build(plot, ctx),
         other => Err(GgsqlError::WriterError(format!(
-            "hephaestus writer does not support the '{other}' geom yet"
+            "png writer does not support the '{other}' geom yet"
         ))),
     }
 }

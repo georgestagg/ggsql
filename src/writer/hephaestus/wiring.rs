@@ -175,7 +175,7 @@ pub struct GeomSpec {
 /// Build a concrete geom from its spec and attach it to the plot. Bindings are
 /// written onto `plot`; legends are recorded on `ctx` for one-shot registration
 /// on the composition; scales are registered globally from `spec.scales` (see
-/// `HephaestusWriter::write`), and axes are created per coordinate system in
+/// `PngWriter::write`), and axes are created per coordinate system in
 /// `projection`.
 pub fn build_and_add<G>(plot: &mut HPlot, spec: GeomSpec, ctx: &Ctx) -> Result<()>
 where

@@ -1,8 +1,15 @@
-# `writer/hephaestus/` — raster (PNG) writer internals
+# `writer/hephaestus/` — PNG writer internals
 
-`HephaestusWriter` renders a resolved ggsql `Spec` to **PNG bytes** via
+`PngWriter` renders a resolved ggsql `Spec` to **PNG bytes** via
 [hephaestus](https://github.com/posit-dev/hephaestus), a 2D scene renderer with a
-grammar-of-graphics plot API. Behind the non-default `hephaestus` cargo feature.
+grammar-of-graphics plot API. Behind the non-default `png` cargo feature.
+
+**hephaestus is not a public name.** The user-facing writer is `png`
+(`--writer png`, `--features png`, `ggsql::writer::PngWriter`); the module is
+named after the renderer it wraps and is private, so nothing but `PngWriter`,
+`Color` and `rgba` leaves the crate. More hephaestus-backed writers (svg, pdf,
+window) are expected, each with its own public name. Keep the renderer's name out
+of anything a user reads — CLI help, error messages, `/doc/`.
 
 This file is the **architecture**: the abstractions, the invariants, and how to
 extend them. For how the writer's behaviour got here, read
@@ -39,7 +46,7 @@ debt that would disappear if ggsql resolved more:
 
 Raster output needs concrete dimensions, so unlike the Vega-Lite writer this one
 carries state: `width`, `height` (both pixels), `dpi`, and `background`.
-`HephaestusWriter::new` + `.background()` set them directly;
+`PngWriter::new` + `.background()` set them directly;
 `Writer::from_options` builds the same thing from the frontend-agnostic
 key–value [`WriterOptions`](../options.rs) (`-D width=1600` on the CLI). The user-facing table of keys lives in the struct's rustdoc and in
 [`/doc/get_started/tooling/cli.qmd`](../../../doc/get_started/tooling/cli.qmd);
@@ -63,7 +70,7 @@ runtime do layout and scale application, hephaestus **is** the runtime. So
 `write` builds a live object graph and renders it.
 
 ```
-HephaestusWriter::write(&Plot, &HashMap<String, DataFrame>)
+PngWriter::write(&Plot, &HashMap<String, DataFrame>)
  │
  ├─ facet::build_panels(spec, data)      → (Composition, Vec<Panel>)
  │      1×1 grid + one Panel when unfaceted; else grid(nrow, ncol, cells)
@@ -96,7 +103,7 @@ Layers draw in `spec.layers` order, which is DRAW order, which is z-order.
 
 | File | Role |
 | --- | --- |
-| [`mod.rs`](mod.rs) | `HephaestusWriter` (size / dpi / background), `Writer` impl including `from_options`, the orchestration above, `map_bbox`, `render_png`, and the writer's test suite. |
+| [`mod.rs`](mod.rs) | `PngWriter` (size / dpi / background), `Writer` impl including `from_options`, the orchestration above, `map_bbox`, `render_png`, and the writer's test suite. |
 | [`wiring.rs`](wiring.rs) | The shared, geom-generic machinery: `Ctx`, `GeomSpec` + its parts, `build_and_add`, `wire_positions`, `wire_material`, `MaterialSource`/`resolve_material`, `BandAxes`, `side`/band helpers, `material_legend`, label resolution. |
 | [`scales.rs`](scales.rs) | ggsql `Scale` → hephaestus `Scale`. `RangeKind`, transform + palette + break mapping, temporal scales, free-panel scales, `binned_bins`/`bin_at_centre`. |
 | [`channels.rs`](channels.rs) | DataFrame column → typed channel data (`ChannelData`, `column_to_*`), group keys, WKB/WKT geometry decoding. |
@@ -432,7 +439,7 @@ a channel belongs there.
 Tests live at the bottom of [`mod.rs`](mod.rs):
 
 ```sh
-cargo test --features hephaestus --lib writer::hephaestus
+cargo test --features png --lib writer::hephaestus
 ```
 
 Two kinds, plus a third that doesn't exist yet:
@@ -449,8 +456,8 @@ Two kinds, plus a third that doesn't exist yet:
   query. With a moving pinned hephaestus rev, assume a bump needs re-eyeballing:
 
 ```sh
-cargo run -p ggsql-cli --features hephaestus -- exec "<query>" \
-    --reader "duckdb://memory" --writer hephaestus --output /tmp/out.png
+cargo run -p ggsql-cli --features png -- exec "<query>" \
+    --reader "duckdb://memory" --writer png --output /tmp/out.png
 ```
 
 For eyeballing *at scale* — after a hephaestus bump, or when hunting the kind of
@@ -461,7 +468,7 @@ alone) and writes one HTML report pairing each query with its render, optionally
 beside the Vega-Lite render of the same `Spec`:
 
 ```sh
-cargo run -p ggsql-cli --features hephaestus --example visual_test -- --compare
+cargo run -p ggsql-cli --features png --example visual_test -- --compare
 open target/visual-test/index.html
 ```
 
@@ -478,7 +485,7 @@ so one run inventories every gap at once. Implementation notes:
   placeholders.
 - **MSRV split.** hephaestus needs rustc ≥1.88; ggsql's MSRV is CRAN-locked at
   1.86. The feature is therefore non-default and excluded from the MSRV job (CI
-  runs the hephaestus steps with `cargo +stable`), which also means this writer
+  runs the png steps with `cargo +stable`), which also means this writer
   is not viable for the R/CRAN target and is not the wasm default. Always check a
   change still builds under `cargo +1.86 build` *without* the feature.
 - **The dependency is a pinned git rev** on an unpublished `0.0.1` crate

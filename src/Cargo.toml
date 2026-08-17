@@ -39,7 +39,7 @@ adbc_core = { version = "0.23", optional = true }
 # Spatial
 geozero = { workspace = true, optional = true, features = ["with-wkb", "with-wkt", "with-geojson"] }
 
-# Hephaestus raster writer (non-default; gated, excluded from the MSRV 1.86 build)
+# Backend for the PNG writer (non-default; gated, excluded from the MSRV 1.86 build)
 hephaestus = { git = "https://github.com/posit-dev/hephaestus.git", rev = "323e24a7c6655b91b77d7281243c2d06d11e0735", optional = true, default-features = false, features = ["vello", "png", "text", "geom-wkb", "geom-wkt"] }
 
 # Serialization
@@ -73,6 +73,6 @@ adbc = ["dep:adbc_core"]
 odbc = ["dep:toml_edit", "dep:libloading"]
 spatial = ["dep:geozero", "rusqlite?/load_extension"]
 vegalite = []
-hephaestus = ["dep:hephaestus"]
+png = ["dep:hephaestus"]
 builtin-data = []
 all-readers = ["duckdb", "sqlite", "odbc"]

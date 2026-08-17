@@ -5,11 +5,11 @@ Every executable ```` ```{ggsql} ```` cell in the Quarto docs is a query the
 project already vouches for, which makes them a ready-made corpus for
 exercising a writer. This example runs them — in document order, against one
 reader per source file so `CREATE TABLE` setup cells still apply — renders each
-visualisation with the [`HephaestusWriter`], and emits a single HTML report
+visualisation with the [`PngWriter`], and emits a single HTML report
 pairing every query with its rendered output.
 
 ```sh
-cargo run -p ggsql-cli --features hephaestus --example visual_test
+cargo run -p ggsql-cli --features png --example visual_test
 open target/visual-test/index.html
 ```
 
@@ -26,7 +26,7 @@ when checking visual correctness.
 use clap::Parser;
 use ggsql::reader::{DuckDBReader, Reader};
 use ggsql::validate::validate;
-use ggsql::writer::{HephaestusWriter, VegaLiteWriter, Writer};
+use ggsql::writer::{PngWriter, VegaLiteWriter, Writer};
 use std::fmt::Write as _;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -36,7 +36,7 @@ use std::time::Instant;
 #[derive(Parser)]
 #[command(
     name = "visual_test",
-    about = "Render every {ggsql} documentation example with the hephaestus writer into an HTML report"
+    about = "Render every {ggsql} documentation example with the png writer into an HTML report"
 )]
 struct Args {
     /// Directories to scan for `.qmd` files, or individual `.qmd` files
@@ -294,7 +294,7 @@ fn run_cells(source: Source, args: &Args, assets: &Path) -> SourceResult {
         }
     };
 
-    let heph = HephaestusWriter::new(args.width, args.height, args.dpi);
+    let png_writer = PngWriter::new(args.width, args.height, args.dpi);
     let vegalite = VegaLiteWriter::new();
 
     let mut results = Vec::new();
@@ -312,7 +312,7 @@ fn run_cells(source: Source, args: &Args, assets: &Path) -> SourceResult {
                 Ok(spec) => {
                     warnings.extend(spec.warnings().iter().map(|w| w.message.clone()));
 
-                    let (png, png_error) = match capture(|| heph.render(&spec)) {
+                    let (png, png_error) = match capture(|| png_writer.render(&spec)) {
                         Ok(bytes) => {
                             let name = format!("{}-{:02}.png", slug(&label), cell.index);
                             match fs::write(assets.join(&name), &bytes) {
@@ -552,7 +552,7 @@ fn render_cell(cell: &CellResult, label: &str, aspect: &str) -> String {
             vegalite,
             vegalite_error,
         } => {
-            html.push_str("<figure><figcaption>hephaestus</figcaption>");
+            html.push_str("<figure><figcaption>png</figcaption>");
             match (png, png_error) {
                 (Some(name), _) => {
                     let _ = write!(
