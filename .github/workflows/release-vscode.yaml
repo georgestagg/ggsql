@@ -1,9 +1,14 @@
-name: Open VSX Release
+name: Open VSX Release (manual, universal only)
 
+# Releases are driven by release-packages.yml: its build-vsix and
+# publish-openvsx jobs build and publish all six VSIXes, five of which carry a
+# bundled ggsql-jupyter kernel downloaded from the platform build jobs in the
+# same run. This workflow is kept only as a manual path for republishing the
+# kernel-less universal VSIX on its own, and deliberately has no tag trigger:
+# on a tag it would race the publish in release-packages.yml. Dispatch it
+# against a tag rather than a branch — the publish step is still gated on a tag
+# ref, so a dispatch from a branch packages the VSIX and stops there.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:

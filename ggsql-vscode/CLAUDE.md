@@ -153,6 +153,17 @@ npx vsce package           # produces ggsql-<version>.vsix
 code --install-extension ggsql-<version>.vsix
 ```
 
+A local `vsce package` produces the kernel-less VSIX, since `bundled/` only exists in a release build.
+
+**Release builds** live in [`/.github/workflows/release-packages.yml`](../.github/workflows/release-packages.yml), not in a workflow of their own. Its `build-vsix` job runs a matrix of six — the five platform targets plus `universal` — downloading the `ggsql-jupyter-<target>` artifact each platform job uploaded between signing and installer packaging, restoring the executable bit, and running `vsce package --target <target>`. `publish-openvsx` then publishes the packaged file to Open VSX.
+
+Four things about that arrangement are deliberate:
+
+- **The VSIX build cannot live in its own workflow.** Actions artifacts are scoped to a single workflow run, and two workflows triggered by the same tag run in parallel, so a separate workflow could not download the kernels. Building in the same run also means the kernel and the extension always come from one commit.
+- **The executable bit has to be restored after download.** Artifact upload and download drop it. It does survive `vsce package` into the VSIX itself, so restoring it once in CI is enough; `ensureExecutable()` in `manager.ts` is belt-and-braces for an install that loses it.
+- **The published artefact is the packaged `.vsix`, with no `target` passed to the publish action.** Open VSX reads the platform from the `TargetPlatform` attribute that `vsce package --target` writes into `extension.vsixmanifest`, and defaults to `universal` when it is absent; `ovsx` discards a target option when handed an already-packaged vsix.
+- **`win32-arm64` is not built.** No runner produces that kernel yet. Positron's bootstrap appends `?targetPlatform=<target>` and gets an HTTP 403 rather than the universal build for a target that was never published, so the universal VSIX is not a fallback for it — see posit-dev/positron#14954.
+
 Watch mode for development: `npm run watch` (runs esbuild + tsc in parallel).
 
 For an interactive session, open the **repo root** in Positron and press <kbd>F5</kbd> ("Run Extension"). [`/.vscode/launch.json`](../.vscode/launch.json) runs the `build-ggsql-vscode` task, which is `npm run watch` in this folder, then opens an Extension Development Host with `--extensionDevelopmentPath`, so the extension loads from source with no VSIX. Launch from Positron rather than VS Code, or the dev host has no Positron API and the runtime manager never registers. The watcher rebuilds `out/extension.js` on save, but the host does not hot-reload: run _Developer: Reload Window_ in the Extension Development Host to pick up a change.
