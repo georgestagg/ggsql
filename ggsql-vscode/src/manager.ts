@@ -76,7 +76,7 @@ function findOnPath(binaryName: string): string | undefined {
  * as-is, so that discovery rejects it as inaccessible and logs it back to the
  * user rather than silently ignoring the setting.
  */
-function resolveConfiguredPath(configuredPath: string): string {
+export function resolveConfiguredPath(configuredPath: string): string {
     if (path.isAbsolute(configuredPath)) {
         return configuredPath;
     }
@@ -500,6 +500,21 @@ export async function getSupervisorApi(): Promise<PositronSupervisorApi> {
 }
 
 /**
+ * Overrides for GgsqlRuntimeManager's environment.
+ */
+export interface RuntimeManagerOptions {
+    /**
+     * Directory the discovered kernel is advertised in, as a Jupyter kernel
+     * spec. Defaults to the user-level Jupyter kernels directory.
+     *
+     * Discovery writes that spec as a side effect, so tests point this at a
+     * temp directory: otherwise running discovery would repoint the real
+     * kernelspec — the one Quarto and Jupyter resolve — at a test fixture.
+     */
+    kernelSpecDir?: string;
+}
+
+/**
  * ggsql Language Runtime Manager
  *
  * Manages the lifecycle of ggsql runtime sessions in Positron.
@@ -517,9 +532,11 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
     public readonly alwaysRediscover = true;
 
     private _context: vscode.ExtensionContext;
+    private _kernelSpecDir: string;
 
-    constructor(context: vscode.ExtensionContext) {
+    constructor(context: vscode.ExtensionContext, options: RuntimeManagerOptions = {}) {
         this._context = context;
+        this._kernelSpecDir = options.kernelSpecDir ?? getUserJupyterKernelDir();
     }
 
     /**
@@ -529,6 +546,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
      */
     discoverAllRuntimes(): AsyncGenerator<positron.LanguageRuntimeMetadata> {
         const context = this._context;
+        const kernelSpecDir = this._kernelSpecDir;
 
         const generator = async function* discoverGgsqlRuntimes() {
             log('Discovering ggsql runtimes...');
@@ -545,7 +563,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
                     // additionally needs this on every extension update, or the
                     // spec keeps pointing into the removed extension directory.
                     if (candidate.source === 'System' || candidate.source === 'Bundled') {
-                        writeKernelJson(getUserJupyterKernelDir(), candidate.kernelPath);
+                        writeKernelJson(kernelSpecDir, candidate.kernelPath);
                     }
 
                     const metadata = generateMetadata(context, candidate);

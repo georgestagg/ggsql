@@ -200,6 +200,7 @@
     "pretest": "npm run compile-tests && npm run package",
     "test:grammar": "vscode-tmgrammar-test -g syntaxes/ggsql.tmLanguage.json \"src/test/grammar/*.gsql\"",
     "test:extension": "vscode-test",
+    "test:integration": "npm run compile-tests && npm run package && node ./out-test/test/runIntegration.js",
     "test": "npm run test:grammar && npm run test:extension"
   },
   "dependencies": {
@@ -207,6 +208,7 @@
   },
   "devDependencies": {
     "@posit-dev/positron": "^0.2.7",
+    "@posit-dev/positron-test-electron": "^0.0.3",
     "@types/mocha": "^10.0.10",
     "@types/node": "^18.x",
     "@types/vscode": "^1.75.0",

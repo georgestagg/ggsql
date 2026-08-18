@@ -172,9 +172,10 @@ For an interactive session, open the **repo root** in Positron and press <kbd>F5
 
 ```sh
 cd ggsql-vscode
-npm test              # grammar scopes, then the VS Code suites
-npm run test:grammar  # TextMate scopes only; no Electron, fast
+npm test                  # grammar scopes, then the VS Code suites
+npm run test:grammar      # TextMate scopes only; no Electron, fast
 npm run test:extension
+npm run test:integration  # downloads Positron; needs a staged kernel (see below)
 ```
 
 Tests live in `src/test/` and compile to `out-test/` via `tsconfig.test.json`, deliberately not to `out/`, which `esbuild.js` owns. The whole of `src/` compiles there, not just `src/test/`, because the unit tests import the extension's own modules. `@vscode/test-cli` launches a real VS Code instance, so a window appears while the suites run; CI wraps the same command in `xvfb-run`.
@@ -183,7 +184,33 @@ Note that `tsc` does not prune output for deleted sources: if you delete or rena
 
 The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement, TextMate scopes, kernel discovery, and the parts of `manager.ts` and `positronApi.ts` that are reachable without a Positron host. `bundle.test.ts` additionally asserts against the built `out/extension.js`. The rest of the Positron surface (session creation, connection drivers, cell execution) is not covered, since it needs a Positron host, and `sqlAssociation.ts` and `connections.ts` are untested.
 
-Add new tests as `src/test/<name>.test.ts`; no config change is needed.
+Add new tests as `src/test/<name>.test.ts`; no config change is needed. `.vscode-test.mjs` globs `out-test/test/*.test.js` — one level only, deliberately, so the Positron suite in `test/integration/` does not run under stock VS Code, where it cannot pass.
+
+### The Positron integration suite
+
+`src/test/integration/` is the only place a kernel is actually launched. The unit suites cover discovery precedence and metadata, and `build-vsix` proves the binary is inside the VSIX; neither can tell whether it *starts*, which is the failure the bundling work exists to fix. `npm run test:integration` builds nothing itself — stage a kernel first:
+
+```sh
+cargo build --release --bin ggsql-jupyter
+mkdir -p ggsql-vscode/bundled/bin && cp target/release/ggsql-jupyter ggsql-vscode/bundled/bin/
+```
+
+`src/test/runIntegration.ts` then downloads Positron via [`@posit-dev/positron-test-electron`](https://github.com/posit-dev/positron-test-electron) and runs the suite in its extension host. Three details are load bearing:
+
+- **`disableExtensions: false`.** Session creation goes through `positron.positron-supervisor`, one of Positron's bundled extensions. Under the harness's default `--disable-extensions` there is no supervisor and every session start fails.
+- **The suite drives mocha itself.** `extensionTestsPath` must resolve to a module exporting `run()`, which is why `test/integration/index.ts` exists instead of the `@vscode/test-cli` config the other suites use. Its timeout is 120s: a session start spawns the binary and completes a Jupyter handshake.
+- **`channel: 'daily'`.** Positron's stable channel is not published for every platform. Pin `version` instead once a known-good build is worth freezing.
+
+The download is cached in `.positron-test/`, gitignored like `.vscode-test/`. It keeps a directory per Positron version, so it grows as dailies move on — around 3 GB after one run, and worth clearing occasionally rather than a leak to fix.
+
+The assertions worth keeping: exactly one ggsql runtime, its `runtimeId` is `ggsql-bundled` and its path is under `bundled/bin/`, and `executeCode` returns a result — which starts a session if none is running, so it covers spawn, handshake and execution in one call.
+
+### Testing discovery without wrecking the developer's machine
+
+Two seams exist because discovery reads and writes real state:
+
+- `GgsqlRuntimeManager` takes `{ kernelSpecDir }`. Discovery advertises the kernel by writing a Jupyter kernel spec, so a test that called `discoverAllRuntimes()` with the default would repoint the *real* kernelspec — the one Quarto resolves — at a temp fixture.
+- `kernelDiscovery.test.ts` redirects `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and `PATH` to stage host kernels, restoring them in teardown. The native-installer locations (`/usr/local/bin`, `/usr/bin`, `/Applications`) are hard-coded absolutes that no environment variable can redirect, so the few tests needing "no kernel anywhere" call `systemInstallPresent()` and skip on a machine that has one. CI never does, which is where those regressions matter.
 
 ### Editing the grammar fixture
 
