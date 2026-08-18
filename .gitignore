@@ -113,3 +113,6 @@ ggsql.Rcheck/
 *.dmg
 *.AppImage
 .cargo-packager/
+
+# Superpowers SDD scratch (ledger, briefs, review packages)
+.superpowers/

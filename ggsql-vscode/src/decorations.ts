@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { parseCells } from './cellParser';
+import { isGgsqlDocument } from './languages';
 
 const activeCellBackground = new vscode.ThemeColor('notebook.selectedCellBackground');
 
@@ -13,7 +14,7 @@ export function activateDecorations(disposables: vscode.Disposable[]): void {
 	let activeEditor = vscode.window.activeTextEditor;
 
 	function updateDecorations() {
-		if (!activeEditor || activeEditor.document.languageId !== 'ggsql') {
+		if (!activeEditor || !isGgsqlDocument(activeEditor.document)) {
 			return;
 		}
 

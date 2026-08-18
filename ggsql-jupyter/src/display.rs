@@ -14,9 +14,9 @@ use serde_json::{json, Value};
 /// incoming execute_request:
 ///
 /// - **Positron notebook** (`ggsql-notebook-…`): inline code-chunk output
-///   in an editor view. Rendered into a plain 400px container with no
-///   layout-mutating observers, because Positron animates the slot during
-///   its reveal transition.
+///   in an editor view. Rendered into a plain 400px container that watches
+///   layout only when the first measurement collapsed, because Positron
+///   animates the slot during its reveal transition.
 /// - **Positron console** (`ggsql-…`): output lands in the Plots pane. The
 ///   container upgrades to `100vh` inside `.positron-output-container`, so
 ///   Vega-Lite's own container observer tracks pane resizes.
@@ -135,11 +135,21 @@ pub fn vegalite_html(spec: &str, hints: &RenderHints) -> String {
     }
 }
 
-/// Positron template: plain 400px container with no self-installed layout
-/// observers. Console sessions additionally upgrade the container to `100vh`
-/// when it lives inside `.positron-output-container`, letting Vega-Lite's
-/// own container observer keep the Plots pane responsive. Notebook sessions
-/// skip that override and keep a stable 400px box.
+/// Positron template: plain 400px container. Console sessions additionally
+/// upgrade the container to `100vh` when it lives inside
+/// `.positron-output-container`, letting Vega-Lite's own container observer
+/// keep the Plots pane responsive. Notebook sessions skip that override and
+/// keep a stable 400px box.
+///
+/// Container sizing compiles to `width`/`height` signals that re-read
+/// `containerSize()` only on `window:resize`, and `isFinite(0)` holds, so a plot
+/// measured before Positron lays the slot out stays zero-sized with no error.
+/// `recoverIfCollapsed` fixes that, and two details are load-bearing: it gates
+/// on `view.width()` rather than the container's `clientWidth`, which can
+/// already be non-zero while the view is not, and it dispatches `resize` rather
+/// than calling `view.resize()`, which re-lays out from the same zero. It
+/// watches only a collapsed plot and stops once the view has a size, so it
+/// cannot re-lay out on every frame of Positron's reveal transition.
 fn positron_vegalite_html(spec_json: &str, vis_id: &str, is_notebook: bool) -> String {
     let pane_override_js = if is_notebook {
         ""
@@ -157,6 +167,21 @@ fn positron_vegalite_html(spec_json: &str, vis_id: &str, is_notebook: bool) -> S
 var spec = {spec_json};
 var visId = '{vis_id}';
 var options = {{"actions": true, "renderer": "svg"}};
+function recoverIfCollapsed(result) {{
+var el = document.getElementById(visId);
+if (!el || !result || !result.view) {{ return; }}
+if (typeof ResizeObserver === 'undefined') {{ return; }}
+if (result.view.width() > 0 && result.view.height() > 0) {{ return; }}
+var lastWidth = -1;
+var ro = new ResizeObserver(function() {{
+if (result.view.width() > 0 && result.view.height() > 0) {{ ro.disconnect(); return; }}
+var w = el.clientWidth;
+if (w === 0 || w === lastWidth) {{ return; }}
+lastWidth = w;
+window.dispatchEvent(new Event('resize'));
+}});
+ro.observe(el);
+}}
 {pane_override_js}
 if (typeof window.requirejs !== 'undefined') {{
 window.requirejs.config({{
@@ -174,7 +199,7 @@ else window.addEventListener("load", function() {{ fn(); }});
 docReady(function() {{
 window.requirejs(["dom-ready", "vega", "vega-embed"], function(domReady, vega, vegaEmbed) {{
 domReady(function () {{
-vegaEmbed('#' + visId, spec, options).catch(console.error);
+vegaEmbed('#' + visId, spec, options).then(recoverIfCollapsed).catch(console.error);
 }});
 }});
 }});
@@ -194,6 +219,7 @@ loadScript('https://cdn.jsdelivr.net/npm/vega-lite@6.4.1'),
 loadScript('https://cdn.jsdelivr.net/npm/vega-embed@7')
 ])
 .then(function() {{ return vegaEmbed('#' + visId, spec, options); }})
+.then(recoverIfCollapsed)
 .catch(function(err) {{
 console.error('Failed to load Vega libraries:', err);
 }});
@@ -443,19 +469,79 @@ mod tests {
 
     #[test]
     fn test_positron_html_has_no_observer_feedback_loop() {
-        // Positron templates must not install a `ResizeObserver` or a
-        // `scaleToFit` transform: Positron animates the output slot during
-        // reveal, and either one would re-lay out on every animation frame.
+        // Positron animates the output slot during reveal, so the templates
+        // must not watch layout once the plot has drawn. The only observer is
+        // the collapsed-render recovery, and it disconnects as soon as the
+        // view has a size.
         for hints in [positron_console(), positron_notebook()] {
             let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
             assert!(
-                !html.contains("new ResizeObserver"),
-                "Positron HTML must not install a ResizeObserver (hints={:?})",
+                !html.contains("scaleToFit"),
+                "Positron HTML must not include scaleToFit (hints={:?})",
+                hints
+            );
+            assert_eq!(
+                html.matches("new ResizeObserver").count(),
+                1,
+                "the collapsed-render recovery is the only observer (hints={:?})",
                 hints
             );
             assert!(
-                !html.contains("scaleToFit"),
-                "Positron HTML must not include scaleToFit (hints={:?})",
+                html.contains("ro.disconnect();"),
+                "the observer must disconnect once the view has a size (hints={:?})",
+                hints
+            );
+        }
+    }
+
+    #[test]
+    fn test_positron_recovery_gates_on_rendered_view_size() {
+        // The container can report a width while the view is still laid out at
+        // the zero it captured earlier, so gating on `clientWidth` here would
+        // skip a plot that did collapse.
+        for hints in [positron_console(), positron_notebook()] {
+            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
+            assert!(
+                html.contains(
+                    "if (result.view.width() > 0 && result.view.height() > 0) { return; }"
+                ),
+                "recovery must gate on the size the view rendered at (hints={:?})",
+                hints
+            );
+        }
+    }
+
+    #[test]
+    fn test_positron_recovery_dispatches_a_resize_event() {
+        // Container sizing compiles to width/height signals that re-read
+        // `containerSize()` only on `window:resize`. `view.resize()` re-lays out
+        // from the current signal value, which is still zero, so it cannot
+        // recover a collapsed plot.
+        for hints in [positron_console(), positron_notebook()] {
+            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
+            assert!(
+                html.contains("window.dispatchEvent(new Event('resize'));"),
+                "recovery must dispatch the event the signal listens for (hints={:?})",
+                hints
+            );
+            assert!(
+                !html.contains("view.resize()"),
+                "view.resize() does not re-read containerSize (hints={:?})",
+                hints
+            );
+        }
+    }
+
+    #[test]
+    fn test_positron_html_recovers_on_both_load_paths() {
+        // vega-embed is reached either through requirejs or through direct
+        // script loading; a plot that collapsed must recover either way.
+        for hints in [positron_console(), positron_notebook()] {
+            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
+            assert_eq!(
+                html.matches("recoverIfCollapsed").count(),
+                3,
+                "recovery must be defined once and wired into both load paths (hints={:?})",
                 hints
             );
         }

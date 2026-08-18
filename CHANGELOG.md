@@ -1,18 +1,12 @@
 ## [Unreleased]
 
 ### Added
-
 - New `HephaestusWriter` renders a plot to a PNG raster image via
   [hephaestus](https://github.com/posit-dev/hephaestus), behind a new
-  off-by-default `hephaestus` feature (`--writer hephaestus` in the CLI). Covers
-  every layer type except `arrow`, all scale types and transforms, layer settings
-  and position adjustments, multi-layer plots, `FACET` (Wrap/Grid, fixed and free
-  scales), Cartesian/polar/map projections, spatial geometry, and plot chrome
-  (axes with major and minor gridlines, legends, facet strips, and
-  title/subtitle/caption spanning the whole figure). `LABEL caption` and the new
-  `minor_breaks` setting have no Vega-Lite equivalent and render only here.
-  Requires a working GPU adapter — hardware or software, e.g. lavapipe — at
-  render time.
+  off-by-default `png` feature (`--writer png` in the CLI). `LABEL caption` 
+  and the new `minor_breaks` setting have no Vega-Lite equivalent and render 
+  only here. Requires a working GPU adapter — hardware or software, e.g. 
+  lavapipe — at render time.
 - Writers can be configured from key–value options: `Writer::from_options` takes
   a `WriterOptions` set, and the CLI collects them from a repeatable
   `--writer-option key=value` flag on `exec` and `run` (short `-D`, also
@@ -31,10 +25,9 @@
   two breaks* (`0` removes them), an array of exact positions, or — for temporal
   scales — an interval such as `'week'`. Defaults to a value chosen by the
   transformation. This has no Vega-Lite equivalent and is ignored by that writer;
-  the hephaestus writer draws them.
+  the png writer draws them.
 
 ### Changed
-
 - Dodging now only takes effect where groups actually meet on a position. A
   layer whose grouping gives every group a position of its own — `colour` mapped
   to the same column as the discrete axis, say — is drawn at its full width
@@ -61,7 +54,6 @@
   category ticks pulled toward the middle of the panel.
 
 ### Fixed
-
 - A dodged violin or half-boxplot on a categorical `y` axis is no longer flipped
   in the Vega-Lite writer. Both took their band displacement from an encoding of
   their own that read a ggsql offset as pointing down the screen, so their groups
@@ -69,7 +61,6 @@
   group above the second where a boxplot of the same data put it below, and a
   half-boxplot's box parted company with its own whiskers once dodged. Violins
   are also clipped to the panel now, as every other mark is.
-
 - An identity-scaled column is now read exactly like the equivalent literal.
   `SCALE IDENTITY <aes>` hands its values straight to the aesthetic, so they mean
   what the same value written with `SETTING` means, but several were passed to the
@@ -108,6 +99,31 @@
   training — takes its type from that range (numeric or temporal → continuous,
   string or boolean → discrete) instead of staying untyped, so consumers get a
   fully resolved scale.
+- The VS Code / Positron extension now offers its "Source Current File" button
+  and code cells in plain `.sql` files, so existing SQL can be run against a
+  ggsql kernel without renaming it. `.sql` files keep their usual SQL syntax
+  highlighting; to get ggsql highlighting as well, map them to the `ggsql`
+  language type with `files.associations`, which the extension points out the
+  first time a `.sql` file is opened. The new `ggsql.enableSqlFiles` setting
+  turns the whole behaviour off.
+- The VS Code / Positron extension contributes a "ggsql File" entry to the
+  New File dialog.
+- The VS Code / Positron extension now ships a language icon that renders in the
+  session picker, editor tabs and the Explorer. It previously pointed at a file
+  that did not exist, which left the icon blank.
+- In plain VS Code, the extension no longer offers run buttons, keybindings or
+  Command Palette entries for commands that need the Positron runtime and so
+  had no handler there.
+- Plots in Positron notebooks no longer come out blank when the cell output is
+  rendered before Positron has laid the slot out, which happened on the first
+  execution after a kernel started and when reopening a saved notebook. The
+  plot sizes itself from its container, so a zero-width first measurement drew
+  it at zero size with nothing left to correct it. It now recovers once the
+  container has a real width.
+- ggsql interpreter sessions in Positron now come back after an extension host
+  restart as well as after a window reload. A session the user renamed also 
+  keeps its name across the restore, and ggsql runtimes are rediscovered on 
+  every window open rather than risking a stale cache hit.
 
 ## 0.4.1 - 2026-06-22
 
