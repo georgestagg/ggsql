@@ -28,6 +28,7 @@ ggsql-vscode/
 │   └── test/                 Mocha suites (unit + activation) and the grammar fixture
 ├── syntaxes/
 │   └── ggsql.tmLanguage.json TextMate grammar (used for tokenization in VS Code)
+├── bundled/bin/              Kernel shipped inside the platform VSIXes (staged at release time, not in git)
 ├── examples/                 Sample .ggsql files
 ├── resources/                Static assets bundled with the extension
 │   ├── ggsql-icon.svg        Full-colour logo; read by manager.ts for base64EncodedIconSvg
@@ -87,8 +88,8 @@ The `ggsql.enableSqlFiles` description uses `markdownDescription` rather than `d
 
 The extension declares `contributes.languageRuntimes` for `ggsql` (see `package.json`) and depends on `@posit-dev/positron`. When activated under Positron, `manager.ts`:
 
-1. Discovers a `ggsql-jupyter` binary via, in order: the `ggsql.kernelPath` setting, an installed Jupyter kernelspec named `ggsql`, or `ggsql-jupyter` on `PATH`.
-2. Registers it as a Positron language runtime so `▶ Run` and the Console route to the kernel.
+1. Discovers `ggsql-jupyter` binaries as described in [Finding the kernel](#finding-the-kernel) below.
+2. Registers each as a Positron language runtime so `▶ Run` and the Console route to the kernel.
 3. Routes plot output to Positron's Plot pane via metadata coming back from the kernel (`output_location: "plot"`).
 
 Outside Positron there is no way to execute a query: `activate()` returns early, so every command that runs code stays unregistered. To avoid offering actions that cannot work, everything execution-related gates on Positron's built-in **`isPositron`** context key ([extension development docs](https://positron.posit.co/extension-development.html#option-1-context-keys)):
@@ -107,11 +108,37 @@ The Positron Supervisor is a soft dependency, reached through `getSupervisorApi(
 
 Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSqlAssociationPrompt`, syntax highlighting) is registered before the early return and works in plain VS Code. Add new commands on the correct side of that line, and gate them if they execute code.
 
+## Finding the kernel
+
+The extension ships the kernel: the per-platform VSIXes carry `ggsql-jupyter` at `bundled/bin/`, so installing the extension is enough and no native installer is needed. The platform-neutral VSIX carries none, and users on a platform without a build install the kernel themselves.
+
+`ggsql.kernelStrategy` decides where `manager.ts` looks, modelled on `air.executableStrategy`:
+
+| Strategy | Candidates, in priority order |
+| --- | --- |
+| `bundled` (default) | The bundled kernel alone. A build that carries none falls through to the host locations, so the platform-neutral VSIX behaves as it always did. |
+| `environment` | Host locations, then the bundled kernel as the fallback. |
+| `path` | `ggsql.kernelPath` alone — neither the bundled kernel nor a host install stands in for it. An empty path is treated as `bundled`. |
+
+Host locations are, in order: Jupyter kernelspec directories (user then system), the native package install locations per platform, then `PATH`.
+
+`selectKernelCandidates()` is the whole precedence rule with no filesystem in it, which is what `src/test/kernelDiscovery.test.ts` exercises; `discoverKernelPaths()` supplies it with what is actually on disk.
+
+Four things here are load bearing:
+
+- **Every candidate is an absolute path.** A candidate that is only a binary name satisfies each existence check further down and so registers a runtime that fails at session start with `KS-19: Kernel path not found`. `findOnPath()` returns `undefined` rather than the bare name, and `isKernelAccessible()` rejects any non-absolute path, so no kernel anywhere means **zero** runtimes rather than an unusable one. The single exception is a `ggsql.kernelPath` that resolves to nothing: it is passed through so discovery can report it as inaccessible in the log instead of ignoring the setting silently.
+- **The bundled kernel's `runtimeId` is fixed, not derived from its path.** Every other source hashes `kernelPath` to get one id per installed kernel, but the bundled path contains the versioned extension directory, so hashing it would mint a new runtime on every extension update and lose the workspace's runtime affinity and its restorable sessions.
+- **The bundled runtime is named plain `ggsql`.** The `ggsql (<source>)` suffix is only worth showing for a kernel the user went out of their way to select.
+- **`ggsql.kernelPath` implies `path`.** Users configured that setting before a strategy existed, so a non-empty path with no explicitly set `kernelStrategy` still resolves to `path`. `resolveKernelStrategy()` reads the value through `inspect()` for that reason: `get()` cannot tell a set value from the default.
+
+Discovery also writes the user-level Jupyter kernelspec for the bundled and system kernels, so Quarto and Jupyter can find ggsql without a session ever being started, and so the spec stops pointing into an extension directory an update has removed.
+
 ## Settings
 
 ```json
 {
-  "ggsql.kernelPath": "string"   // empty → use 'ggsql-jupyter' from PATH
+  "ggsql.kernelStrategy": "bundled" | "environment" | "path",  // default "bundled"
+  "ggsql.kernelPath": "string"   // used when the strategy is "path"
 }
 ```
 
@@ -143,7 +170,7 @@ Tests live in `src/test/` and compile to `out-test/` via `tsconfig.test.json`, d
 
 Note that `tsc` does not prune output for deleted sources: if you delete or rename a test, remove its `.js` and `.js.map` from `out-test/test/` or the runner keeps executing the stale copy. `npm run test:extension` on its own does not recompile, so run `npm test` (or `npm run compile-tests` first) after editing any `.ts`.
 
-The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement, TextMate scopes, and the parts of `manager.ts` and `positronApi.ts` that are reachable without a Positron host. `bundle.test.ts` additionally asserts against the built `out/extension.js`. The rest of the Positron surface (session creation, connection drivers, cell execution) is not covered, since it needs a Positron host, and `sqlAssociation.ts` and `connections.ts` are untested.
+The suites cover the extension as stock VS Code sees it: activation, language resolution, cell parsing, `.sql` gating, CodeLens placement, TextMate scopes, kernel discovery, and the parts of `manager.ts` and `positronApi.ts` that are reachable without a Positron host. `bundle.test.ts` additionally asserts against the built `out/extension.js`. The rest of the Positron surface (session creation, connection drivers, cell execution) is not covered, since it needs a Positron host, and `sqlAssociation.ts` and `connections.ts` are untested.
 
 Add new tests as `src/test/<name>.test.ts`; no config change is needed.
 
