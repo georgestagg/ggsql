@@ -248,17 +248,18 @@ gradient teal.
   <li><a href="#unreleased" id="toc-unreleased" class="nav-link active" data-scroll-target="#unreleased">[Unreleased]</a>
   <ul class="collapse">
   <li><a href="#added" id="toc-added" class="nav-link" data-scroll-target="#added">Added</a></li>
+  <li><a href="#changed" id="toc-changed" class="nav-link" data-scroll-target="#changed">Changed</a></li>
   <li><a href="#fixed" id="toc-fixed" class="nav-link" data-scroll-target="#fixed">Fixed</a></li>
   </ul></li>
   <li><a href="#section" id="toc-section" class="nav-link" data-scroll-target="#section">0.4.1 - 2026-06-22</a>
   <ul class="collapse">
-  <li><a href="#changed" id="toc-changed" class="nav-link" data-scroll-target="#changed">Changed</a></li>
+  <li><a href="#changed-1" id="toc-changed-1" class="nav-link" data-scroll-target="#changed-1">Changed</a></li>
   </ul></li>
   <li><a href="#section-1" id="toc-section-1" class="nav-link" data-scroll-target="#section-1">0.4.0 - 2026-06-22</a>
   <ul class="collapse">
   <li><a href="#added-1" id="toc-added-1" class="nav-link" data-scroll-target="#added-1">Added</a></li>
   <li><a href="#fixed-1" id="toc-fixed-1" class="nav-link" data-scroll-target="#fixed-1">Fixed</a></li>
-  <li><a href="#changed-1" id="toc-changed-1" class="nav-link" data-scroll-target="#changed-1">Changed</a></li>
+  <li><a href="#changed-2" id="toc-changed-2" class="nav-link" data-scroll-target="#changed-2">Changed</a></li>
   </ul></li>
   <li><a href="#section-2" id="toc-section-2" class="nav-link" data-scroll-target="#section-2">0.3.3 - 2026-05-27</a>
   <ul class="collapse">
@@ -267,7 +268,7 @@ gradient teal.
   <li><a href="#section-3" id="toc-section-3" class="nav-link" data-scroll-target="#section-3">0.3.2 - 2026-05-05</a>
   <ul class="collapse">
   <li><a href="#fixed-3" id="toc-fixed-3" class="nav-link" data-scroll-target="#fixed-3">Fixed</a></li>
-  <li><a href="#changed-2" id="toc-changed-2" class="nav-link" data-scroll-target="#changed-2">Changed</a></li>
+  <li><a href="#changed-3" id="toc-changed-3" class="nav-link" data-scroll-target="#changed-3">Changed</a></li>
   </ul></li>
   <li><a href="#section-4" id="toc-section-4" class="nav-link" data-scroll-target="#section-4">0.3.1 - 2026-04-30</a>
   <ul class="collapse">
@@ -277,7 +278,7 @@ gradient teal.
   <ul class="collapse">
   <li><a href="#added-2" id="toc-added-2" class="nav-link" data-scroll-target="#added-2">Added</a></li>
   <li><a href="#fixed-5" id="toc-fixed-5" class="nav-link" data-scroll-target="#fixed-5">Fixed</a></li>
-  <li><a href="#changed-3" id="toc-changed-3" class="nav-link" data-scroll-target="#changed-3">Changed</a></li>
+  <li><a href="#changed-4" id="toc-changed-4" class="nav-link" data-scroll-target="#changed-4">Changed</a></li>
   <li><a href="#removed" id="toc-removed" class="nav-link" data-scroll-target="#removed">Removed</a></li>
   </ul></li>
   <li><a href="#section-6" id="toc-section-6" class="nav-link" data-scroll-target="#section-6">[2.7.0] - 2026-04-20</a></li>
@@ -295,13 +296,34 @@ gradient teal.
 <section id="added" class="level3">
 <h3 class="anchored" data-anchor-id="added">Added</h3>
 <ul>
-<li>The VS Code / Positron extension now offers its “Source Current File” button and code cells in plain <code>.sql</code> files, so existing SQL can be run against a ggsql kernel without renaming it. <code>.sql</code> files keep their usual SQL syntax highlighting; to get ggsql highlighting as well, map them to the <code>ggsql</code> language type with <code>files.associations</code>, which the extension points out the first time a <code>.sql</code> file is opened. The new <code>ggsql.enableSqlFiles</code> setting turns the whole behaviour off.</li>
-<li>The VS Code / Positron extension contributes a “ggsql File” entry to the New File dialog.</li>
+<li>New <code>PngWriter</code> renders a plot to a PNG raster image via <a href="https://github.com/posit-dev/hephaestus">hephaestus</a>, behind a new off-by-default <code>png</code> feature (<code>--writer png</code> in the CLI). <code>LABEL caption</code> and the new <code>minor_breaks</code> setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.</li>
+<li>Writers can be configured from key–value options: <code>Writer::from_options</code> takes a <code>WriterOptions</code> set, and the CLI collects them from a repeatable <code>--writer-option key=value</code> flag on <code>exec</code> and <code>run</code> (short <code>-D</code>, also spellable <code>--writer-options</code>). Several settings can be collapsed into one flag separated by <code>;</code> — <code>-D 'width=1600;dpi=150'</code>, quoted because shells read <code>;</code> themselves — and the two forms mix. The png writer takes <code>width</code>, <code>height</code>, <code>units</code> (<code>px</code>, <code>in</code>, <code>cm</code>, <code>mm</code>, <code>pt</code>), <code>dpi</code>, and <code>background</code> (any CSS color, including <code>transparent</code>), defaulting to a 1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An unknown key or unusable value is an error naming the option, not a silently ignored setting.</li>
+<li><code>--reader</code>, <code>--writer</code>, and <code>--output</code> gained the short forms <code>-r</code>, <code>-w</code>, and <code>-o</code> on <code>exec</code> and <code>run</code>; <code>validate --reader</code> also takes <code>-r</code>.</li>
+<li>Text is rendered as rich text (markdown) by the png writer. A text layer’s <code>label</code> is parsed for <code>**bold**</code>, <code>*italic*</code>, <code>_underline_</code>, <code>~~strike~~</code>, <code>`code`</code> and marquee-style <code>{selector body}</code> spans that set a colour or size (<code>{.red hot}</code>, <code>{#0072B2 blue}</code>, <code>{.20 big}</code>), and so are the plot title, subtitle, caption and axis titles set with <code>LABEL</code>. Legend titles and break labels (axis tick labels, legend keys) do not parse yet and show their markers. The new <code>parse</code> setting on the text layer turns it off for that layer (<code>SETTING parse =&gt; false</code>), drawing the label exactly as given; it defaults to <code>true</code>. Chrome text has no switch yet. The Vega-Lite writer has no rich-text equivalent and ignores <code>parse</code>, always drawing text literally.</li>
+<li>New <code>minor_breaks</code> setting on continuous scales, controlling the unlabelled subdivisions between breaks: a whole number of minor breaks <em>per interval between two breaks</em> (<code>0</code> removes them), an array of exact positions, or — for temporal scales — an interval such as <code>'week'</code>. Defaults to a value chosen by the transformation. This has no Vega-Lite equivalent and is ignored by that writer; the png writer draws them.</li>
+</ul>
+</section>
+<section id="changed" class="level3">
+<h3 class="anchored" data-anchor-id="changed">Changed</h3>
+<ul>
+<li>Dodging now only takes effect where groups actually meet on a position. A layer whose grouping gives every group a position of its own — <code>colour</code> mapped to the same column as the discrete axis, say — is drawn at its full width instead of being squeezed into <code>1/n</code> of the band and shifted off its own category, which made a coloured ridgeline plot (<code>DRAW violin SETTING side =&gt; 'top'</code>) land its violins between the axis ticks or outside the panel altogether. Groups in different facet panels don’t meet either. Where any position does hold several groups the whole layer still dodges, so an element keeps the same slot in every position. Jitter, which dodges before jittering, follows the same rule.</li>
+<li>Categorical <code>y</code> axes now run bottom-up, so the first level sits at the bottom of the panel as it does in ggplot2. This affects every plot with a discrete or ordinal <code>y</code> — horizontal bars, boxplots and violins by category, points and 2D jitter — and brings the Vega-Lite writer in line with the raster one, which already read this way.</li>
+<li>Banded marks now measure against the full step in the VegaLite writer. A band fraction (a bar’s <code>width</code>, a dodge displacement, a jitter spread, a violin or boxplot half-width, a discrete tile’s extent) is a fraction of the whole category step, so <code>width =&gt; 0.9</code> leaves a 10% gap — ggplot2’s convention. Vega-Lite previously subtracted its own default band padding first, making every banded mark there narrower than the same query rendered as a raster. This applies to dodged, jittered and half-sided layers too, where Vega-Lite reserved a further 20% of every step: their marks were narrower, their displacements smaller, and their category ticks pulled toward the middle of the panel.</li>
 </ul>
 </section>
 <section id="fixed" class="level3">
 <h3 class="anchored" data-anchor-id="fixed">Fixed</h3>
 <ul>
+<li>A dodged violin or half-boxplot on a categorical <code>y</code> axis is no longer flipped in the Vega-Lite writer. Both took their band displacement from an encoding of their own that read a ggsql offset as pointing down the screen, so their groups came out in the opposite order to every other mark — a violin put the first group above the second where a boxplot of the same data put it below, and a half-boxplot’s box parted company with its own whiskers once dodged. Violins are also clipped to the panel now, as every other mark is.</li>
+<li>An identity-scaled column is now read exactly like the equivalent literal. <code>SCALE IDENTITY &lt;aes&gt;</code> hands its values straight to the aesthetic, so they mean what the same value written with <code>SETTING</code> means, but several were passed to the renderer unconverted: a <code>size</code> column was read as a symbol area in pixels² rather than the radius in points <code>SETTING size =&gt; 3</code> gives (markers far too small), a <code>shape</code> column of names such as <code>'star'</code> made Vega-Lite fail to render at all, and a <code>linetype</code> column of names such as <code>'dashed'</code> drew a solid line in both writers. <code>size</code>, <code>linewidth</code>, <code>fontsize</code>, <code>shape</code> and <code>linetype</code> identity columns now convert per row, so an identity column and a setting produce the same drawing. A value the aesthetic already understands still passes through untouched.</li>
+<li><code>DRAW bar MAPPING &lt;category&gt; AS y</code> produced a single bar against a synthetic axis instead of horizontal bars. A layer whose geom synthesises its primary position (bar, boxplot) now transposes when the user maps a <em>discrete</em> <code>y</code>, and stays put when they map a continuous one — that being the value axis, where a lone <code>DRAW boxplot MAPPING &lt;value&gt; AS y</code> already belongs.</li>
+<li><code>RENAMING</code> was ignored on a discrete or ordinal scale over a non-string domain (<code>SCALE ORDINAL color RENAMING 6 =&gt; 'June'</code> on a numeric month), because the break label was formatted as <code>6.0</code> while the rename was keyed on <code>6</code>.</li>
+<li>A temporal axis given a calendar interval (<code>SETTING breaks =&gt; '2 months'</code>) no longer draws ticks outside its own domain. The generator steps a whole interval past each end, and the filter that trims them back compared only plain numbers, so a date break was never constrained at all.</li>
+<li>Minor breaks are no longer extrapolated beyond the outermost major break when the majors are unevenly spaced, as they are when set by hand (<code>SETTING breaks =&gt; (37, 42, 55)</code>). Their spacing was taken from the first interval alone, so they matched no part of the axis. Evenly spaced majors still extend to the edge of the range.</li>
+<li><code>Scale::break_labels()</code> — what a writer reads to label an axis, colorbar or legend tick — labels a temporal break with its own date (<code>1973-04-23</code>) instead of the epoch number its position projects to (<code>1208</code>), and keys <code>RENAMING</code> overrides by that same string, so a rename on a temporal scale is found rather than missed. Numeric and categorical labels are unchanged.</li>
+<li>A scale with an explicit input range that no layer trains — <code>SCALE x FROM (0, 10)</code> alongside a diagonal <code>rule</code>, whose position is deliberately kept out of scale training — takes its type from that range (numeric or temporal → continuous, string or boolean → discrete) instead of staying untyped, so consumers get a fully resolved scale.</li>
+<li>The VS Code / Positron extension now offers its “Source Current File” button and code cells in plain <code>.sql</code> files, so existing SQL can be run against a ggsql kernel without renaming it. <code>.sql</code> files keep their usual SQL syntax highlighting; to get ggsql highlighting as well, map them to the <code>ggsql</code> language type with <code>files.associations</code>, which the extension points out the first time a <code>.sql</code> file is opened. The new <code>ggsql.enableSqlFiles</code> setting turns the whole behaviour off.</li>
+<li>The VS Code / Positron extension contributes a “ggsql File” entry to the New File dialog.</li>
 <li>The VS Code / Positron extension now ships a language icon that renders in the session picker, editor tabs and the Explorer. It previously pointed at a file that did not exist, which left the icon blank.</li>
 <li>In plain VS Code, the extension no longer offers run buttons, keybindings or Command Palette entries for commands that need the Positron runtime and so had no handler there.</li>
 <li>Plots in Positron notebooks no longer come out blank when the cell output is rendered before Positron has laid the slot out, which happened on the first execution after a kernel started and when reopening a saved notebook. The plot sizes itself from its container, so a zero-width first measurement drew it at zero size with nothing left to correct it. It now recovers once the container has a real width.</li>
@@ -311,8 +333,8 @@ gradient teal.
 </section>
 <section id="section" class="level2">
 <h2 class="anchored" data-anchor-id="section">0.4.1 - 2026-06-22</h2>
-<section id="changed" class="level3">
-<h3 class="anchored" data-anchor-id="changed">Changed</h3>
+<section id="changed-1" class="level3">
+<h3 class="anchored" data-anchor-id="changed-1">Changed</h3>
 <ul>
 <li>Pinned the Windows image for GitHub Actions runners to Windows Server 2022.</li>
 </ul>
@@ -331,7 +353,7 @@ gradient teal.
 <li>New <code>hinge</code> SETTING on the <code>boxplot</code> layer, mirroring the existing <code>range</code> setting (#438)</li>
 <li>New <code>DRAW spatial</code> layer for rendering simple features (WKT/WKB) for drawing maps and choropleths (#370).</li>
 <li>New builtin dataset <code>ggsql:world</code> for showcasing spatial examples. Data is a subset of columns from the <a href="https://www.naturalearthdata.com/">Natural Earth</a> country data at 1:110m resolution (#370).</li>
-<li>New <code>PROJECT TO &lt;map&gt;</code> family of spatial map projections. For general projections, one can use <code>PROJECT TO crs SETTING target =&gt; '+proj=...'</code>. Several named projections have explicit support using e.g.&nbsp; <code>PROJECT TO mollweide</code>. Works for a subset of layers, notably <code>spatial</code>, <code>point</code>, <code>text</code>, <code>path</code>, <code>polygon</code> and <code>tile</code>. Requires a spatial backend like PostGIS, SpatiaLite, or DuckDB spatial extension (#455).</li>
+<li>New <code>PROJECT TO &lt;map&gt;</code> family of spatial map projections. For general projections, one can use <code>PROJECT TO crs SETTING target =&gt; '+proj=...'</code>. Several named projections have explicit support using e.g. <code>PROJECT TO mollweide</code>. Works for a subset of layers, notably <code>spatial</code>, <code>point</code>, <code>text</code>, <code>path</code>, <code>polygon</code> and <code>tile</code>. Requires a spatial backend like PostGIS, SpatiaLite, or DuckDB spatial extension (#455).</li>
 </ul>
 </section>
 <section id="fixed-1" class="level3">
@@ -342,8 +364,8 @@ gradient teal.
 <li>Fixed misbehaviour of numeric scale’s <code>RENAMING</code> clause due to pre-formatting issues (#461)</li>
 </ul>
 </section>
-<section id="changed-1" class="level3">
-<h3 class="anchored" data-anchor-id="changed-1">Changed</h3>
+<section id="changed-2" class="level3">
+<h3 class="anchored" data-anchor-id="changed-2">Changed</h3>
 <ul>
 <li><code>boxplot</code>, <code>violin</code>, and <code>range</code> now support omitting the categorical aesthetic, matching <code>bar</code>. <code>point</code> now treats both position aesthetics as optional.</li>
 <li>Upgraded dependencies: duckdb-rs v1.10502, arrow v58 (#447).</li>
@@ -373,8 +395,8 @@ gradient teal.
 <li>Fixed bug where faceted data were matched to the incorrect panels (#409)</li>
 </ul>
 </section>
-<section id="changed-2" class="level3">
-<h3 class="anchored" data-anchor-id="changed-2">Changed</h3>
+<section id="changed-3" class="level3">
+<h3 class="anchored" data-anchor-id="changed-3">Changed</h3>
 <ul>
 <li>Restructured how ggsql integrates with ODBC drivers to use the system ODBC, rather than bundling unixodbc as part of binary releases. This fixes several issues on Linux and macOS caused by relative paths to dynamic libraries.</li>
 </ul>
@@ -416,8 +438,8 @@ gradient teal.
 <li>Fixed an issue with OOB null-filtering, leading to missing median lines in boxplots (#394)</li>
 </ul>
 </section>
-<section id="changed-3" class="level3">
-<h3 class="anchored" data-anchor-id="changed-3">Changed</h3>
+<section id="changed-4" class="level3">
+<h3 class="anchored" data-anchor-id="changed-4">Changed</h3>
 <ul>
 <li>Reverted an earlier decision to materialize CTEs and the global query in Rust before registering them back to the backend. We now keep the data purely on the backend until the layer query as was always intended (#363)</li>
 <li>Relieved some grammatical constraints on the SQL-portion before the VISUALISE portion (#364).</li>

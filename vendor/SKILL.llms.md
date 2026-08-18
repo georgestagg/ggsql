@@ -241,6 +241,8 @@ SCALE size VIA square   -- scale by radius not area
 
 Continuous/binned scales: - `expand` — expansion factor, scalar or `(mult, add)`. Default `0.05`. Only for x/y. - `oob` — out-of-bounds: `'keep'` (default for x/y), `'censor'` (default for others), `'squish'` - `breaks` — integer count, array of values, or interval string for temporal (e.g. `'2 months'`, `'week'`) - `pretty` — boolean, default `true`. Use Wilkinson’s algorithm for nice breaks. - `reverse` — boolean, default `false`. Reverse scale direction.
 
+Continuous scales additionally: - `minor_breaks` — unlabelled subdivisions between breaks. Integer count **per interval between two breaks** (`0` removes them), array of values, or interval string for temporal. Defaults to a per-transformation value. Only drawn by writers that support minor breaks; Vega-Lite ignores it.
+
 Binned scales additionally: - `closed` — `'left'` (default) or `'right'`
 
 Discrete/ordinal scales: - `reverse` — boolean
@@ -405,7 +407,7 @@ Reference lines spanning the full panel. Required: x or y. Optional: `slope` (fo
 
 ### text
 
-Text labels. Required: x, y, label. Settings: `offset` (number or `(h, v)`), `format` (string interpolation like RENAMING). `hjust`: `'left'`/`'right'`/`'centre'` or 0-1. `vjust`: `'top'`/`'bottom'`/`'middle'` or 0-1.
+Text labels. Required: x, y, label. Settings: `offset` (number or `(h, v)`), `format` (string interpolation like RENAMING), `parse` (boolean, default `true`: read the label as markdown — `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `{.red span}` — set `false` to draw it literally; png writer only). `hjust`: `'left'`/`'right'`/`'centre'` or 0-1. `vjust`: `'top'`/`'bottom'`/`'middle'` or 0-1.
 
 ### rect
 

@@ -8,6 +8,8 @@ The dodge adjustment is intended to move entities that share the same position o
 
 Dodge doesn’t have specific requirements to the scale type of the plot, but will only affect discrete scales (including binned and ordinal). If only one scale is discrete, the dodging happens in that scale’s direction. If both scales are discrete, the dodging happens as a 2D grid.
 
+Dodging only takes effect if two or more groups actually meet on the same position — that is what there is to separate. Mapping an aesthetic to the same variable as the discrete axis, for instance, gives every group a position of its own, and the layer is drawn at its full width as if no dodging had been asked for. Groups in different [facet](../../../syntax/clause/facet.llms.md) panels don’t meet either. Where any position does hold several groups, the whole layer dodges, so an element occupies the same slot in every position and stays comparable across them.
+
 ## Settings
 
 Apart from the settings of the layer type, setting `position => 'dodge'` will allow these additional settings:

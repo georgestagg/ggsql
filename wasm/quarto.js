@@ -295764,7 +295764,7 @@ function __wbg_get_imports() {
           const a3 = state0.a;
           state0.a = 0;
           try {
-            return __wasm_bindgen_func_elem_8769(a3, state0.b, arg02, arg12);
+            return __wasm_bindgen_func_elem_8787(a3, state0.b, arg02, arg12);
           } finally {
             state0.a = a3;
           }
@@ -295860,7 +295860,7 @@ function __wbg_get_imports() {
       return addHeapObject(ret);
     },
     __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_8707);
+      const ret = makeMutClosure(arg0, arg1, __wasm_bindgen_func_elem_8725);
       return addHeapObject(ret);
     },
     __wbindgen_cast_0000000000000002: function(arg0) {
@@ -295888,10 +295888,10 @@ function __wbg_get_imports() {
     "./ggsql_wasm_bg.js": import0
   };
 }
-function __wasm_bindgen_func_elem_8707(arg0, arg1, arg2) {
+function __wasm_bindgen_func_elem_8725(arg0, arg1, arg2) {
   try {
     const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-    wasm.__wasm_bindgen_func_elem_8707(retptr, arg0, arg1, addHeapObject(arg2));
+    wasm.__wasm_bindgen_func_elem_8725(retptr, arg0, arg1, addHeapObject(arg2));
     var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
     var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
     if (r1) {
@@ -295901,8 +295901,8 @@ function __wasm_bindgen_func_elem_8707(arg0, arg1, arg2) {
     wasm.__wbindgen_add_to_stack_pointer(16);
   }
 }
-function __wasm_bindgen_func_elem_8769(arg0, arg1, arg2, arg3) {
-  wasm.__wasm_bindgen_func_elem_8769(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
+function __wasm_bindgen_func_elem_8787(arg0, arg1, arg2, arg3) {
+  wasm.__wasm_bindgen_func_elem_8787(arg0, arg1, addHeapObject(arg2), addHeapObject(arg3));
 }
 var GgsqlContextFinalization = typeof FinalizationRegistry === "undefined" ? { register: () => {
 }, unregister: () => {

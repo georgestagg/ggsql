@@ -568,6 +568,7 @@ gradient teal.
 <section id="setting-1" class="level3">
 <h3 class="anchored" data-anchor-id="setting-1">SETTING</h3>
 <p>Continuous/binned scales: - <code>expand</code> — expansion factor, scalar or <code>(mult, add)</code>. Default <code>0.05</code>. Only for x/y. - <code>oob</code> — out-of-bounds: <code>'keep'</code> (default for x/y), <code>'censor'</code> (default for others), <code>'squish'</code> - <code>breaks</code> — integer count, array of values, or interval string for temporal (e.g.&nbsp;<code>'2 months'</code>, <code>'week'</code>) - <code>pretty</code> — boolean, default <code>true</code>. Use Wilkinson’s algorithm for nice breaks. - <code>reverse</code> — boolean, default <code>false</code>. Reverse scale direction.</p>
+<p>Continuous scales additionally: - <code>minor_breaks</code> — unlabelled subdivisions between breaks. Integer count <strong>per interval between two breaks</strong> (<code>0</code> removes them), array of values, or interval string for temporal. Defaults to a per-transformation value. Only drawn by writers that support minor breaks; Vega-Lite ignores it.</p>
 <p>Binned scales additionally: - <code>closed</code> — <code>'left'</code> (default) or <code>'right'</code></p>
 <p>Discrete/ordinal scales: - <code>reverse</code> — boolean</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode ggsql code-with-copy"><code class="sourceCode ggsql"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="kw">SCALE</span> <span class="at">x</span> <span class="kw">SETTING</span> <span class="at">breaks</span> <span class="op">=&gt;</span> <span class="st">'2 months'</span></span>
@@ -704,7 +705,7 @@ gradient teal.
 </section>
 <section id="text" class="level3">
 <h3 class="anchored" data-anchor-id="text">text</h3>
-<p>Text labels. Required: x, y, label. Settings: <code>offset</code> (number or <code>(h, v)</code>), <code>format</code> (string interpolation like RENAMING). <code>hjust</code>: <code>'left'</code>/<code>'right'</code>/<code>'centre'</code> or 0-1. <code>vjust</code>: <code>'top'</code>/<code>'bottom'</code>/<code>'middle'</code> or 0-1.</p>
+<p>Text labels. Required: x, y, label. Settings: <code>offset</code> (number or <code>(h, v)</code>), <code>format</code> (string interpolation like RENAMING), <code>parse</code> (boolean, default <code>true</code>: read the label as markdown — <code>**bold**</code>, <code>*italic*</code>, <code>~~strike~~</code>, <code>`code`</code>, <code>{.red span}</code> — set <code>false</code> to draw it literally; png writer only). <code>hjust</code>: <code>'left'</code>/<code>'right'</code>/<code>'centre'</code> or 0-1. <code>vjust</code>: <code>'top'</code>/<code>'bottom'</code>/<code>'middle'</code> or 0-1.</p>
 </section>
 <section id="rect" class="level3">
 <h3 class="anchored" data-anchor-id="rect">rect</h3>

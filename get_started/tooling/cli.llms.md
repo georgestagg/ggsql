@@ -45,7 +45,7 @@ $ ggsql validate "VISUALISE x, y FROM table DRAW point"
 
 ## Database connections
 
-Both `ggsql exec` and `ggsql run` accept a `--reader` flag that can be used to specify a connection string to be used when executing the query. If not provided, ggsql will use an empty in-memory duckdb connection, equivalent to `--reader duckdb://memory`.
+Both `ggsql exec` and `ggsql run` accept a `--reader` flag (short `-r`) that can be used to specify a connection string to be used when executing the query. If not provided, ggsql will use an empty in-memory duckdb connection, equivalent to `--reader duckdb://memory`.
 
 ``` bash
 $ ggsql exec --reader sqlite://sample/ggsql_test.sqlite \
@@ -62,6 +62,47 @@ col_a,  col_b, col_c
 299.08, 49.36, epsilon
 12.5,   29.48, gamma
 ```
+
+## Output format
+
+`ggsql exec` and `ggsql run` render with the writer named by `--writer` (short `-w`), defaulting to `--writer vegalite` (the Vega-Lite JSON above). A build that includes the optional `png` writer can also render straight to a PNG image with `--writer png`, which needs a GPU adapter available where it runs.
+
+A writer is configured with `--writer-option key=value`, repeated once per setting:
+
+``` bash
+ggsql exec --writer png \
+  --writer-option width=6 \
+  --writer-option height=4 \
+  --writer-option units=in \
+  --writer-option dpi=150 \
+  --output chart.png \
+  "VISUALISE species AS fill FROM ggsql:penguins DRAW bar"
+```
+
+Several settings can also be collapsed into one flag, separated by `;`. With `-D` short for `--writer-option` (and `--writer-options` accepted as well), plus `-w` for `--writer` and `-o` for `--output`, the same call reads:
+
+``` bash
+ggsql exec -w png -D 'width=6;height=4;units=in;dpi=150' -o chart.png \
+  "VISUALISE species AS fill FROM ggsql:penguins DRAW bar"
+```
+
+**Quote the collapsed form.** Most shells — bash, zsh, PowerShell — read `;` as a command separator, so unquoted it silently runs something else rather than failing. Single quotes, double quotes and `\;` all work. The two forms mix freely, and a repeated key takes its last value.
+
+`;` is the only separator; `,` is not, because values contain commas — `background='rgb(255, 0, 0)'` has to survive intact.
+
+The png writer understands these options:
+
+| Option | Value | Default |
+|----|----|----|
+| `width` | Canvas width, in `units` | `1500` (px) |
+| `height` | Canvas height, in `units` | `1000` (px) |
+| `units` | `px`, `in`, `cm`, `mm`, or `pt` — how `width` and `height` are read | `px` |
+| `dpi` | Pixels per inch. Sets the print resolution of a physical size, and how large text and other chrome are relative to the canvas | `300` |
+| `background` | Any CSS color, e.g. `white`, `#faf3e0`, `rgb(0 0 0 / 50%)`, or `transparent` | `white` |
+
+`units` applies to the `width` and `height` you supply — the defaults are pixel counts either way, so `--writer-option width=6 --writer-option units=in` gives a canvas 6 inches wide and 1000 pixels tall.
+
+The Vega-Lite writer takes no options: its output is resolution-independent, so size, resolution and background belong to whatever renders the spec. Passing an option a writer doesn’t understand is an error rather than a setting quietly ignored.
 
 ## Documentation
 

@@ -429,7 +429,7 @@ gradient teal.
 </section>
 <section id="database-connections" class="level2">
 <h2 class="anchored" data-anchor-id="database-connections">Database connections</h2>
-<p>Both <code>ggsql exec</code> and <code>ggsql run</code> accept a <code>--reader</code> flag that can be used to specify a connection string to be used when executing the query. If not provided, ggsql will use an empty in-memory duckdb connection, equivalent to <code>--reader duckdb://memory</code>.</p>
+<p>Both <code>ggsql exec</code> and <code>ggsql run</code> accept a <code>--reader</code> flag (short <code>-r</code>) that can be used to specify a connection string to be used when executing the query. If not provided, ggsql will use an empty in-memory duckdb connection, equivalent to <code>--reader duckdb://memory</code>.</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ggsql exec <span class="at">--reader</span> sqlite://sample/ggsql_test.sqlite <span class="dt">\</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">"SELECT * FROM test_table LIMIT 3"</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">col_a,</span>  col_b, col_c</span>
@@ -444,19 +444,80 @@ gradient teal.
 <span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a><span class="ex">299.08,</span> 49.36, epsilon</span>
 <span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a><span class="ex">12.5,</span>   29.48, gamma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
+<section id="output-format" class="level2">
+<h2 class="anchored" data-anchor-id="output-format">Output format</h2>
+<p><code>ggsql exec</code> and <code>ggsql run</code> render with the writer named by <code>--writer</code> (short <code>-w</code>), defaulting to <code>--writer vegalite</code> (the Vega-Lite JSON above). A build that includes the optional <code>png</code> writer can also render straight to a PNG image with <code>--writer png</code>, which needs a GPU adapter available where it runs.</p>
+<p>A writer is configured with <code>--writer-option key=value</code>, repeated once per setting:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">ggsql</span> exec <span class="at">--writer</span> png <span class="dt">\</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--writer-option</span> width=6 <span class="dt">\</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--writer-option</span> height=4 <span class="dt">\</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--writer-option</span> units=in <span class="dt">\</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--writer-option</span> dpi=150 <span class="dt">\</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--output</span> chart.png <span class="dt">\</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">"VISUALISE species AS fill FROM ggsql:penguins DRAW bar"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Several settings can also be collapsed into one flag, separated by <code>;</code>. With <code>-D</code> short for <code>--writer-option</code> (and <code>--writer-options</code> accepted as well), plus <code>-w</code> for <code>--writer</code> and <code>-o</code> for <code>--output</code>, the same call reads:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">ggsql</span> exec <span class="at">-w</span> png <span class="at">-D</span> <span class="st">'width=6;height=4;units=in;dpi=150'</span> <span class="at">-o</span> chart.png <span class="dt">\</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">"VISUALISE species AS fill FROM ggsql:penguins DRAW bar"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>Quote the collapsed form.</strong> Most shells — bash, zsh, PowerShell — read <code>;</code> as a command separator, so unquoted it silently runs something else rather than failing. Single quotes, double quotes and <code>\;</code> all work. The two forms mix freely, and a repeated key takes its last value.</p>
+<p><code>;</code> is the only separator; <code>,</code> is not, because values contain commas — <code>background='rgb(255, 0, 0)'</code> has to survive intact.</p>
+<p>The png writer understands these options:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Option</th>
+<th>Value</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>width</code></td>
+<td>Canvas width, in <code>units</code></td>
+<td><code>1500</code> (px)</td>
+</tr>
+<tr class="even">
+<td><code>height</code></td>
+<td>Canvas height, in <code>units</code></td>
+<td><code>1000</code> (px)</td>
+</tr>
+<tr class="odd">
+<td><code>units</code></td>
+<td><code>px</code>, <code>in</code>, <code>cm</code>, <code>mm</code>, or <code>pt</code> — how <code>width</code> and <code>height</code> are read</td>
+<td><code>px</code></td>
+</tr>
+<tr class="even">
+<td><code>dpi</code></td>
+<td>Pixels per inch. Sets the print resolution of a physical size, and how large text and other chrome are relative to the canvas</td>
+<td><code>300</code></td>
+</tr>
+<tr class="odd">
+<td><code>background</code></td>
+<td>Any CSS color, e.g.&nbsp;<code>white</code>, <code>#faf3e0</code>, <code>rgb(0 0 0 / 50%)</code>, or <code>transparent</code></td>
+<td><code>white</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>units</code> applies to the <code>width</code> and <code>height</code> you supply — the defaults are pixel counts either way, so <code>--writer-option width=6 --writer-option units=in</code> gives a canvas 6 inches wide and 1000 pixels tall.</p>
+<p>The Vega-Lite writer takes no options: its output is resolution-independent, so size, resolution and background belong to whatever renders the spec. Passing an option a writer doesn’t understand is an error rather than a setting quietly ignored.</p>
+</section>
 <section id="documentation" class="level2">
 <h2 class="anchored" data-anchor-id="documentation">Documentation</h2>
 <p>The ggsql CLI has built-in documentation for ggsql syntax and usage. Run <code>ggsql docs</code> for an overview of available documentation topics, and <code>ggsql docs [topic]</code> to read about a specific topic.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ggsql docs draw</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">DRAW</span> is perhaps the most important clause in ggsql as it defines a layer in your </span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">visualisation.</span> A layer is a single instance of a visual representation of a dataset.</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="ex">[...]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ggsql docs draw</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">DRAW</span> is perhaps the most important clause in ggsql as it defines a layer in your </span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="ex">visualisation.</span> A layer is a single instance of a visual representation of a dataset.</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="ex">[...]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>A ggsql <a href="../../syntax/skill.html">skill</a>, a usage guide intended for AI assistants and humans, can also be output using the <code>ggsql skill</code> command (also available as <code>ggsql agent-info</code>).</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ggsql skill</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>                          <span class="ex">ggsql</span> Query Writer</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">ggsql</span> is a SQL extension for declarative data visualization based on</span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Grammar</span> of Graphics principles.</span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">[...]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">$</span> ggsql skill</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>                          <span class="ex">ggsql</span> Query Writer</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="ex">ggsql</span> is a SQL extension for declarative data visualization based on</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="ex">Grammar</span> of Graphics principles.</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="ex">[...]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 
 
 </section>

@@ -96,6 +96,28 @@ If not provided explicitly by the user the breaks for the scales will be calcula
   - `pretty => true`: An appropriate interval is chosen that approximates the requested number of breaks and then used as above
   - `pretty => false`: Linear spacing in integer space as close to the requested number of breaks
 
+### Minor breaks
+
+Minor breaks are the unlabelled sub-divisions between two breaks — drawn as shorter ticks and fainter gridlines. They carry no labels, so unlike `breaks` they are never affected by `RENAMING` or a label template.
+
+Where `breaks => 5` asks for about five breaks across the whole scale, `minor_breaks => 3` asks for three minor breaks *inside each interval between two breaks*.
+
+If not given, the transformation picks the count:
+
+- `linear`/`integer`/`sqrt`/`square`: one minor break per interval, i.e. at the midpoint
+- `log`/`log2`/`ln`/`exp10`/`exp2`/`exp`/`asinh`/`pseudo_log`/`pseudo_log2`/`pseudo_ln`: eight per interval, giving the familiar 2-9 pattern between powers
+- `date`/`datetime`/`time`: three per interval
+
+Automatically derived minor breaks are always placed relative to the breaks, so changing `breaks` moves them too. Set them explicitly to break that link:
+
+- `minor_breaks => <number>`: that many evenly spaced minor breaks inside every interval. `0` removes them entirely
+- `minor_breaks => (…)`: an array of exact positions. Values outside the scale range are dropped
+- `minor_breaks => <interval>`: for `date`/`datetime`/`time` only, an interval (e.g. `week` or `6 hours`) aligned at the interval boundary, exactly as `breaks` treats an interval
+
+> **NOTE:**
+>
+> Minor breaks are only drawn by writers that support them. The Vega-Lite writer has no concept of a minor break and ignores the setting; the png (raster) writer draws them.
+
 ### The size aesthetic
 
 The size aesthetic requires special attention. To the user, size is given as radius in points (1/72 inch), but internally the provided values are converted to area, and the scale operates on area transformed values. This means that while you provide the output range in radius, the scaling is proportional to the area, even when using the default linear transformation. While this seems somewhat complicated we have chosen this approach to satisfy two opposing needs:
@@ -147,6 +169,7 @@ The following settings are recognised by continuous scales:
 - `expand` (only for `x`/`y`): Either a scalar number or 2-element array of numbers (values must be \>= 0). Sets the expansion of the scale to either side of the range. If a scalar it gives the multiplicative expansion. If an array the first element is a multiplication factor and the second element is an additive constant. Defaults to `0.05` (5 %). Expansion is only applied to values that are not explicitly given by the user, i.e. if setting the range as `SCALE x FROM (0, null)` expansion will only be applied to the upper range.
 - `oob`: How should values outside of the scale input range be treated. One of `'keep'` (keep the values as-is), `'censor'` (set to `null`), or `'squish'` (set to the nearest values within the range). Default for `x`/`y` is `'keep'`, for the remaining it is `'censor'`.
 - `breaks`: Either a scalar (whole number \>= 1) as described in [the section on breaks](#breaks), or an array of values to place breaks at. Defaults to `5`.
+- `minor_breaks`: Placement of the minor breaks that fall between the breaks, as described in [the section on minor breaks](#minor-breaks). Either a scalar (whole number \>= 0) giving the number of minor breaks *per interval between two breaks*, an array of values to place them at, or (for temporal transformations) an interval. Use `minor_breaks => 0` to remove them. Defaults to a value chosen by the transformation.
 - `pretty`: A boolean indicating which algorithm to use for automatic calculation of breaks as described in [the section on breaks](#breaks). Defaults to `true`.
 - `reverse`: A boolean indicating whether the scale direction should be reversed. Defaults to `false`.
 

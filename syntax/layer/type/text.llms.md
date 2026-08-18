@@ -36,6 +36,7 @@ The following aesthetics are recognised by the text layer.
   - a single number that applies both horizontally and vertically
   - a 2-element numeric array `[h, v]` where the first number is the horizontal offset and the second number is the vertical offset.
 - `format` Formatting specifier, see explanation below.
+- `parse` Whether to read the label as rich text (markdown). Boolean value, `true` by default. See explanation below.
 - `position`: Position adjustment. One of `'identity'` (default), `'stack'`, `'dodge'`, or `'jitter'`
 - `aggregate` Aggregation functions to apply per group:
   - `null` apply no group aggregation (default).
@@ -66,6 +67,19 @@ The `format` setting can take a string that will be used in formatting the `labe
     - `g`/`G`: Shortest form of `e` and `f`
     - `o`: Unsigned octal
     - `x`/`X`: Unsigned hexadecimal
+
+### Parse
+
+By default the label is read as markdown, so `'**Adelie**'` draws a bold *Adelie* rather than the asterisks around it. Set `parse => false` to draw the label exactly as it is, markers and all.
+
+The markdown flavour recognised is CommonMark plus a few extensions. The most useful parts for a label are:
+
+- `**bold**` and `*italic*`. Note that `_underline_` underlines rather than italicises.
+- `~~strikethrough~~`.
+- `` `code` ``, rendered in the monospace typeface.
+- `{selector body}` spans, which style a fragment without a dedicated marker. The selector is a single token: a colour name or CSS colour (`{.red hot}`), a hex colour (`{#0072B2 blue}`), or a size in points (`{.20 big}`). Combine them by nesting: `{.red {.20 big and red}}`.
+
+Note that `parse` is only honoured by the png writer. The Vega-Lite writer has no rich-text support and always draws the label literally, so a query meant for both writers should either avoid markdown in its labels or set `parse => false`.
 
 ## Data transformation
 
@@ -105,6 +119,15 @@ DRAW text
     fontweight => 'bold', 
     typeface => 'Times New Roman'
 SCALE fontsize TO (6, 20)
+```
+
+Labels are read as markdown, so a `format` template can style part of the label. This only shows up in the png writer.
+
+``` ggsql
+VISUALISE bill_len AS x, bill_dep AS y FROM ggsql:penguins
+DRAW text
+  MAPPING island AS label
+  SETTING format => '{:Title} *island*'
 ```
 
 The ‘stroke’ aesthetic is applied to the outline of the text.
