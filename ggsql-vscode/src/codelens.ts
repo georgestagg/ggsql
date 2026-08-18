@@ -1,8 +1,31 @@
 import * as vscode from 'vscode';
 import { parseCells, type Cell } from './cellParser';
+import { isGgsqlDocument } from './languages';
 
 export class GgsqlCodeLensProvider implements vscode.CodeLensProvider {
+	private readonly changed = new vscode.EventEmitter<void>();
+
+	/** Fired when `ggsql.enableSqlFiles` changes, so `.sql` lenses appear or clear. */
+	readonly onDidChangeCodeLenses = this.changed.event;
+
+	constructor(disposables: vscode.Disposable[]) {
+		disposables.push(
+			this.changed,
+			vscode.workspace.onDidChangeConfiguration(event => {
+				if (event.affectsConfiguration('ggsql.enableSqlFiles')) {
+					this.changed.fire();
+				}
+			}),
+		);
+	}
+
 	provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+		// Registered for `sql` as well as `ggsql`, so gate here rather than at
+		// registration time; that way the setting takes effect immediately.
+		if (!isGgsqlDocument(document)) {
+			return [];
+		}
+
 		const cells = parseCells(document);
 		const lenses: vscode.CodeLens[] = [];
 
@@ -54,7 +77,7 @@ export function registerCellCommands(
 	context.subscriptions.push(
 		vscode.commands.registerCommand('ggsql.runQuery', (line?: number) => {
 			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.document.languageId !== 'ggsql') { return; }
+			if (!editor || !isGgsqlDocument(editor.document)) { return; }
 			const cells = parseCells(editor.document);
 			const cell = line !== undefined
 				? findCellAtLine(cells, line)
@@ -66,7 +89,7 @@ export function registerCellCommands(
 
 		vscode.commands.registerCommand('ggsql.runCurrentAdvance', (line?: number) => {
 			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.document.languageId !== 'ggsql') { return; }
+			if (!editor || !isGgsqlDocument(editor.document)) { return; }
 			const cells = parseCells(editor.document);
 			const targetLine = line ?? editor.selection.active.line;
 			const cell = findCellAtLine(cells, targetLine);
@@ -84,7 +107,7 @@ export function registerCellCommands(
 
 		vscode.commands.registerCommand('ggsql.runCellsAbove', (line?: number) => {
 			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.document.languageId !== 'ggsql') { return; }
+			if (!editor || !isGgsqlDocument(editor.document)) { return; }
 			const cells = parseCells(editor.document);
 			const cursor = new vscode.Position(line ?? editor.selection.active.line, 0);
 			cells
@@ -98,7 +121,7 @@ export function registerCellCommands(
 
 		vscode.commands.registerCommand('ggsql.runNextCell', (line?: number) => {
 			const editor = vscode.window.activeTextEditor;
-			if (!editor || editor.document.languageId !== 'ggsql') { return; }
+			if (!editor || !isGgsqlDocument(editor.document)) { return; }
 			const cells = parseCells(editor.document);
 			const targetLine = line ?? editor.selection.active.line;
 			const next = findNextCell(cells, targetLine);

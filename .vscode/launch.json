@@ -8,6 +8,9 @@
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}/ggsql-vscode"
             ],
+            "outFiles": [
+                "${workspaceFolder}/ggsql-vscode/out/**/*.js"
+            ],
             "preLaunchTask": "build-ggsql-vscode"
         }
     ]
