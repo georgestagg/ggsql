@@ -20,6 +20,16 @@
   ignored setting.
 - `--reader`, `--writer`, and `--output` gained the short forms `-r`, `-w`, and
   `-o` on `exec` and `run`; `validate --reader` also takes `-r`.
+- Text is rendered as rich text (markdown) by the png writer. A text layer's
+  `label` is parsed for `**bold**`, `*italic*`, `_underline_`, `~~strike~~`,
+  `` `code` `` and marquee-style `{selector body}` spans that set a colour or
+  size (`{.red hot}`, `{#0072B2 blue}`, `{.20 big}`), and so are the plot title,
+  subtitle, caption and axis titles set with `LABEL`. Legend titles and break
+  labels (axis tick labels, legend keys) do not parse yet and show their markers.
+  The new `parse` setting on the text layer turns it off for that layer
+  (`SETTING parse => false`), drawing the label exactly as given; it defaults to
+  `true`. Chrome text has no switch yet. The Vega-Lite writer has no rich-text
+  equivalent and ignores `parse`, always drawing text literally.
 - New `minor_breaks` setting on continuous scales, controlling the unlabelled
   subdivisions between breaks: a whole number of minor breaks *per interval between
   two breaks* (`0` removes them), an array of exact positions, or — for temporal

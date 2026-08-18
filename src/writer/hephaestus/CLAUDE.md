@@ -216,7 +216,7 @@ default — check the target geom's `CHANNELS` catalog upstream when adding one.
 | Absolute (pt) offsets — hinge caps | `x_offset`, `x2_offset`, `y_offset`, `y2_offset` |
 | Color | `fill`, `stroke` (`stroke2` = a ribbon's far edge; `text_stroke` = a glyph outline) |
 | Scalars | `size`, `linewidth`, `linetype`, `shape`, `fill_opacity` / `stroke_opacity` |
-| Geometry / text | `geometry`; `text`, `anchor_x`, `anchor_y`, `angle`, `weight`, `italic`, `family` |
+| Geometry / text | `geometry`; `text`, `markdown`, `anchor_x`, `anchor_y`, `angle`, `weight`, `italic`, `family` |
 
 | Scale registry key | Source |
 | --- | --- |
@@ -504,6 +504,27 @@ Deliberately not done, in rough order of how likely they are to bite:
   narrow facet panel can crowd or overlap long labels — which is why
   `free_continuous_scale` narrows the *global* breaks to a panel rather than
   letting hephaestus invent per-panel ones.
+- **Legend titles and break labels don't parse markdown.** [`ggsql_theme`](wiring.rs)
+  sets `markdown` on the root text element, so the flag cascades to every slot —
+  but hephaestus only consults it where a slot goes through
+  `chrome::text::measure_for_element` / `draw_text_element_in_rect` (plot title,
+  subtitle, caption, axis titles, strip labels). Legend titles
+  (`chrome/legend/mod.rs`, `chrome/legend/colorbar.rs`), legend key labels
+  (`chrome/legend/measure.rs`, `chrome/legend/render_keys.rs`) and tick labels
+  (`chrome/axis.rs`, `chrome/linear_axis.rs`, `chrome/polar.rs`) build a
+  `TextRun::new` directly and draw their markers literally. **Fixing this is
+  upstream work**; nothing changes in this writer when it lands.
+- **No switch on rich-text chrome.** [`ggsql_theme`](wiring.rs) turns markdown on
+  for the whole chrome cascade, so a title that wants a literal `*` has no way to
+  ask for one. The text layer has `parse`; chrome waits for ggsql to grow a theme
+  concept, which is where the same switch belongs.
+- **Rich text costs ~1pt of layout.** A plain string measures slightly larger
+  through the rich shaper than through the plain one, so every axis title claims a
+  little more room and the panel comes out a few px smaller than it did before
+  markdown was on. Aligning the sheet's line height with the theme's (see
+  `ggsql_theme`) removed the bulk of it; the ~1pt that remains is the rich block
+  model's own box, which no sheet entry reaches. Visually imperceptible, but it is
+  why a residual diff over the harness shows nearly every cell as "changed".
 
 ## See also
 

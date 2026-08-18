@@ -41,6 +41,12 @@ pub fn build(plot: &mut HPlot, ctx: &Ctx) -> Result<()> {
     // Label string.
     b.set("text", Raw(column_to_strings(df, label)?));
 
+    // `parse` decides whether each label is read as markdown (hephaestus's
+    // `markdown` channel, which routes the row through the rich-text shaper) or
+    // as a literal string. ggsql defaults it on, so the channel is always bound
+    // rather than left to hephaestus's own theme default of off.
+    b.set("markdown", Raw(vec![parse(layer); n]));
+
     // Color, glyph outline, size, opacity and the font face: the shared material
     // path, so each is honored whether it arrives as a `SETTING` literal, a
     // scaled column (`SCALE fontsize TO (6, 20)` maps through its resolved scale)
@@ -133,6 +139,16 @@ fn offset(layer: &crate::Layer) -> (f64, f64) {
             (at(0), at(1))
         }
         _ => (0.0, 0.0),
+    }
+}
+
+/// The layer's `parse` parameter: whether a label is markdown. Defaults to
+/// `true`, matching the geom's own default — a `PLACE` layer or a query built
+/// without going through parameter resolution leaves it unset.
+fn parse(layer: &crate::Layer) -> bool {
+    match layer.parameters.get("parse") {
+        Some(ParameterValue::Boolean(b)) => *b,
+        _ => true,
     }
 }
 

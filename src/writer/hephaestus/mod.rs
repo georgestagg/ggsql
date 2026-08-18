@@ -839,6 +839,49 @@ mod tests {
         ));
     }
 
+    /// A label carrying markdown: `parse` defaults on, so the row goes through
+    /// hephaestus's rich-text shaper rather than being drawn with its markers.
+    #[test]
+    fn renders_text_markdown() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, '**bold** and {.red red}' AS lab \
+             UNION ALL SELECT 2, 2, '`code` and ~~strike~~' \
+             VISUALISE x AS x, y AS y, lab AS label DRAW text",
+        ));
+    }
+
+    /// `SETTING parse => false` opts the layer out, drawing the markers literally.
+    #[test]
+    fn renders_text_markdown_off() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, '**bold** and {.red red}' AS lab \
+             VISUALISE x AS x, y AS y, lab AS label DRAW text SETTING parse => false",
+        ));
+    }
+
+    /// The glyph outline survives the markdown path: hephaestus folds the row's
+    /// `text_stroke` onto the rich sheet's root selector rather than dropping it.
+    #[test]
+    fn renders_text_markdown_with_stroke() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 1 AS y, '**bold**' AS lab \
+             VISUALISE x AS x, y AS y, lab AS label \
+             DRAW text SETTING fontsize => 30, stroke => 'red', rotation => 20",
+        ));
+    }
+
+    /// Markdown chrome: a `LABEL` string is rich text too, so the title, subtitle,
+    /// caption and axis titles all shape through the rich pipeline.
+    #[test]
+    fn renders_markdown_chrome() {
+        assert_png_or_skip(render(
+            "SELECT 1 AS x, 2 AS y UNION ALL SELECT 2, 3 \
+             VISUALISE x AS x, y AS y DRAW point \
+             LABEL title => 'A **bold** title', subtitle => '{.red red} subtitle', \
+             caption => '*italic* caption', x => 'axis *italic*'",
+        ));
+    }
+
     /// The same aesthetics as *columns*, which take the identity path rather than
     /// the literal one: strings, booleans and degrees, each converted per row.
     #[test]

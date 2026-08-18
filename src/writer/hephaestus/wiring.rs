@@ -7,10 +7,11 @@ use std::collections::HashSet;
 use hephaestus::color::{rgb8, Color};
 use hephaestus::plot::chrome::legend::{Legend, LegendKeySpec};
 use hephaestus::plot::geom::{BuildableGeom, Geom, GeomBuilder, Raw};
-use hephaestus::plot::theme::{Element, Length, RectElement, Theme};
+use hephaestus::plot::theme::{Element, Length, RectElement, Theme, DEFAULT_TEXT_LINEHEIGHT};
 use hephaestus::plot::Plot as HPlot;
 use hephaestus::scales::chrome::LegendSide;
 use hephaestus::scales::value::{DataColumn, Value as HValue};
+use hephaestus::text::rich::{LineHeightSpec, StyleDelta};
 
 use super::channels::{
     aesthetic_column_name, build_group_keys, column_to_bool, column_to_channel, column_to_colors,
@@ -25,12 +26,32 @@ use crate::{AestheticValue, DataFrame, GgsqlError, Layer, Plot, Result};
 /// theme concept of its own yet, so anything the two writers must agree on that
 /// isn't a scale or a channel belongs here.
 ///
-/// Only one deviation so far: a colorbar's frame. hephaestus's `BarTheme` leaves
-/// `linewidth_pt` unset, which cascades to the 1pt ink border every `RectElement`
-/// gets by default, so a continuous color legend arrives boxed. Vega-Lite draws
-/// no gradient border (its `gradientStrokeWidth` default is 0), and the discrete
-/// `KeyTheme` next to it zeroes its own border, so the box is out of place in
-/// either comparison.
+/// Three deviations so far:
+///
+/// - **A colorbar's frame.** hephaestus's `BarTheme` leaves `linewidth_pt` unset,
+///   which cascades to the 1pt ink border every `RectElement` gets by default, so
+///   a continuous color legend arrives boxed. Vega-Lite draws no gradient border
+///   (its `gradientStrokeWidth` default is 0), and the discrete `KeyTheme` next to
+///   it zeroes its own border, so the box is out of place in either comparison.
+/// - **Markdown chrome.** ggsql treats chrome strings as rich text, so `**bold**`
+///   and `{.red word}` render as styled text rather than literal markers. Set on
+///   the root `text` element, it cascades to *every* text slot — which is how a
+///   future ggsql theme concept would drive it. What actually parses is whichever
+///   of those slots hephaestus consults `markdown` on: today the plot title,
+///   subtitle and caption, the axis titles and the facet strip labels. Legend
+///   titles and break labels cascade the flag too but shape through
+///   `TextRun::new` regardless, so they still draw their markers; they start
+///   parsing with no change here once hephaestus reads the flag at those sites
+///   (see [Known gaps](CLAUDE.md)).
+/// - **One line height for both text paths.** hephaestus's rich-text sheet gives
+///   its root selector marquee's `1.6` line height, while the plain path uses the
+///   theme's `1.2`. Chrome slots are one-liners whose measured box sets how much
+///   room the layout reserves, so the mismatch made every axis title claim ~0.4
+///   lines more than it draws — shrinking the panel, and by a *different* amount
+///   horizontally, since the y title measures rotated. Folding the theme's line
+///   height onto the sheet's root brings a plain string back to nearly the layout
+///   it had unparsed: ~1pt of the ~3pt it was claiming remains, which is the
+///   rich block model's own box and not something a sheet entry reaches.
 pub fn ggsql_theme() -> Theme {
     let mut theme = Theme::default();
     theme.legend.bar.frame = Element::Set(RectElement {
@@ -39,6 +60,17 @@ pub fn ggsql_theme() -> Theme {
         linewidth_pt: Some(Length::Abs(0.0)),
         ..RectElement::default()
     });
+    theme.text.markdown = Some(true);
+    let mut sheet = (*theme.rich_text).clone();
+    let base = sheet.get("base").cloned().unwrap_or_default();
+    sheet.set(
+        "base",
+        StyleDelta {
+            lineheight: Some(LineHeightSpec::Mult(DEFAULT_TEXT_LINEHEIGHT)),
+            ..base
+        },
+    );
+    theme.rich_text = std::sync::Arc::new(sheet);
     theme
 }
 

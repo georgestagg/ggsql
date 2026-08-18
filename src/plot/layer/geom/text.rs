@@ -60,6 +60,11 @@ impl GeomTrait for Text {
                 default: DefaultParamValue::Null,
                 constraint: ParamConstraint::string(),
             },
+            ParamDefinition {
+                name: "parse",
+                default: DefaultParamValue::Boolean(true),
+                constraint: ParamConstraint::boolean(),
+            },
             super::types::AGGREGATE_PARAM,
         ];
         PARAMS
@@ -99,5 +104,49 @@ impl GeomTrait for Text {
 impl std::fmt::Display for Text {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "text")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::plot::types::ParameterValue;
+    use crate::plot::{Geom, Layer};
+
+    /// `parse` is on unless the user says otherwise, so a label carrying markdown
+    /// renders as rich text without asking.
+    #[test]
+    fn test_parse_defaults_to_true() {
+        let mut layer = Layer::new(Geom::text());
+        layer.apply_default_params();
+        assert_eq!(
+            layer.parameters.get("parse"),
+            Some(&ParameterValue::Boolean(true))
+        );
+    }
+
+    /// An explicit `SETTING parse => false` survives default application.
+    #[test]
+    fn test_parse_setting_is_kept() {
+        let mut layer = Layer::new(Geom::text());
+        layer
+            .parameters
+            .insert("parse".to_string(), ParameterValue::Boolean(false));
+        layer.apply_default_params();
+        assert_eq!(
+            layer.parameters.get("parse"),
+            Some(&ParameterValue::Boolean(false))
+        );
+    }
+
+    /// `parse` is a boolean; anything else is a validation error rather than a
+    /// value coerced into one.
+    #[test]
+    fn test_parse_rejects_non_boolean() {
+        let mut layer = Layer::new(Geom::text());
+        layer.parameters.insert(
+            "parse".to_string(),
+            ParameterValue::String("yes".to_string()),
+        );
+        assert!(layer.validate_settings().is_err());
     }
 }
