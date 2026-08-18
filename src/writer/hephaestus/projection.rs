@@ -145,20 +145,17 @@ fn apply_proj_polar(mut plot: HPlot, proj: &Projection, spec: &Plot, ps: &PanelS
     };
     let start_deg = num("start").unwrap_or(0.0);
     let end_deg = num("end").unwrap_or(start_deg + 360.0);
-    let deg = |d: f64| base.theta_start - d * std::f64::consts::PI / 180.0;
+    let deg = |d: f64| base.theta_start() - d * std::f64::consts::PI / 180.0;
     let start = deg(start_deg);
     let end = deg(end_deg);
     let inner = num("inner").unwrap_or(0.0);
     // ggsql assigns pos1→radius, pos2→theta (as the Vega-Lite writer does), so a
     // value on `y` (pos2) drives the slice angle and `x` (pos1) the radius.
-    plot = plot.projection(HProj::Polar(PolarProjection {
-        angle_channel: "y".into(),
-        radius_channel: "x".into(),
-        theta_start: start,
-        theta_end: end,
-        inner_radius_frac: inner,
-        ..base
-    }));
+    plot = plot.projection(HProj::Polar(
+        base.channels("y", "x")
+            .theta_range(start, end)
+            .inner_radius(inner),
+    ));
     // Suppress an axis whose position scale is a synthetic dummy (e.g. a pie's
     // radius), same as the Cartesian path.
     if has_real_axis(spec, "pos2") {

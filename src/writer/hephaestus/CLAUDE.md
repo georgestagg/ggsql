@@ -453,7 +453,7 @@ Two kinds, plus a third that doesn't exist yet:
   regression net.
 - **Snapshot PNG tests do not exist.** Visual correctness is
   verified by eyeballing, usually against the Vega-Lite render of the same
-  query. With a moving pinned hephaestus rev, assume a bump needs re-eyeballing:
+  query. Assume a hephaestus version bump needs re-eyeballing:
 
 ```sh
 cargo run -p ggsql-cli --features png -- exec "<query>" \
@@ -488,10 +488,11 @@ so one run inventories every gap at once. Implementation notes:
   runs the png steps with `cargo +stable`), which also means this writer
   is not viable for the R/CRAN target and is not the wasm default. Always check a
   change still builds under `cargo +1.86 build` *without* the feature.
-- **The dependency is a pinned git rev** on an unpublished `0.0.1` crate
-  (`src/Cargo.toml`). crates.io rejects git dependencies even when optional, so
-  this blocks publishing ggsql — the one known gap that is a release blocker
-  rather than polish.
+- **The dependency is the published `0.1.0` crate** (`src/Cargo.toml`), so
+  nothing here blocks publishing ggsql. hephaestus's own semver contract extends
+  to the `kurbo`, `peniko` and `wgpu` types in its public API, so a bump in any
+  of those is a breaking change to this writer even when hephaestus's own API
+  holds still.
 
 ## Known gaps
 
@@ -499,9 +500,6 @@ Deliberately not done, in rough order of how likely they are to bite:
 
 - **No snapshot PNG tests** (see [Testing](#testing)) — visual correctness is
   checked by eyeballing, with the harness for doing it at scale.
-- **The hephaestus dependency is a pinned git rev**, which blocks publishing
-  ggsql to crates.io (see [Operational constraints](#operational-constraints)).
-  The only release blocker here.
 - **No axis label thinning.** ggsql's resolved breaks are drawn as-is, so a
   narrow facet panel can crowd or overlap long labels — which is why
   `free_continuous_scale` narrows the *global* breaks to a panel rather than

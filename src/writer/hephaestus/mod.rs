@@ -33,7 +33,7 @@ use hephaestus::plot::{scale, AspectMode, Plot as HPlot, PlotComposition};
 use hephaestus::png::encode_png;
 use hephaestus::scales::chrome::AxisSide;
 use hephaestus::shape::ShapeRegistry;
-use hephaestus::Renderer;
+use hephaestus::{Renderer, SceneBuilder};
 
 use crate::naming;
 use crate::plot::layer::geom::GeomType;
