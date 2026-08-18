@@ -7,8 +7,9 @@
 use crate::naming;
 use crate::plot::aesthetic::AestheticContext;
 use crate::plot::scale::{
-    default_oob, gets_default_scale, infer_scale_target_type, infer_transform_from_input_range,
-    is_facet_aesthetic, transform::Transform, OOB_CENSOR, OOB_KEEP, OOB_SQUISH,
+    default_oob, gets_default_scale, infer_scale_target_type, infer_scale_type_from_input_range,
+    infer_transform_from_input_range, is_facet_aesthetic, transform::Transform, OOB_CENSOR,
+    OOB_KEEP, OOB_SQUISH,
 };
 use crate::plot::{
     AestheticValue, ArrayElement, ArrayElementType, ColumnInfo, Layer, ParameterValue, Plot, Scale,
@@ -398,6 +399,16 @@ pub fn resolve_scale_types_and_transforms(
         );
 
         if all_dtypes.is_empty() {
+            // No data trains this scale (e.g. a diagonal rule keeps its own
+            // position out of training). Lacking any other information, infer the
+            // type from an explicit input range if the user gave one.
+            if let Some(inferred) = scale
+                .input_range
+                .as_ref()
+                .and_then(|r| infer_scale_type_from_input_range(r))
+            {
+                scale.scale_type = Some(inferred);
+            }
             continue;
         }
 

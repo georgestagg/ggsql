@@ -19,7 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use super::data::{dataframe_to_values, dataframe_to_values_with_bins, ROW_INDEX_COLUMN};
-use super::encoding::RenderContext;
+use super::encoding::{offset_encoding, RenderContext};
 
 // =============================================================================
 // Basic Geom Utilities
@@ -55,17 +55,14 @@ pub fn geom_to_mark(geom: &Geom) -> Value {
     })
 }
 
-/// Map a `side` value to a positive/negative sign in the orientation-aware way
-/// shared by violin, boxplot, and (effectively) jitter rendering. Returns true
-/// if `side` falls on the positive offset half (right/top of a vertical layer,
-/// bottom/left of a horizontal layer). Caller is responsible for handling
-/// `"both"` separately.
-fn side_is_positive(side: &str, is_horizontal: bool) -> bool {
-    if is_horizontal {
-        matches!(side, "bottom" | "left")
-    } else {
-        matches!(side, "top" | "right")
-    }
+/// Whether a `side` value falls on the positive half of the band, in the
+/// positive-right / positive-up convention every ggsql offset uses. Shared by
+/// violin and boxplot rendering; the caller handles `"both"` separately.
+///
+/// One predicate serves both orientations because the axis flip lives in the
+/// offset channel's scale domain (see [`offset_encoding`]), not in the sign.
+fn side_is_positive(side: &str) -> bool {
+    matches!(side, "top" | "right")
 }
 
 /// Validate column references for a single layer against its specific DataFrame
@@ -1682,7 +1679,8 @@ impl GeomRenderer for ViolinRenderer {
     ) -> Result<()> {
         layer_spec["mark"] = json!({
             "type": "line",
-            "filled": true
+            "filled": true,
+            "clip": true
         });
         let offset_col = naming::aesthetic_column("offset");
 
@@ -1692,7 +1690,7 @@ impl GeomRenderer for ViolinRenderer {
         // It'll be implemented as an offset.
         let violin_offset = match layer.parameters.get("side") {
             Some(ParameterValue::String(side)) if side != "both" => {
-                if side_is_positive(side, is_horizontal) {
+                if side_is_positive(side) {
                     format!("[datum.{offset}]", offset = offset_col)
                 } else {
                     format!("[-datum.{offset}]", offset = offset_col)
@@ -1846,7 +1844,8 @@ impl GeomRenderer for ViolinRenderer {
             }
         }
 
-        // Offset channel based on orientation
+        // Offset channel based on orientation: the categorical axis is pos2 for
+        // a horizontal violin, pos1 otherwise.
         let offset_channel = if is_horizontal {
             pos2_offset
         } else {
@@ -1854,13 +1853,7 @@ impl GeomRenderer for ViolinRenderer {
         };
         encoding.insert(
             offset_channel.clone(),
-            json!({
-                "field": "__final_offset",
-                "type": "quantitative",
-                "scale": {
-                    "domain": [-0.5, 0.5]
-                }
-            }),
+            offset_encoding("__final_offset", is_horizontal),
         );
         encoding.insert(
             "order".to_string(),
@@ -2196,7 +2189,7 @@ impl BoxplotRenderer {
             })
             .unwrap_or("both");
         let half_side = side != "both";
-        let side_positive = half_side && side_is_positive(side, is_horizontal);
+        let side_positive = half_side && side_is_positive(side);
 
         // For `side != "both"`, halve the bar width and shift the bar to
         // one side of the band. We reuse the same mechanism dodge already
@@ -2258,11 +2251,8 @@ impl BoxplotRenderer {
             }));
             layer_spec["transform"] = json!(transforms);
 
-            layer_spec["encoding"][offset_channel] = json!({
-                "field": combined_offset_col,
-                "type": "quantitative",
-                "scale": {"domain": [-0.5, 0.5]},
-            });
+            layer_spec["encoding"][offset_channel] =
+                offset_encoding(&combined_offset_col, is_horizontal);
         };
 
         // Box (bar from y to y2, where y=q1 and y2=q3)
@@ -2355,11 +2345,8 @@ impl BoxplotRenderer {
                         "as": hinge_offset_col,
                     }));
                     layer_spec["transform"] = json!(transforms);
-                    layer_spec["encoding"][offset_channel] = json!({
-                        "field": hinge_offset_col,
-                        "type": "quantitative",
-                        "scale": {"domain": [-0.5, 0.5]},
-                    });
+                    layer_spec["encoding"][offset_channel] =
+                        offset_encoding(hinge_offset_col, is_horizontal);
                 };
                 apply_hinge_offset(&mut lower_hinge);
                 apply_hinge_offset(&mut upper_hinge);
@@ -4062,25 +4049,27 @@ mod tests {
             format!("[datum.{}]", offset_col)
         );
 
-        // Horizontal orientation: x=quantitative, y=nominal
-        // "bottom" and "left" - only positive offset
+        // Horizontal orientation: x=quantitative, y=nominal. The sign follows
+        // ggsql's positive-up convention in either orientation — the yOffset
+        // scale's reversed domain is what points the half-violin upward.
+        // "bottom" and "left" - only negative offset
         assert_eq!(
             get_violin_offset_expr(Some("bottom"), true),
-            format!("[datum.{}]", offset_col)
+            format!("[-datum.{}]", offset_col)
         );
         assert_eq!(
             get_violin_offset_expr(Some("left"), true),
-            format!("[datum.{}]", offset_col)
+            format!("[-datum.{}]", offset_col)
         );
 
-        // "top" and "right" - only negative offset
+        // "top" and "right" - only positive offset
         assert_eq!(
             get_violin_offset_expr(Some("top"), true),
-            format!("[-datum.{}]", offset_col)
+            format!("[datum.{}]", offset_col)
         );
         assert_eq!(
             get_violin_offset_expr(Some("right"), true),
-            format!("[-datum.{}]", offset_col)
+            format!("[datum.{}]", offset_col)
         );
     }
 
@@ -4253,28 +4242,11 @@ mod tests {
         let (box_h, _, _, _, _) = render_marks(None, true);
         assert_eq!(extract_side_shift(&box_h), 0.0);
 
-        // Horizontal "bottom" / "left" → positive (per violin convention,
-        // mapped to positive yOffset which renders below the centerline).
+        // Horizontal "bottom" / "left" → negative, as in the vertical case: the
+        // shift is expressed in ggsql's positive-up convention whatever the
+        // orientation, and the yOffset scale's reversed domain is what turns it
+        // into a downward one.
         for s in ["bottom", "left"] {
-            let (b, m, _, _, _) = render_marks(Some(s), true);
-            assert!(
-                (extract_side_shift(&b) - shift_mag).abs() < 1e-9,
-                "side={s}: expected +{shift_mag}"
-            );
-            assert!(
-                (extract_side_shift(&m) - shift_mag).abs() < 1e-9,
-                "side={s} median"
-            );
-            // Horizontal uses yOffset, not xOffset.
-            assert_eq!(
-                b["encoding"]["yOffset"]["field"],
-                json!("__ggsql_box_side_offset__"),
-                "side={s}"
-            );
-        }
-
-        // Horizontal "top" / "right" → negative.
-        for s in ["top", "right"] {
             let (b, m, _, _, _) = render_marks(Some(s), true);
             assert!(
                 (extract_side_shift(&b) + shift_mag).abs() < 1e-9,
@@ -4282,6 +4254,30 @@ mod tests {
             );
             assert!(
                 (extract_side_shift(&m) + shift_mag).abs() < 1e-9,
+                "side={s} median"
+            );
+            // Horizontal uses yOffset, not xOffset, and reverses its domain.
+            assert_eq!(
+                b["encoding"]["yOffset"]["field"],
+                json!("__ggsql_box_side_offset__"),
+                "side={s}"
+            );
+            assert_eq!(
+                b["encoding"]["yOffset"]["scale"]["domain"],
+                json!([0.5, -0.5]),
+                "side={s}"
+            );
+        }
+
+        // Horizontal "top" / "right" → positive.
+        for s in ["top", "right"] {
+            let (b, m, _, _, _) = render_marks(Some(s), true);
+            assert!(
+                (extract_side_shift(&b) - shift_mag).abs() < 1e-9,
+                "side={s}: expected +{shift_mag}"
+            );
+            assert!(
+                (extract_side_shift(&m) - shift_mag).abs() < 1e-9,
                 "side={s} median"
             );
         }

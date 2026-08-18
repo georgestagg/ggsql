@@ -15,8 +15,8 @@
 //! - `normal`: normal/Gaussian distribution with ~95% of points within the width
 
 use super::{
-    compute_dodge_offsets, compute_group_indices, is_continuous_scale, non_facet_partition_cols,
-    Layer, PositionTrait, PositionType,
+    compute_dodge_offsets, compute_group_indices, groups_share_a_position, is_continuous_scale,
+    non_facet_partition_cols, Layer, PositionTrait, PositionType,
 };
 use crate::array_util::{as_f64, cast_array, new_f64_array_non_null};
 use crate::plot::layer::geom::types::SIDE_VALUES;
@@ -560,9 +560,17 @@ fn apply_jitter(df: DataFrame, layer: &Layer, spec: &Plot) -> Result<DataFrame> 
         None
     };
 
-    // Extract group info for dodge behavior
+    // Extract group info for dodge behavior. Groups that never meet on a
+    // position have nothing to be dodged apart, and jittering them within
+    // `1/n` of the band would only narrow the spread — see
+    // `groups_share_a_position`.
     let (n_groups, group_indices) = match &group_info {
-        Some(info) if info.n_groups > 1 => (info.n_groups, Some(&info.indices)),
+        Some(info)
+            if info.n_groups > 1
+                && groups_share_a_position(&df, &info.indices, jitter_pos1, jitter_pos2, spec) =>
+        {
+            (info.n_groups, Some(&info.indices))
+        }
         _ => (1, None),
     };
 

@@ -132,6 +132,15 @@ PreparedData::Composite {
 - ✅ Return multiple layers if needed (composite geoms)
 - ✅ Modify encodings that reference transformed fields
 
+The source filter is not the only transform that arrives before `finalize`. An
+encoding may bring its own: an identity-scaled `size` / `linewidth` / `fontsize` /
+`shape` / `linetype` column is converted per row by a `calculate` (encoding.rs's
+`identity_conversion`, since `SCALE IDENTITY` means the values are per-row literals
+and Vega-Lite has no per-datum arithmetic in an encoding), and the encoding points at
+the derived `<col>_visual` field. A renderer that *replaces* the transform array
+therefore drops the conversion and leaves its encoding pointing at a field that no
+longer exists — the mark silently falls back to the channel default.
+
 **DON'T**:
 - ❌ Set `layer_spec["data"]` - layers use the unified top-level dataset
 - ❌ Replace the transforms array without preserving existing ones
@@ -317,6 +326,33 @@ fn modify_spec(...) -> Result<()> {
     Ok(())
 }
 ```
+
+Note the `clip: true`: `geom_to_mark` puts it on every mark, and *replacing* the
+mark object drops it. A layer that can draw outside its scale domain — a violin
+at `width => 4`, a bar with squished limits — then spills into the chrome, where
+the raster writer (and ggplot2) would have clipped it.
+
+### Pattern 4: Band-Fraction Offsets (Dodge, Jitter, `side`)
+
+Every band-fraction displacement — dodge, jitter, a violin's density half-width,
+a half-boxplot's side shift — is encoded as a quantitative `xOffset`/`yOffset`
+whose scale domain spans one band. Build it with `encoding::offset_encoding`
+rather than by hand:
+
+```rust
+layer_spec["encoding"][offset_channel] =
+    encoding::offset_encoding(&combined_offset_col, is_horizontal);
+```
+
+The domain is `[-0.5, 0.5]` on the primary channel but `[0.5, -0.5]` on the
+secondary one, because a ggsql offset is positive-up while a Vega-Lite `yOffset`
+is positive-down; the reversed domain negates it without touching the data.
+A renderer that writes its own `{"domain": [-0.5, 0.5]}` loses that flip and
+displaces its marks the opposite way to every other layer on the same axis.
+
+For the same reason `side_is_positive` is orientation-independent: `'top'` and
+`'right'` are the positive half in either orientation, and the axis flip lives in
+the domain, not in the sign.
 
 ## Debugging Tips
 

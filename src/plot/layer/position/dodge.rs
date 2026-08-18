@@ -7,8 +7,8 @@
 //! - If both are discrete → 2D grid dodge (both offsets, arranged in a grid)
 
 use super::{
-    compute_dodge_offsets, is_continuous_scale, non_facet_partition_cols, Layer, PositionTrait,
-    PositionType,
+    compute_dodge_offsets, groups_share_a_position, is_continuous_scale, non_facet_partition_cols,
+    Layer, PositionTrait, PositionType,
 };
 use crate::array_util::{new_f64_array_non_null, value_to_string};
 use crate::plot::types::{DefaultParamValue, ParamConstraint, ParamDefinition, ParameterValue};
@@ -174,6 +174,12 @@ fn apply_dodge_with_width(
         return Ok((df, None));
     }
 
+    // Several groups, but nothing to separate unless two of them share a
+    // position — see `groups_share_a_position`.
+    if !groups_share_a_position(&df, &indices, dodge_pos1, dodge_pos2, spec) {
+        return Ok((df, None));
+    }
+
     // Get the default bar width from layer parameters (or use 0.9 as default)
     let bar_width = layer
         .parameters
@@ -223,10 +229,12 @@ mod tests {
     use crate::plot::layer::Geom;
     use crate::plot::{AestheticValue, Mappings, Scale, ScaleType};
 
+    /// Two groups (X, Y) meeting at every position, on either axis: dodge has
+    /// something to separate whichever axis is the discrete one.
     fn make_test_df() -> DataFrame {
         df! {
             "__ggsql_aes_pos1__" => vec!["A", "A", "B", "B"],
-            "__ggsql_aes_pos2__" => vec![10.0, 20.0, 15.0, 25.0],
+            "__ggsql_aes_pos2__" => vec![10.0, 10.0, 20.0, 20.0],
             "__ggsql_aes_pos2end__" => vec![0.0, 0.0, 0.0, 0.0],
             "__ggsql_aes_fill__" => vec!["X", "Y", "X", "Y"],
         }
@@ -461,9 +469,10 @@ mod tests {
         // Test with 4 groups to verify 2x2 arrangement within 2x2 grid
         let dodge = Dodge;
 
+        // All four groups in one cell, which is what a 2D grid arrangement is for
         let df = df! {
             "__ggsql_aes_pos1__" => vec!["A", "A", "A", "A"],
-            "__ggsql_aes_pos2__" => vec![10.0, 20.0, 15.0, 25.0],
+            "__ggsql_aes_pos2__" => vec![10.0, 10.0, 10.0, 10.0],
             "__ggsql_aes_fill__" => vec!["G1", "G2", "G3", "G4"],
         }
         .unwrap();
@@ -567,6 +576,56 @@ mod tests {
 
         // No adjusted width when no dodging occurs
         assert!(width.is_none());
+    }
+
+    #[test]
+    fn test_dodge_skipped_when_groups_have_their_own_position() {
+        // `fill` mapped to the same column as the categorical axis: three groups,
+        // but each one alone on its position, so there is nothing to dodge apart.
+        let dodge = Dodge;
+
+        let df = df! {
+            "__ggsql_aes_pos1__" => vec!["A", "A", "B", "B", "C", "C"],
+            "__ggsql_aes_pos2__" => vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "__ggsql_aes_offset__" => vec![0.4, 0.3, 0.4, 0.3, 0.4, 0.3],
+            "__ggsql_aes_fill__" => vec!["A", "A", "B", "B", "C", "C"],
+        }
+        .unwrap();
+
+        let mut layer = Layer::new(Geom::violin());
+        layer.partition_by = vec!["__ggsql_aes_fill__".to_string()];
+
+        let mut spec = Plot::new();
+        spec.scales.push(make_discrete_scale("pos1"));
+        spec.scales.push(make_continuous_scale("pos2"));
+
+        let (result, width) = dodge.apply_adjustment(df, &layer, &spec).unwrap();
+
+        assert!(
+            result.column("__ggsql_aes_pos1offset__").is_err(),
+            "no group shares a position, so no dodge offset should be created"
+        );
+        assert!(width.is_none(), "the layer keeps its own width");
+
+        // The violin's half-widths are left alone too — narrowing them by the
+        // group count is part of the same adjustment.
+        let offsets = as_f64(result.column("__ggsql_aes_offset__").unwrap()).unwrap();
+        assert!((offsets.value(0) - 0.4).abs() < 1e-9, "offsets unscaled");
+
+        // One group joining another on its position brings dodging back.
+        let df = df! {
+            "__ggsql_aes_pos1__" => vec!["A", "A", "B", "B", "C", "C"],
+            "__ggsql_aes_pos2__" => vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "__ggsql_aes_offset__" => vec![0.4, 0.3, 0.4, 0.3, 0.4, 0.3],
+            "__ggsql_aes_fill__" => vec!["A", "A", "B", "B", "C", "B"],
+        }
+        .unwrap();
+        let (result, width) = dodge.apply_adjustment(df, &layer, &spec).unwrap();
+        assert!(
+            result.column("__ggsql_aes_pos1offset__").is_ok(),
+            "groups B and C share position C, so the layer dodges"
+        );
+        assert!(width.is_some());
     }
 
     #[test]

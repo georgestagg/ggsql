@@ -65,7 +65,12 @@ The pipeline that takes a parsed `Plot` plus a `Reader` and produces a fully-res
 
 ### `writer/`
 
-`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes). Only Vega-Lite is implemented today; `ggplot2`, `plotters` are reserved feature flags. Implementation deep-dive: [`writer/vegalite/CLAUDE.md`](writer/vegalite/CLAUDE.md).
+`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes, and `from_options` for configuration a frontend collects as key–value pairs — `options.rs`'s `WriterOptions`, parsed from the CLI's `--writer-option`). Two implementations:
+
+- **Vega-Lite** (`vegalite` feature, default) — emits Vega-Lite JSON. Deep-dive: [`writer/vegalite/CLAUDE.md`](writer/vegalite/CLAUDE.md).
+- **PNG** (`png` feature, non-default) — `PngWriter` renders PNG bytes via a GPU (wgpu/vello) backend. The module implementing it is `writer/hephaestus/`, after the renderer it wraps; that name is internal, and the module is private so only `PngWriter` is public. Deep-dive (architecture + known gaps): [`writer/hephaestus/CLAUDE.md`](writer/hephaestus/CLAUDE.md). Excluded from the MSRV 1.86 build (hephaestus needs 1.88) and needs a GPU adapter at render time.
+
+`ggplot2` and `plotters` are reserved feature flags with no implementation.
 
 ### `plot/`
 
@@ -98,6 +103,7 @@ Defined in `Cargo.toml`:
 | `parquet` | ✓ | Parquet support in readers/data |
 | `spatial` | ✓ | Spatial/geometry support (geozero for WKT↔GeoJSON) |
 | `vegalite` | ✓ | Vega-Lite writer |
+| `png` | — | PNG raster writer (GPU; excluded from the MSRV build) |
 | `builtin-data` | ✓ | Bundled penguins/airquality datasets |
 | `all-readers` | — | `duckdb` + `sqlite` + `odbc` |
 
