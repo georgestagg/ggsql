@@ -481,6 +481,11 @@ so one run inventories every gap at once. Implementation notes:
 - **A GPU adapter is required at render time.** Vello/wgpu is hephaestus's only
   working backend. CI installs Mesa's lavapipe; headless containers need
   something equivalent.
+- **fontconfig is a build-time dependency on Linux.** Text layout goes through
+  parley/fontique, which links the system fontconfig to enumerate fonts, so
+  `libfontconfig1-dev` (or the distro equivalent supplying `fontconfig.pc`) must
+  be installed before building with `--features png`. macOS uses CoreText and
+  needs nothing extra.
 - **Raster only.** No SVG/PDF — hephaestus's other backends are declared
   placeholders.
 - **MSRV split.** hephaestus needs rustc ≥1.88; ggsql's MSRV is CRAN-locked at

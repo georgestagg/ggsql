@@ -37,12 +37,15 @@ jobs:
         # which invokes `protoc` at build time. Required for the ADBC test path.
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Install software Vulkan (lavapipe)
+      - name: Install png writer system libraries
         # The png writer renders via wgpu/Vello, which needs a Vulkan
         # adapter. ubuntu-latest has no GPU, so install Mesa's lavapipe software
         # device. If no adapter is found anyway, the writer test skips its render
         # assertion gracefully rather than failing.
-        run: sudo apt-get install -y mesa-vulkan-drivers
+        # Text layout goes through parley/fontique, which links the system
+        # fontconfig on Linux to enumerate fonts, so its development files
+        # (fontconfig.pc plus headers) must be present at build time.
+        run: sudo apt-get install -y mesa-vulkan-drivers libfontconfig1-dev
 
       - name: Install Rust
         # 1.86 is the MSRV (declared as `rust-version` in /Cargo.toml, see
