@@ -60,41 +60,28 @@ jobs:
         if: runner.os != 'Linux'
         run: npm test
 
-  # Packaging invariants the release workflow depends on. That workflow only
-  # runs on a tag, so without this a broken .vscodeignore or manifest would not
-  # surface until release time. No kernel is staged here: this is the
-  # kernel-less universal build, which must stay kernel-less.
-  test-packaging:
-    runs-on: ubuntu-latest
-    name: Package (universal VSIX)
-    defaults:
-      run:
-        working-directory: ggsql-vscode
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: ggsql-vscode/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
+      # Packaging invariants the release workflow depends on. That workflow only
+      # runs on a tag, so on its own a broken .vscodeignore would not surface
+      # until release time.
+      #
+      # This runs *after* the tests, deliberately: by now .vscode-test/ holds a
+      # downloaded VS Code, which is the state that catches an ignore rule
+      # letting a test cache into the package. A fresh checkout cannot.
       - name: Package VSIX
+        if: runner.os == 'Linux'
         run: npx --yes @vscode/vsce package --out ggsql-universal.vsix
 
       - name: Check the VSIX contents
+        if: runner.os == 'Linux'
         run: |
           unzip -l ggsql-universal.vsix
-          if unzip -l ggsql-universal.vsix | grep -q 'extension/bundled/'; then
-            echo "::error::the universal VSIX must not carry a kernel"
-            exit 1
-          fi
+          # No kernel was staged, so this is the universal build.
+          for unwanted in 'extension/bundled/' '\.vscode-test' '\.positron-test' '\.d\.ts$'; do
+            if unzip -l ggsql-universal.vsix | grep -q "$unwanted"; then
+              echo "::error::$unwanted must not be in the VSIX"
+              exit 1
+            fi
+          done
           for required in extension/out/extension.js extension/syntaxes/ggsql.tmLanguage.json extension/resources/ggsql-icon.svg; do
             if ! unzip -l ggsql-universal.vsix | grep -q "$required"; then
               echo "::error::$required is missing from the VSIX"
