@@ -890,11 +890,10 @@ DRAW point
                 (identifier
                   (bare_identifier))))
             name: (aesthetic_name)))))
-    (from_clause
-      (table_ref
-        table: (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      source: (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -1139,11 +1138,10 @@ DRAW bar MAPPING category AS x, total AS y
 (query
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        table: (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      source: (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)
@@ -1559,6 +1557,7 @@ DRAW point MAPPING rn AS x
                     (identifier
                       (bare_identifier))))
                 name: (aesthetic_name)))))))))
+
 ================================================================================
 Window function with frame clause
 ================================================================================
@@ -1665,11 +1664,10 @@ DRAW point MAPPING x AS x
                         (bare_identifier))))))))))))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        table: (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      source: (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)
@@ -3112,11 +3110,10 @@ VISUALISE FROM data DRAW point
             (number))))))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -3136,11 +3133,10 @@ VISUALISE FROM data DRAW point
       (insert_statement)))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -3160,11 +3156,10 @@ VISUALISE FROM data DRAW point
       (update_statement)))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -3184,11 +3179,10 @@ VISUALISE FROM data DRAW point
       (delete_statement)))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))
@@ -3211,11 +3205,10 @@ VISUALISE FROM data DRAW point
       (insert_statement)))
   (visualise_statement
     (visualise_keyword)
-    (from_clause
-      (table_ref
-        (qualified_name
-          (identifier
-            (bare_identifier)))))
+    (visualise_from
+      (qualified_name
+        (identifier
+          (bare_identifier))))
     (viz_clause
       (draw_clause
         (geom_type)))))

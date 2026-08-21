@@ -647,13 +647,19 @@ module.exports = grammar({
 
     // VISUALISE/VISUALIZE [global_mapping] [FROM source] with clauses
     // Global mapping sets default aesthetics for all layers
-    // FROM source can be an identifier (table/CTE) or string (file path)
     visualise_statement: $ => prec.dynamic(1, seq(
       $.visualise_keyword,
       optional($.global_mapping),
-      optional($.from_clause),
+      optional($.visualise_from),
       repeat($.viz_clause)
     )),
+
+    // The VISUALISE-level source: exactly one table, CTE, or file path.
+    // Unlike a SQL FROM clause this admits no joins and no comma list.
+    visualise_from: $ => seq(
+      token(prec(1, caseInsensitive('FROM'))),
+      field('source', $.source_ref)
+    ),
 
     // VISUALISE keyword as explicit high-precedence token
     visualise_keyword: $ => token(prec(10, choice(

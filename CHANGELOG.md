@@ -44,6 +44,12 @@
   the png writer draws them.
 
 ### Changed
+- A `FROM` on the `VISUALISE` clause now takes exactly one bare source. It
+  previously reused the SQL `FROM` grammar while only ever reading the first
+  source, so `VISUALISE FROM a, b` silently plotted `a` alone and
+  `VISUALISE FROM a JOIN b ON …` silently dropped the join. Both are now parse
+  errors, as is an alias (`VISUALISE FROM tbl AS t`), which parsed before but
+  had no effect. Join two tables in a `SELECT` and visualise its result.
 - Dodging now only takes effect where groups actually meet on a position. A
   layer whose grouping gives every group a position of its own — `colour` mapped
   to the same column as the discrete axis, say — is drawn at its full width
