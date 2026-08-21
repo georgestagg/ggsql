@@ -158,6 +158,7 @@ pub fn reader_from_uri(uri: &str) -> Result<Box<dyn Reader + Send>> {
                 primary,
                 cache,
                 primary_uri,
+                cache_scheme,
                 config,
             )));
         }

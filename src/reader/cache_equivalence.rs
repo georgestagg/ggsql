@@ -157,7 +157,12 @@ fn mode1_builtin_equivalence_matches_plain_duckdb() {
         let plain = DuckDBReader::new_in_memory().unwrap();
         let primary = ReadOnlyReader::new(Box::new(SqliteReader::new().unwrap()));
         let cache = DuckDBReader::new_in_memory().unwrap();
-        let cached = CachingReader::new(Box::new(primary), Box::new(cache), "test://primary");
+        let cached = CachingReader::new(
+            Box::new(primary),
+            Box::new(cache),
+            "test://primary",
+            "duckdb",
+        );
         assert_equivalent(&plain, &cached, case.query);
     }
 }
@@ -174,7 +179,12 @@ fn mode1_read_only_primary_is_sufficient() {
         seed(&sqlite);
         let primary = ReadOnlyReader::new(Box::new(sqlite));
         let cache = DuckDBReader::new_in_memory().unwrap();
-        let cached = CachingReader::new(Box::new(primary), Box::new(cache), "test://primary");
+        let cached = CachingReader::new(
+            Box::new(primary),
+            Box::new(cache),
+            "test://primary",
+            "duckdb",
+        );
         let r = cached.execute(case.query);
         assert!(
             r.is_ok(),
@@ -193,7 +203,7 @@ fn cross_call_memoization_avoids_second_primary_read() {
     seed(&sqlite);
     let (primary, log) = SpyReader::wrap(Box::new(sqlite));
     let cache = DuckDBReader::new_in_memory().unwrap();
-    let cached = CachingReader::new(primary, Box::new(cache), "test://primary");
+    let cached = CachingReader::new(primary, Box::new(cache), "test://primary", "duckdb");
 
     let query = "SELECT bill_len FROM cache_eq_tbl VISUALISE bill_len AS x DRAW histogram";
     cached.execute(query).unwrap();
@@ -234,7 +244,7 @@ fn factory_builds_caching_readers() {
 fn map_projection_runs_on_cache_not_primary() {
     let (primary, log) = SpyReader::wrap(Box::new(DuckDBReader::new_in_memory().unwrap()));
     let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-    let reader = CachingReader::new(primary, cache, "test://primary");
+    let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
     let spec = reader.execute("VISUALISE FROM ggsql:world DRAW spatial PROJECT TO orthographic");
     assert!(
@@ -343,7 +353,12 @@ mod adbc_mode {
             calls: calls.clone(),
         };
         let cache = DuckDBReader::new_in_memory().unwrap();
-        let cached = CachingReader::new(Box::new(primary), Box::new(cache), "test://primary");
+        let cached = CachingReader::new(
+            Box::new(primary),
+            Box::new(cache),
+            "test://primary",
+            "duckdb",
+        );
 
         // Base reads go through the source surface; the cache memoizes them.
         let miss = cached.execute_sql(sql).unwrap();

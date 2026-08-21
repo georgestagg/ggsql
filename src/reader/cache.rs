@@ -136,6 +136,8 @@ pub struct CachingReader {
     cache: Box<dyn Reader + Send>,
     /// Connection URI of the primary.
     primary_uri: String,
+    /// Scheme of the cache backend as spelled in the connection URI.
+    cache_scheme: String,
     /// TTL + byte-budget configuration for the result memo.
     config: CacheConfig,
     /// Whether the metadata table has been created in the cache backend.
@@ -147,15 +149,22 @@ pub struct CachingReader {
 
 impl CachingReader {
     /// Construct a `CachingReader` from a primary reader, an in-memory cache
-    /// backend, and the primary's connection URI, using environment-derived
-    /// cache configuration. The cache is owned by the `CachingReader` and
-    /// dropped with it.
+    /// backend, the primary's connection URI and the cache backend's scheme,
+    /// using environment-derived cache configuration. The cache is owned by the
+    /// `CachingReader` and dropped with it.
     pub fn new(
         primary: Box<dyn Reader + Send>,
         cache: Box<dyn Reader + Send>,
         primary_uri: impl Into<String>,
+        cache_scheme: impl Into<String>,
     ) -> Self {
-        Self::with_config(primary, cache, primary_uri, CacheConfig::from_env())
+        Self::with_config(
+            primary,
+            cache,
+            primary_uri,
+            cache_scheme,
+            CacheConfig::from_env(),
+        )
     }
 
     /// Construct a `CachingReader` with explicit cache configuration.
@@ -163,12 +172,14 @@ impl CachingReader {
         primary: Box<dyn Reader + Send>,
         cache: Box<dyn Reader + Send>,
         primary_uri: impl Into<String>,
+        cache_scheme: impl Into<String>,
         config: CacheConfig,
     ) -> Self {
         Self {
             primary,
             cache,
             primary_uri: primary_uri.into(),
+            cache_scheme: cache_scheme.into(),
             config,
             meta_ready: Cell::new(false),
             resident: RefCell::new(HashSet::new()),
@@ -358,6 +369,19 @@ impl CachingReader {
         }
         Ok(())
     }
+
+    /// Prefix `context` onto a backend error, dropping the driver's own
+    /// "Failed to {execute,prepare} SQL" preamble so the attribution reads first.
+    fn annotate_error(&self, context: &str, err: crate::GgsqlError) -> crate::GgsqlError {
+        let crate::GgsqlError::ReaderError(message) = &err else {
+            return err;
+        };
+        let inner = message
+            .strip_prefix("Failed to execute SQL: ")
+            .or_else(|| message.strip_prefix("Failed to prepare SQL: "))
+            .unwrap_or(message);
+        crate::GgsqlError::ReaderError(format!("{context}: {inner}"))
+    }
 }
 
 impl Reader for CachingReader {
@@ -415,7 +439,9 @@ impl Reader for CachingReader {
 
     /// Compute surface: derived/dialect-generated SQL runs on the cache.
     fn execute_sql_cached(&self, sql: &str) -> Result<DataFrame> {
-        self.cache.execute_sql(sql)
+        self.cache.execute_sql(sql).map_err(|e| {
+            self.annotate_error(&format!("on the `{}` cache backend", self.cache_scheme), e)
+        })
     }
 
     fn register(&self, name: &str, df: DataFrame, replace: bool) -> Result<()> {
@@ -491,7 +517,7 @@ mod behavior_tests {
     fn test_register_writes_to_cache_and_query_routes_there() {
         let (primary, log) = SpyReader::wrap(Box::new(DuckDBReader::new_in_memory().unwrap()));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         reader
             .register("t", df! { "x" => vec![1_i64, 2, 3] }.unwrap(), true)
@@ -514,7 +540,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let q = "SELECT y FROM base ORDER BY y";
         let d1 = reader.execute_sql(q).unwrap();
@@ -545,7 +571,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         reader
             .execute("SELECT x, y FROM sales VISUALISE x, y DRAW point")
@@ -605,6 +631,7 @@ mod behavior_tests {
             Box::new(ReadOnlyReader::new(Box::new(primary))),
             Box::new(DuckDBReader::new_in_memory().unwrap()),
             "test://primary",
+            "duckdb",
         );
         assert!(
             cached.execute(query).is_ok(),
@@ -647,7 +674,7 @@ mod behavior_tests {
         // GREATEST), not SQLite's (CASE fallback).
         let primary = Box::new(SqliteReader::new().unwrap());
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
         assert_eq!(reader.dialect().sql_greatest(&["a", "b"]), "GREATEST(a, b)");
     }
 
@@ -668,7 +695,7 @@ mod behavior_tests {
             )
             .unwrap();
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(Box::new(primary), cache, "test://primary");
+        let reader = CachingReader::new(Box::new(primary), cache, "test://primary", "duckdb");
 
         let spec = reader.execute("VISUALISE x DRAW histogram MAPPING val AS x FROM tbl");
         assert!(
@@ -688,7 +715,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t(a) AS (SELECT v FROM base) SELECT a FROM t VISUALISE a AS x DRAW point",
@@ -710,7 +737,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH a(p) AS (SELECT v FROM base), b(q) AS (SELECT p FROM a) \
@@ -737,7 +764,7 @@ mod behavior_tests {
         .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t AS (SELECT 1 AS k, 100 AS v) \
@@ -760,7 +787,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t AS (SELECT 1 AS k, 100 AS v) \
@@ -784,7 +811,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t AS (SELECT 1 AS k) \
@@ -811,7 +838,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t AS (SELECT 1 AS k) \
@@ -832,7 +859,7 @@ mod behavior_tests {
         // (mixed) must run the CREATE before staging reads the table.
         let primary = Box::new(DuckDBReader::new_in_memory().unwrap());
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "CREATE TABLE sales AS SELECT * FROM (VALUES (1, 10), (2, 20)) t(k, w); \
@@ -853,7 +880,7 @@ mod behavior_tests {
         // order before staging, and the staged data must reflect them.
         let primary = Box::new(DuckDBReader::new_in_memory().unwrap());
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let prepared = crate::execute::prepare_data_with_reader(
             "CREATE TABLE t(k INTEGER, w INTEGER); \
@@ -888,7 +915,7 @@ mod behavior_tests {
             .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH t AS (SELECT 1 AS k) \
@@ -916,7 +943,7 @@ mod behavior_tests {
         .unwrap();
         let primary = Box::new(ReadOnlyReader::new(Box::new(base)));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(
             "WITH a AS (SELECT 1 AS k, 5 AS p), \
@@ -938,6 +965,7 @@ mod behavior_tests {
             Box::new(DuckDBReader::new_in_memory().unwrap()),
             Box::new(DuckDBReader::new_in_memory().unwrap()),
             "test://primary",
+            "duckdb",
         );
 
         let meta = reader
@@ -951,6 +979,31 @@ mod behavior_tests {
     }
 
     #[test]
+    fn test_compute_surface_errors_name_the_cache_backend() {
+        // Derived SQL runs on the cache, so its failures must say so — a
+        // DuckDB error is otherwise indistinguishable from one raised by the
+        // user's own connection.
+        let reader = CachingReader::new(
+            Box::new(DuckDBReader::new_in_memory().unwrap()),
+            Box::new(DuckDBReader::new_in_memory().unwrap()),
+            "test://primary",
+            "duckdb",
+        );
+
+        let err = reader
+            .execute_sql_cached("SELECT * FROM __ggsql_definitely_missing__")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("`duckdb` cache backend"), "got: {err}");
+        // The driver's own text survives.
+        assert!(err.contains("__ggsql_definitely_missing__"), "got: {err}");
+        // The driver preamble is stripped, not duplicated.
+        assert!(!err.contains("Failed to prepare SQL"), "got: {err}");
+        assert!(!err.contains("Failed to execute SQL"), "got: {err}");
+    }
+
+    #[test]
     fn test_meta_table_records_and_serves_memo() {
         // A memoized read is recorded in the metadata table and served back from
         // the cache on repeat, without touching the primary again.
@@ -960,7 +1013,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let q = "SELECT y FROM base ORDER BY y";
         reader.execute_sql(q).unwrap();
@@ -1000,7 +1053,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(SqliteReader::new().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "sqlite");
 
         let q = "SELECT y FROM base ORDER BY y";
         let d1 = reader.execute_sql(q).unwrap();
@@ -1034,7 +1087,7 @@ mod behavior_tests {
             )
             .unwrap();
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(Box::new(primary), cache, "test://primary");
+        let reader = CachingReader::new(Box::new(primary), cache, "test://primary", "duckdb");
 
         // `orders` lives only in the cache.
         reader
@@ -1053,6 +1106,7 @@ mod behavior_tests {
             Box::new(DuckDBReader::new_in_memory().unwrap()),
             Box::new(DuckDBReader::new_in_memory().unwrap()),
             "test://primary",
+            "duckdb",
             CacheConfig::default(),
         );
         assert!(reader.cache_config().enabled);
@@ -1067,7 +1121,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let q = "SELECT y FROM base ORDER BY y";
         reader.execute_sql(q).unwrap();
@@ -1094,6 +1148,7 @@ mod behavior_tests {
             primary,
             cache,
             "test://primary",
+            "duckdb",
             CacheConfig {
                 enabled: true,
                 ttl_secs: 0,
@@ -1126,6 +1181,7 @@ mod behavior_tests {
             primary,
             cache,
             "test://primary",
+            "duckdb",
             CacheConfig {
                 enabled: false,
                 ttl_secs: 300,
@@ -1169,6 +1225,7 @@ mod behavior_tests {
             primary,
             cache,
             "test://primary",
+            "duckdb",
             CacheConfig {
                 enabled: true,
                 ttl_secs: 300,
@@ -1211,7 +1268,7 @@ mod behavior_tests {
             .unwrap();
         let (primary, log) = SpyReader::wrap(Box::new(inner));
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let q = "SELECT y FROM base ORDER BY y";
         reader.execute_sql(q).unwrap();
@@ -1275,7 +1332,7 @@ mod behavior_tests {
             .register("t", df! { "v" => vec![1_i64, 2, 3] }.unwrap(), true)
             .unwrap();
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(Box::new(primary), cache, "test://primary");
+        let reader = CachingReader::new(Box::new(primary), cache, "test://primary", "duckdb");
 
         let df = reader.execute_sql("SELECT v FROM t").unwrap();
         assert_eq!(df.height(), 3);
@@ -1291,7 +1348,7 @@ mod behavior_tests {
         // cache.
         let primary = Box::new(DuckDBReader::new_in_memory().unwrap());
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
         reader
             .register(
                 "only_in_cache",
@@ -1320,7 +1377,7 @@ mod behavior_tests {
 
         let primary = Box::new(SqliteReader::new().unwrap());
         let cache = Box::new(DuckDBReader::new_in_memory().unwrap());
-        let reader = CachingReader::new(primary, cache, "test://primary");
+        let reader = CachingReader::new(primary, cache, "test://primary", "duckdb");
 
         let spec = reader.execute(&format!(
             "VISUALISE x DRAW histogram MAPPING val AS x FROM '{}'",
