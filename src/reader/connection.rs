@@ -1,29 +1,33 @@
 //! Connection string handling for data sources.
 //!
 //! Maps URI-style connection strings (`duckdb://…`, `sqlite://…`, `odbc://…`) and
-//! the composite caching form (`<primary>+<cache>://…`) to readers.
+//! the composite caching form (`<cache>+<primary>://…`) to readers.
 
 use crate::reader::Reader;
 use crate::{GgsqlError, Result};
 
-/// Split a composite cache URI `<primary>+<cache>://<rest>` into the primary
+/// Split a composite cache URI `<cache>+<primary>://<rest>` into the primary
 /// connection URI and the cache backend scheme.
 ///
-/// Returns `None` when there is no `+<cache>` before `://` (a plain URI).
+/// Naming the cache first keeps the primary URI, and any query parameters it
+/// carries, contiguous: `duckdb+odbc://DSN=foo` wraps `odbc://DSN=foo`.
+///
+/// Returns `None` when there is no `<cache>+` before `://` (a plain URI).
 ///
 /// # Example
 /// ```
 /// use ggsql::reader::connection::split_cache_uri;
 /// assert_eq!(
-///     split_cache_uri("odbc+duckdb://DSN=foo"),
+///     split_cache_uri("duckdb+odbc://DSN=foo"),
 ///     Some(("odbc://DSN=foo".to_string(), "duckdb".to_string()))
 /// );
 /// assert_eq!(split_cache_uri("duckdb://memory"), None);
 /// ```
 pub fn split_cache_uri(uri: &str) -> Option<(String, String)> {
     let (scheme, rest) = uri.split_once("://")?;
-    let (primary, cache) = scheme.split_once('+')?;
-    if primary.is_empty() || cache.is_empty() || cache.contains('+') {
+    let (cache, primary) = scheme.split_once('+')?;
+    // `split_once` leaves any further `+` in the second half.
+    if cache.is_empty() || primary.is_empty() || primary.contains('+') {
         return None;
     }
     Some((format!("{}://{}", primary, rest), cache.to_string()))
@@ -137,7 +141,7 @@ pub fn build_reader(uri: &str) -> Result<Box<dyn Reader + Send>> {
 }
 
 /// Construct a reader from a connection URI, wrapping it in a [`CachingReader`]
-/// when the URI uses the composite `<primary>+<cache>://` form.
+/// when the URI uses the composite `<cache>+<primary>://` form.
 ///
 /// [`CachingReader`]: crate::reader::CachingReader
 pub fn reader_from_uri(uri: &str) -> Result<Box<dyn Reader + Send>> {
@@ -227,9 +231,9 @@ mod tests {
     }
 
     #[test]
-    fn test_split_cache_uri_odbc_duckdb() {
+    fn test_split_cache_uri_duckdb_cache_over_odbc() {
         assert_eq!(
-            split_cache_uri("odbc+duckdb://Driver=Snowflake;Server=x"),
+            split_cache_uri("duckdb+odbc://Driver=Snowflake;Server=x"),
             Some((
                 "odbc://Driver=Snowflake;Server=x".to_string(),
                 "duckdb".to_string()
@@ -238,10 +242,10 @@ mod tests {
     }
 
     #[test]
-    fn test_split_cache_uri_duckdb_sqlite_memory() {
+    fn test_split_cache_uri_duckdb_cache_over_sqlite_memory() {
         assert_eq!(
             split_cache_uri("duckdb+sqlite://memory"),
-            Some(("duckdb://memory".to_string(), "sqlite".to_string()))
+            Some(("sqlite://memory".to_string(), "duckdb".to_string()))
         );
     }
 
@@ -254,6 +258,7 @@ mod tests {
     #[test]
     fn test_split_cache_uri_rejects_multiple_plus() {
         assert_eq!(split_cache_uri("a+b+c://x"), None);
+        assert_eq!(split_cache_uri("duckdb+a+b://x"), None);
     }
 
     #[test]

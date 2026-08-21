@@ -304,21 +304,21 @@ fn cmd_exec(
         }
     }
 
-    // Build the reader. A composite `<primary>+<cache>://` URI is handled by
+    // Build the reader. A composite `<cache>+<primary>://` URI is handled by
     // `reader_from_uri`; the `--cache` flag is an explicit alternative and may
     // not be combined with a composite URI.
     let built = match cache {
         Some(cache_scheme) => {
             if connection::split_cache_uri(&reader).is_some() {
                 eprintln!(
-                    "Cannot combine --cache with a composite '<primary>+<cache>://' connection string"
+                    "Cannot combine --cache with a composite '<cache>+<primary>://' connection string"
                 );
                 std::process::exit(1);
             }
-            // `--cache <scheme>` is sugar for the composite `<primary>+<scheme>://` URI.
+            // `--cache <scheme>` is sugar for the composite `<scheme>+<primary>://` URI.
             match reader.split_once("://") {
                 Some((scheme, rest)) => {
-                    connection::reader_from_uri(&format!("{scheme}+{cache_scheme}://{rest}"))
+                    connection::reader_from_uri(&format!("{cache_scheme}+{scheme}://{rest}"))
                 }
                 None => {
                     eprintln!("Invalid --reader connection string: {reader}");
