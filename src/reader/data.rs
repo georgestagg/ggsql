@@ -1,3 +1,4 @@
+#[cfg(all(feature = "builtin-data", feature = "parquet"))]
 use crate::GgsqlError;
 
 // =============================================================================
