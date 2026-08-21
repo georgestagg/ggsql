@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-132.35 -39.99 640.70 640.70">
+  <!-- ggsql language icon for the 16px file-icon slot. Single flat fill with
+       transparent seams, following the file-icon-theme idiom: the background
+       shows through the cuts, so one geometry serves light and dark themes.
+       Ink spans 87.5% of the square viewBox, landing at 14px in a 16px slot.
+
+       Seams are 0.8px there, a 1:3.6 gap-to-band ratio. Because they run at the
+       logo's 29 degree tilt they never align to a pixel row, so they clear only
+       about 64% of the way to the background rather than fully. Narrowing them
+       further mutes them into teal lines instead of gaps.
+
+       The viewBox is centred on the shape's area centroid, not its bounding box.
+       The thick body sits up-right while the point trails down-left, putting the
+       centroid 0.55px left of the bbox centre, which made the icon read as shifted
+       left. Centring the centroid offsets the ink right by that much. -->
+  <path fill="#0A9396" fill-rule="evenodd" d="M417.27,160.98L419.70,151.30L417.07,138.29L401.89,114.05L375.13,87.41L338.79,60.25L299.63,37.14L259.84,18.66L219.44,5.30L185.68,0.05L162.67,3.02L150.15,13.11L108.70,87.88L375.63,235.84ZM267.15,430.88L310.72,352.55L43.96,204.68L2.51,279.45L0.04,291.10L2.25,299.50L252.92,438.45ZM19.69,557.55L23.34,560.66L219.21,456.40L5.71,338.05ZM360.06,263.84L93.17,115.90L59.49,176.66L326.29,324.55Z"/>
+</svg>

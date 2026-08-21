@@ -32,6 +32,66 @@ pub fn is_continuous_scale(spec: &Plot, aesthetic: &str) -> Option<bool> {
         .map(|st| st.scale_type_kind() == ScaleTypeKind::Continuous)
 }
 
+/// Whether any single position actually carries more than one group.
+///
+/// Dodging exists to separate elements that would otherwise be drawn on top of
+/// each other, so a grouping that never puts two groups in the same place needs
+/// none: mapping `fill` to the same column as the categorical axis gives one
+/// group per position, and dodging it anyway would squeeze every element into
+/// `1/n` of its band and shift it away from its own category for nothing.
+///
+/// A position is the value of each discrete axis being dodged, together with the
+/// facet columns — two groups drawn in different panels do not overlap either.
+/// When none of those columns is available the answer is "yes", so an unknown
+/// case dodges as before rather than silently dropping the adjustment.
+pub fn groups_share_a_position(
+    df: &DataFrame,
+    indices: &[usize],
+    dodge_pos1: bool,
+    dodge_pos2: bool,
+    spec: &Plot,
+) -> bool {
+    let mut position_cols: Vec<String> = [(dodge_pos1, "pos1"), (dodge_pos2, "pos2")]
+        .into_iter()
+        .filter(|(dodged, _)| *dodged)
+        .map(|(_, aesthetic)| crate::naming::aesthetic_column(aesthetic))
+        .collect();
+    if let Some(facet) = &spec.facet {
+        position_cols.extend(
+            facet
+                .layout
+                .internal_facet_names()
+                .into_iter()
+                .map(|aes| crate::naming::aesthetic_column(&aes)),
+        );
+    }
+
+    let columns: Vec<_> = position_cols
+        .iter()
+        .filter_map(|name| df.column(name).ok())
+        .collect();
+    if columns.is_empty() {
+        return true;
+    }
+
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (row, &group) in indices.iter().enumerate() {
+        let key = columns
+            .iter()
+            .map(|col| crate::array_util::value_to_string(col, row))
+            .collect::<Vec<_>>()
+            .join("\x00");
+        match seen.get(&key) {
+            Some(&first) if first != group => return true,
+            Some(_) => {}
+            None => {
+                seen.insert(key, group);
+            }
+        }
+    }
+    false
+}
+
 /// Result of computing dodge offsets for position adjustment.
 pub struct DodgeOffsets {
     /// Offset for pos1 axis (None if not dodging pos1)

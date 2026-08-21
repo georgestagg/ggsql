@@ -37,6 +37,16 @@ jobs:
         # which invokes `protoc` at build time. Required for the ADBC test path.
         run: sudo apt-get install -y protobuf-compiler
 
+      - name: Install png writer system libraries
+        # The png writer renders via wgpu/Vello, which needs a Vulkan
+        # adapter. ubuntu-latest has no GPU, so install Mesa's lavapipe software
+        # device. If no adapter is found anyway, the writer test skips its render
+        # assertion gracefully rather than failing.
+        # Text layout goes through parley/fontique, which links the system
+        # fontconfig on Linux to enumerate fonts, so its development files
+        # (fontconfig.pc plus headers) must be present at build time.
+        run: sudo apt-get install -y mesa-vulkan-drivers libfontconfig1-dev
+
       - name: Install Rust
         # 1.86 is the MSRV (declared as `rust-version` in /Cargo.toml, see
         # /CLAUDE.md); this sets it as the default toolchain so plain `cargo`
@@ -97,6 +107,13 @@ jobs:
 
       - name: Run ADBC SQLite equivalence tests
         run: cargo +stable test --features "adbc sqlite" --lib -- --ignored equivalence
+
+      - name: Run png writer tests
+        # Non-default feature. The hephaestus crate it renders through needs
+        # rustc ≥1.88 (wgpu), so it builds on +stable and is excluded from the
+        # 1.86 library build. Default features (incl. duckdb) supply the
+        # in-memory reader the test uses.
+        run: cargo +stable test --features png --lib writer::hephaestus
 
       - name: Build WASM library
         working-directory: ggsql-wasm/library
