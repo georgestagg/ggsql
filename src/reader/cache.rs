@@ -363,13 +363,13 @@ impl CachingReader {
 impl Reader for CachingReader {
     /// Source surface: base reads of the user's data (plus user setup/DML).
     fn execute_sql(&self, sql: &str) -> Result<DataFrame> {
+        self.ensure_meta_table()?;
+
         // Route to the cache when the read targets cache-resident objects, the
         // metadata table, or a builtin dataset.
         if self.references_cache_resident(sql) {
             return self.cache.execute_sql(sql);
         }
-
-        self.ensure_meta_table()?;
 
         // With caching disabled the memo is never consulted or written.
         if !self.config.enabled {
@@ -928,6 +928,26 @@ mod behavior_tests {
             "mixed later-CTE body joining a primary table should succeed: {:?}",
             spec.err()
         );
+    }
+
+    #[test]
+    fn test_meta_table_queryable_before_any_read() {
+        // The metadata table is introspectable as the first statement of a
+        // session, before anything has been memoized.
+        let reader = CachingReader::new(
+            Box::new(DuckDBReader::new_in_memory().unwrap()),
+            Box::new(DuckDBReader::new_in_memory().unwrap()),
+            "test://primary",
+        );
+
+        let meta = reader
+            .execute_sql(&format!(
+                "SELECT * FROM {}",
+                naming::quote_ident(naming::CACHE_META_TABLE)
+            ))
+            .unwrap();
+
+        assert_eq!(meta.height(), 0);
     }
 
     #[test]
