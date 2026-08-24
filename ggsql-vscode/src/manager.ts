@@ -25,9 +25,13 @@ type KernelSource = 'Bundled' | 'Setting' | 'Jupyter' | 'System' | 'Path';
  *   bundled one.
  * - `path`: the binary named by `ggsql.kernelPath`.
  */
-export type KernelStrategy = 'bundled' | 'environment' | 'path';
+const KERNEL_STRATEGIES = ['bundled', 'environment', 'path'] as const;
 
-const KERNEL_STRATEGIES: readonly string[] = ['bundled', 'environment', 'path'];
+export type KernelStrategy = (typeof KERNEL_STRATEGIES)[number];
+
+function isKernelStrategy(value: string): value is KernelStrategy {
+    return (KERNEL_STRATEGIES as readonly string[]).includes(value);
+}
 
 /**
  * A discovered ggsql-jupyter kernel candidate
@@ -199,8 +203,8 @@ export function resolveKernelStrategy(config: vscode.WorkspaceConfiguration): Ke
         ?? inspected?.globalValue;
 
     if (explicit !== undefined) {
-        if (KERNEL_STRATEGIES.includes(explicit)) {
-            return explicit as KernelStrategy;
+        if (isKernelStrategy(explicit)) {
+            return explicit;
         }
         log(`Ignoring unknown ggsql.kernelStrategy '${explicit}'`);
     } else if (config.get<string>('kernelPath', '').trim() !== '') {
