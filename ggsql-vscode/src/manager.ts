@@ -385,17 +385,25 @@ export type KernelProbe = (kernelPath: string) => Promise<boolean>;
  */
 export function probeKernel(kernelPath: string): Promise<boolean> {
     return new Promise(resolve => {
-        cp.execFile(
-            kernelPath,
-            ['--version'],
-            { timeout: KERNEL_PROBE_TIMEOUT_MS, windowsHide: true },
-            err => {
-                if (err) {
-                    log(`Kernel probe failed for ${kernelPath}: ${err.message}`);
-                }
-                resolve(!err);
-            },
-        );
+        // On Windows a file that is not a valid executable fails the
+        // CreateProcess call itself, which Node surfaces as a synchronous
+        // throw from execFile (`spawn UNKNOWN`) rather than a callback error.
+        try {
+            cp.execFile(
+                kernelPath,
+                ['--version'],
+                { timeout: KERNEL_PROBE_TIMEOUT_MS, windowsHide: true },
+                err => {
+                    if (err) {
+                        log(`Kernel probe failed for ${kernelPath}: ${err.message}`);
+                    }
+                    resolve(!err);
+                },
+            );
+        } catch (err) {
+            log(`Kernel probe failed for ${kernelPath}: ${(err as Error).message}`);
+            resolve(false);
+        }
     });
 }
 
