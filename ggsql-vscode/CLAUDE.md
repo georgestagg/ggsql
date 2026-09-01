@@ -112,36 +112,37 @@ Anything that does *not* need the runtime (`ggsql.createNewFile`, `ggsql.resetSq
 
 The extension ships the kernel: the per-platform VSIXes carry `ggsql-jupyter` at `bundled/bin/`, so installing the extension is enough and no native installer is needed. The platform-neutral VSIX carries none, and users on a platform without a build install the kernel themselves.
 
-`ggsql.kernelStrategy` decides where `manager.ts` looks, modelled on `air.executableStrategy`:
+**Every kernel found is offered**, and the user picks in the New Console Session picker. There is one order, not a set of strategies:
 
-| Strategy | Candidates, in priority order |
-| --- | --- |
-| `bundled` (default) | The bundled kernel, with host locations behind it as a fallback tier reached only when it cannot run. A build that carries no kernel goes straight to the host locations. |
-| `environment` | Host locations, then the bundled kernel as the fallback. |
-| `path` | `ggsql.kernelPath` alone — neither the bundled kernel nor a host install stands in for it. An empty path is treated as `bundled`. |
+| Order | Source | Where |
+| --- | --- | --- |
+| 1 | `Setting` | `ggsql.kernelPath`, when set |
+| 2 | `Bundled` | `bundled/bin/` inside the extension |
+| 3 | `Jupyter` | Jupyter kernelspec directories, user then system |
+| 4 | `System` | the native package install location for the platform |
+| 5 | `Path` | `PATH` |
 
-Host locations are, in order: Jupyter kernelspec directories (user then system), the native package install locations per platform, then `PATH`.
+Order decides which the picker lists first — hence which is the default — and, when two paths name one file, which occurrence survives `dedupeCandidates()`. The bundled kernel leads unless the user named one, so a machine with nothing installed gets a working runtime and a machine with an install keeps being offered it.
 
-`selectKernelCandidates()` is the whole precedence rule with no filesystem in it, which is what `src/test/kernelDiscovery.test.ts` exercises; `discoverKernelPaths()` supplies it with what is actually on disk. It returns a `KernelSelection`: the `candidates` to offer, plus a `fallback()` callback for the tier behind them. The fallback is a callback rather than a list because reaching the host locations shells out to `which`/`where`, and the common case — a bundled kernel that runs — must not pay for it.
+`selectKernelCandidates()` is the whole rule with no filesystem in it, which is what `src/test/kernelDiscovery.test.ts` exercises; `discoverKernelPaths()` supplies it with what is actually on disk.
 
 Five things here are load bearing:
 
-- **A kernel is run before it is offered.** Filesystem checks cannot tell whether a binary starts. The bundled kernel is built for the platform but not for every system it can be installed on: one linked against newer shared libraries than the host provides is exec'd successfully and then killed by the dynamic linker, which no `stat` or `access` call can see. `probeKernel()` runs `ggsql-jupyter --version` and requires exit 0; only the bundled kernel is probed, since a kernel the user installed is their own business. A success is cached in `globalState` against the extension version, so it costs one spawn per update rather than one per window; a failure is not cached, because it is cheap to repeat and a host that gains the missing libraries should start working without waiting for an update.
+- **A kernel is run before it is offered, and what it says is what the picker shows.** `probeKernel()` runs `ggsql-jupyter --version` and reads the version out of its output, so the runtime is named `ggsql 0.4.1` the way Positron's own runtimes are. Filesystem checks cannot tell whether a binary starts: the bundled kernel is built for the platform but not for every system it can be installed on, and one linked against newer shared libraries than the host provides is exec'd successfully and then killed by the dynamic linker, which no `stat` or `access` call can see. **Only the bundled kernel has to pass**, since kernels released before `--version` existed exit non-zero on it and dropping them would take away the install the user already had; those are offered as plain `ggsql (<source>)` with no version.
+- **Successful probes are cached, failures are not.** `ProbeCache` keeps them in `globalState` keyed by kernel path, with the file's mtime and size in the entry, so an install upgraded in place is probed again instead of reporting the version it used to have, and a pass costs one spawn per kernel per install rather than one per window. It rewrites the map with only the kernels the pass saw, or the paths of every superseded extension version would accumulate. A failure is not stored: it is cheap to repeat, and a host that gains the missing shared libraries should start working without waiting for an update.
 - **Every candidate is an absolute path.** A candidate that is only a binary name satisfies each existence check further down and so registers a runtime that fails at session start with `KS-19: Kernel path not found`. `findOnPath()` returns `undefined` rather than the bare name, and `isKernelAccessible()` rejects any non-absolute path, so no kernel anywhere means **zero** runtimes rather than an unusable one. The single exception is a `ggsql.kernelPath` that resolves to nothing: it is passed through so discovery can report it as inaccessible in the log instead of ignoring the setting silently.
-- **The bundled kernel's `runtimeId` is fixed, not derived from its path.** Every other source hashes `kernelPath` to get one id per installed kernel, but the bundled path contains the versioned extension directory, so hashing it would mint a new runtime on every extension update and lose the workspace's runtime affinity and its restorable sessions.
-- **The bundled runtime is named plain `ggsql`.** The `ggsql (<source>)` suffix is only worth showing for a kernel the user went out of their way to select.
-- **`ggsql.kernelPath` implies `path`.** Users configured that setting before a strategy existed, so a non-empty path with no explicitly set `kernelStrategy` still resolves to `path`. `resolveKernelStrategy()` reads the value through `inspect()` for that reason: `get()` cannot tell a set value from the default.
+- **The bundled kernel's `runtimeId` is fixed, not derived from its path.** Every other source hashes `kernelPath` to get one id per installed kernel, but the bundled path contains the versioned extension directory, so hashing it would mint a new runtime on every extension update and lose the workspace's runtime affinity and its restorable sessions. That only holds up because `validateMetadata()` regenerates the metadata Positron stored for the workspace: the id survives the update, the path in the stored copy does not. It rejects metadata with no matching candidate, which is how Positron learns to drop a runtime whose kernel has been uninstalled.
+- **The bundled runtime carries no `(<source>)` qualifier.** It is the default, so there is nothing to distinguish it from. `runtimeShortName` stays plain `ggsql` for every kernel: it labels a console tab, where the version adds nothing.
 
-Discovery also writes the user-level Jupyter kernelspec for the bundled and system kernels, so Quarto and Jupyter can find ggsql without a session ever being started, and so the spec stops pointing into an extension directory an update has removed. Only a kernel that has passed the probe is written there: the spec outlives the window and is what Quarto resolves, and it has no fallback of its own.
+Discovery also writes the user-level Jupyter kernelspec for the *leading* runnable kernel, so Quarto and Jupyter can find ggsql without a session ever being started, and so the spec stops pointing into an extension directory an update has removed. Only one is written, and never for a kernel that was itself found as a kernelspec — that one is already where Jupyter looks. Only a kernel that has passed the probe is written there: the spec outlives the window and is what Quarto resolves, and it has no fallback of its own.
 
-A fallback that succeeds is deliberately silent — the runtime's name in the picker already says where it came from, and the log records the handover. The one case that interrupts the user is the dead end: nothing runnable anywhere, whether because the bundled kernel failed its probe or because the build carries none (the platform-neutral VSIX). `reportNoUsableKernel()` then shows a non-modal warning once per extension version, offering the install docs and the log. It is skipped under the `path` strategy, where the user named a binary and the log already reports it.
+The one case that interrupts the user is the dead end: nothing runnable anywhere, whether because the bundled kernel failed its probe or because the build carries none (the platform-neutral VSIX). `reportNoUsableKernel()` then shows a non-modal warning once per extension version, offering the install docs and the log. A kernel that is merely skipped — an unusable `ggsql.kernelPath`, say, with others still available — is reported in the log only.
 
 ## Settings
 
 ```json
 {
-  "ggsql.kernelStrategy": "bundled" | "environment" | "path",  // default "bundled"
-  "ggsql.kernelPath": "string"   // used when the strategy is "path"
+  "ggsql.kernelPath": "string"   // an extra kernel to offer, listed first
 }
 ```
 
@@ -206,14 +207,16 @@ mkdir -p ggsql-vscode/bundled/bin && cp target/release/ggsql-jupyter ggsql-vscod
 
 The download is cached in `.positron-test/`, gitignored like `.vscode-test/`. It keeps a directory per Positron version, so it grows as dailies move on — around 3 GB after one run, and worth clearing occasionally rather than a leak to fix.
 
-The assertions worth keeping: exactly one ggsql runtime, its `runtimeId` is `ggsql-bundled` and its path is under `bundled/bin/`, and `executeCode` returns a result — which starts a session if none is running, so it covers spawn, handshake and execution in one call.
+**In CI the download is deliberately not cached.** It is not what the job costs: on `ubuntu-latest`, downloading Positron and running the suite together take about 75s, while `cargo build --release --bin ggsql-jupyter` takes ~2.5 min against a warm `Swatinem/rust-cache` and ~15 min without one. Caching `.positron-test/` would add an entry of roughly a gigabyte per Positron version, and `channel: 'daily'` mints a new version most days, which is how a cache becomes the problem instead of the fix. The cargo cache is the one worth having, and only `main` writes it — see the `save-if` in [`/.github/workflows/test-extension.yaml`](../.github/workflows/test-extension.yaml).
+
+The assertions worth keeping: a runtime with `runtimeId` `ggsql-bundled` whose path is under `bundled/bin/`, its name matching `ggsql <version>` — the only check that the version really comes back from the binary — and `executeCode` returning a result against a session started from that id, which covers spawn, handshake and execution in one call. The suite starts the runtime by id rather than by language, because every ggsql install on the machine is registered and a developer running this locally has their own.
 
 ### Testing discovery without wrecking the developer's machine
 
 Two seams exist because discovery reads and writes real state:
 
 - `GgsqlRuntimeManager` takes `{ kernelSpecDir }`. Discovery advertises the kernel by writing a Jupyter kernel spec, so a test that called `discoverAllRuntimes()` with the default would repoint the *real* kernelspec — the one Quarto resolves — at a temp fixture.
-- `kernelDiscovery.test.ts` redirects `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and `PATH` to stage host kernels, restoring them in teardown. The native-installer locations (`/usr/local/bin`, `/usr/bin`, `/Applications`) are hard-coded absolutes that no environment variable can redirect, so the few tests needing "no kernel anywhere" call `systemInstallPresent()` and skip on a machine that has one. CI never does, which is where those regressions matter.
+- `kernelDiscovery.test.ts` redirects `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and `PATH` to stage host kernels, restoring them in teardown. The native-installer locations (`/usr/local/bin`, `/usr/bin`, `/Applications`) are hard-coded absolutes that no environment variable can redirect, so any test asserting the whole list of candidates or runtimes — every install being offered, that is most of them — calls `systemInstallPresent()` and skips on a machine that has one. CI never does, which is where those regressions matter.
 
 ### Editing the grammar fixture
 

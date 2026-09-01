@@ -159,25 +159,10 @@
       "type": "object",
       "title": "ggsql",
       "properties": {
-        "ggsql.kernelStrategy": {
-          "type": "string",
-          "default": "bundled",
-          "enum": [
-            "bundled",
-            "environment",
-            "path"
-          ],
-          "enumDescriptions": [
-            "Always use the ggsql-jupyter kernel bundled with this extension.",
-            "Use a ggsql-jupyter kernel installed on this machine, falling back to the bundled kernel.",
-            "Use the ggsql-jupyter kernel at the path given by ggsql.kernelPath."
-          ],
-          "markdownDescription": "How to locate the `ggsql-jupyter` kernel that runs your queries. The bundled kernel ships inside the extension, so no separate install is needed. Setting `#ggsql.kernelPath#` without setting this implies `path`."
-        },
         "ggsql.kernelPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `ggsql-jupyter` executable, used when `#ggsql.kernelStrategy#` is `path`. A bare name is looked up on `PATH`."
+          "markdownDescription": "Path to a `ggsql-jupyter` executable to offer alongside the kernels found automatically, listed ahead of them. A bare name is looked up on `PATH`. Leave this empty unless you have a kernel in a place the extension does not look: it ships one, and it finds the ones installed on this machine."
         },
         "ggsql.enableSqlFiles": {
           "type": "boolean",

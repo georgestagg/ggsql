@@ -47,7 +47,7 @@ suite('bundled kernel in Positron', () => {
 		positron = api;
 	});
 
-	test('the bundled kernel is registered as the only ggsql runtime', async () => {
+	test('the bundled kernel is registered, named for the version it reports', async () => {
 		// Discovery runs on window open, so the runtime may not be registered the
 		// instant activation returns.
 		const runtimes = await waitFor('a registered ggsql runtime', 60_000, async () => {
@@ -56,35 +56,38 @@ suite('bundled kernel in Positron', () => {
 			return ggsql.length > 0 ? ggsql : undefined;
 		});
 
+		// Every ggsql install on the machine is offered, so this asserts about
+		// the bundled one rather than the size of the list — a developer running
+		// the suite locally has ggsql installed as well.
+		const bundled = runtimes.filter(runtime => runtime.runtimeId === 'ggsql-bundled');
 		assert.strictEqual(
-			runtimes.length,
+			bundled.length,
 			1,
-			`expected one ggsql runtime, got ${runtimes.map(r => r.runtimePath).join(', ')}`,
+			`expected one bundled ggsql runtime, got ${runtimes.map(r => r.runtimePath).join(', ')}`,
 		);
-		// The kernel inside the extension, with the identity that survives an
-		// update — not something the runner happened to have installed.
-		assert.strictEqual(runtimes[0].runtimeId, 'ggsql-bundled');
-		assert.strictEqual(runtimes[0].runtimeName, 'ggsql');
 		assert.ok(
-			runtimes[0].runtimePath.includes(path.join('bundled', 'bin')),
-			`unexpected kernel path ${runtimes[0].runtimePath}`,
+			bundled[0].runtimePath.includes(path.join('bundled', 'bin')),
+			`unexpected kernel path ${bundled[0].runtimePath}`,
 		);
+		// The version comes from running the binary, so this is the one place
+		// the interpolation is checked against a real kernel.
+		assert.match(bundled[0].runtimeName, /^ggsql \d+\.\d+\.\d+/);
 	});
 
 	test('the console starts the bundled kernel and runs a query', async () => {
-		// executeCode starts a session when none is running, so this covers the
-		// whole path: spawning the binary, the supervisor's Jupyter handshake,
-		// and a result coming back. The kernel holds an in-memory DuckDB
-		// session, so the query needs no connection string.
+		// Starting by runtime id, rather than letting Positron choose one for the
+		// language, is what makes this a test of the kernel inside the VSIX:
+		// every ggsql install is offered now, so the default is not necessarily
+		// the bundled one.
+		const session = await positron.runtime.startLanguageRuntime('ggsql-bundled', 'ggsql');
+		assert.strictEqual(session.runtimeMetadata.runtimeId, 'ggsql-bundled');
+
+		// executeCode goes to that session, so this covers the whole path:
+		// spawning the binary, the supervisor's Jupyter handshake, and a result
+		// coming back. The kernel holds an in-memory DuckDB session, so the
+		// query needs no connection string.
 		const result = await positron.runtime.executeCode('ggsql', 'SELECT 1 AS n', false);
 		assert.ok(result, 'executeCode returned no result');
-
-		const sessions = await positron.runtime.getActiveSessions();
-		const ggsqlSessions = sessions.filter(
-			session => session.runtimeMetadata.languageId === 'ggsql',
-		);
-		assert.strictEqual(ggsqlSessions.length, 1, 'expected exactly one ggsql session');
-		assert.strictEqual(ggsqlSessions[0].runtimeMetadata.runtimeId, 'ggsql-bundled');
 	});
 
 	test('a query with a visualisation returns a plot', async () => {

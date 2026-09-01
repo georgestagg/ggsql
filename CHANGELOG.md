@@ -38,10 +38,11 @@
   the png writer draws them.
 
 - The VS Code / Positron extension now ships the `ggsql-jupyter` kernel, so
-  installing the extension is all that is needed to run queries. A new
-  `ggsql.kernelStrategy` setting picks between the bundled kernel (the default),
-  a kernel installed on the machine, and a fixed path in `ggsql.kernelPath`;
-  configuring `ggsql.kernelPath` alone continues to mean that path is used.
+  installing the extension is all that is needed to run queries. It is offered
+  alongside every ggsql kernel found on the machine — a Jupyter kernelspec, a
+  native install, one on `PATH`, or the path in `ggsql.kernelPath` — each named
+  for the version it reports, so the New Console Session picker shows which is
+  which. The bundled kernel is the default.
 
 - `ggsql-jupyter` accepts `--version`.
 

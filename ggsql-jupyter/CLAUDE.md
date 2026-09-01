@@ -39,7 +39,7 @@ ggsql-jupyter/
 
 - Kernel info advertises `"output_location": "plot"` so visualizations route to Positron's Plot pane.
 - `data_explorer.rs` implements Positron's data-explorer comm channel (registered query results become explorable tables).
-- The companion VS Code extension (`ggsql-vscode/`) discovers this binary via the `ggsql.kernelPath` setting, the active Jupyter kernelspec, or `PATH`.
+- The companion VS Code extension (`ggsql-vscode/`) ships a copy of this binary and also discovers installed ones via the `ggsql.kernelPath` setting, the Jupyter kernelspec directories, the native install locations, or `PATH`. It runs each one with `--version` to name the runtime it registers, so **keep `--version` working**: a kernel that does not answer it is still offered, but without a version in the picker. See [Finding the kernel](../ggsql-vscode/CLAUDE.md#finding-the-kernel).
 
 ## Build & install
 
