@@ -9,10 +9,7 @@ on:
 
 jobs:
   # Runs the suite against stock VS Code, on all three platforms the extension
-  # ships a bundled kernel for. The platform matrix is not incidental: kernel
-  # discovery branches on the OS for the binary name, the PATH lookup
-  # (which/where), the executable-bit repair, and the install locations it
-  # searches.
+  # ships a bundled kernel for.
   test-extension:
     runs-on: ${{ matrix.os }}
     name: Test (VS Code, ${{ matrix.os }})
@@ -89,10 +86,7 @@ jobs:
             fi
           done
 
-  # The one check that proves the bundled binary actually starts. The unit
-  # suites cover precedence and metadata, and the release workflow proves the
-  # binary is inside the VSIX; only this launches it, which is the failure the
-  # bundling work is about.
+  # Check the bundled binary actually starts.
   test-integration:
     runs-on: ubuntu-latest
     name: Integration (Positron + bundled kernel)
@@ -115,8 +109,6 @@ jobs:
         uses: dtolnay/rust-toolchain@1.86.0
 
       - name: Cache cargo build
-        # The kernel links DuckDB statically, so an uncached release build is
-        # the expensive part of this job by a wide margin.
         uses: Swatinem/rust-cache@v2
 
       - name: Install tree-sitter-cli

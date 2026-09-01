@@ -53,9 +53,6 @@ jobs:
           SM_CLIENT_CERT_FINGERPRINT: ${{ secrets.SM_CLIENT_CERT_FINGERPRINT }}
 
       - name: Upload ggsql-jupyter kernel (win32-x64)
-        # Consumed by the build-vsix job, which bundles it into the per-platform
-        # VSIX. Uploaded after signing and before installer packaging, so the
-        # extension ships the same binary the installers do.
         uses: actions/upload-artifact@v4
         with:
           name: ggsql-jupyter-win32-x64
@@ -164,11 +161,6 @@ jobs:
             --sign "$SIGN_ID" target/release/ggsql-jupyter
 
       - name: Upload ggsql-jupyter kernel (darwin-x64)
-        # Consumed by the build-vsix job, which bundles it into the per-platform
-        # VSIX. Uploaded after signing and before installer packaging, so the
-        # extension ships the same signed binary the installers do. The Mach-O
-        # signature is embedded in the file, so it survives the artifact zip;
-        # the executable bit does not, and build-vsix restores it.
         uses: actions/upload-artifact@v4
         with:
           name: ggsql-jupyter-darwin-x64
@@ -283,7 +275,6 @@ jobs:
             --sign "$SIGN_ID" target/release/ggsql-jupyter
 
       - name: Upload ggsql-jupyter kernel (darwin-arm64)
-        # See the darwin-x64 job for why this sits between signing and packaging.
         uses: actions/upload-artifact@v4
         with:
           name: ggsql-jupyter-darwin-arm64
@@ -368,8 +359,6 @@ jobs:
         run: cargo build --release --bin ggsql --bin ggsql-jupyter
 
       - name: Upload ggsql-jupyter kernel (linux-x64)
-        # Consumed by the build-vsix job, which bundles it into the per-platform
-        # VSIX and restores the executable bit the artifact zip drops.
         uses: actions/upload-artifact@v4
         with:
           name: ggsql-jupyter-linux-x64
@@ -424,7 +413,6 @@ jobs:
         run: cargo build --release --bin ggsql --bin ggsql-jupyter
 
       - name: Upload ggsql-jupyter kernel (linux-arm64)
-        # See the linux-x64 job.
         uses: actions/upload-artifact@v4
         with:
           name: ggsql-jupyter-linux-arm64
@@ -594,11 +582,6 @@ jobs:
 
   build-vsix:
     name: Build VSIX (${{ matrix.target }})
-    # This lives here rather than in its own workflow because the kernel
-    # binaries are artifacts scoped to a single workflow run: a separate
-    # workflow triggered by the same tag could not download them. Building the
-    # VSIX in the same run also means the bundled kernel and the extension can
-    # never come from different commits.
     needs: [build-windows, build-macos-x86_64, build-macos-aarch64, build-linux-x86_64, build-linux-aarch64]
     runs-on: ubuntu-latest
     permissions:
@@ -643,9 +626,6 @@ jobs:
           path: ggsql-vscode/bundled/bin
 
       - name: Make the kernel executable
-        # Artifact upload and download do not preserve the executable bit. The
-        # extension repairs it at runtime too, but it has to be right inside the
-        # VSIX for a fresh install to start a session.
         if: matrix.target != 'universal'
         run: |
           chmod +x ggsql-vscode/bundled/bin/*
@@ -726,10 +706,6 @@ jobs:
         run: echo "path=$(ls vsix/*.vsix)" >> "$GITHUB_OUTPUT"
 
       - name: Publish to Open VSX Registry
-        # The packaged file is published rather than a target being passed here:
-        # Open VSX reads the platform from TargetPlatform in the vsixmanifest
-        # that `vsce package --target` wrote, and ovsx discards a target option
-        # when it is handed an already-packaged vsix.
         uses: HaaLeo/publish-vscode-extension@v2
         with:
           pat: ${{ secrets.OPEN_VSX_TOKEN }}
@@ -756,12 +732,6 @@ jobs:
       - name: Create release and upload installers
         uses: softprops/action-gh-release@v2
         with:
-          # Scoped to one artifact directory each, rather than matching an
-          # extension anywhere under artifacts/. Release assets are the only
-          # anonymously downloadable output of this workflow, so what lands there
-          # is named explicitly: an `artifacts/**/*.exe` glob would also sweep up
-          # the raw ggsql-jupyter.exe that build-vsix consumes, publishing one
-          # platform's bare kernel next to the installers.
           files: |
             artifacts/ggsql-windows-nsis/*.exe
             artifacts/ggsql-windows-msi/*.msi

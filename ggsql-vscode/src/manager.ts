@@ -376,12 +376,6 @@ export type KernelProbe = (kernelPath: string) => Promise<boolean>;
 
 /**
  * Run the kernel and see whether it starts.
- *
- * An accessibility check cannot answer this. A binary built against newer
- * shared libraries than the host provides passes every filesystem test and
- * still fails: the kernel is exec'd successfully and then the dynamic linker
- * rejects it, so the process exits non-zero before it can serve a session.
- * `--version` is the cheapest thing that exercises that whole path.
  */
 export function probeKernel(kernelPath: string): Promise<boolean> {
     return new Promise(resolve => {
@@ -409,11 +403,6 @@ export function probeKernel(kernelPath: string): Promise<boolean> {
 
 /**
  * Probe the bundled kernel, remembering a success across windows.
- *
- * Only a success is cached, and only for the extension version that produced
- * it: a failure is cheap to repeat (the linker gives up immediately) and
- * re-running it means a host that gains the libraries the kernel needs starts
- * working without waiting for an extension update.
  */
 async function probeBundledKernel(
     context: vscode.ExtensionContext,
@@ -435,10 +424,6 @@ async function probeBundledKernel(
 
 /**
  * Decide whether a candidate can actually serve a session.
- *
- * The bundled kernel is additionally run, because it is the one the extension
- * chose rather than the user, and it is the one that can be wrong about the
- * system it landed on. A kernel the user installed is taken at its word.
  */
 async function canRunKernel(
     context: vscode.ExtensionContext,
@@ -456,11 +441,6 @@ async function canRunKernel(
 
 /**
  * Tell the user that nothing on this machine can run ggsql queries.
- *
- * Only for the dead end: a fallback that succeeds is reported by the runtime's
- * name in the picker and by the log, and needs no interruption. Shown once per
- * extension version, and never awaited, so discovery does not sit waiting for
- * the notification to be dismissed.
  */
 function reportNoUsableKernel(
     context: vscode.ExtensionContext,
@@ -495,9 +475,7 @@ function reportNoUsableKernel(
  *
  * Hashing the path gives one identifier per installed kernel, which is what
  * Positron needs to keep runtime affinity and restorable sessions across
- * windows. The bundled kernel lives inside the versioned extension directory,
- * so its path changes on every extension update: it gets a fixed identifier
- * instead, or each update would look like a different runtime.
+ * windows.
  */
 function runtimeIdFor(candidate: KernelCandidate): string {
     if (candidate.source === 'Bundled') {
@@ -662,12 +640,6 @@ export function createDynState(sessionName?: string): positron.LanguageRuntimeDy
 
 /**
  * Get the Positron Supervisor API, activating the extension if needed.
- *
- * The supervisor is a soft dependency: it is declared nowhere in
- * package.json, because an extensionDependencies entry would stop this
- * extension activating at all in VS Code, where the supervisor does not
- * exist. Awaiting activate() here gives the same ordering guarantee that a
- * declared dependency would.
  */
 export async function getSupervisorApi(): Promise<PositronSupervisorApi> {
     const supervisorExt = vscode.extensions.getExtension<PositronSupervisorApi>(
@@ -714,11 +686,6 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
     /**
      * Run discovery on every window open rather than trusting Positron's
      * cross-window cache.
-     *
-     * ggsql runtimes are not marked cacheable: ggsql.kernelStrategy and
-     * ggsql.kernelPath are workspace scoped, and the host kernels a machine
-     * offers change as packages come and go. A cache hit would therefore
-     * register a stale set of candidates on warm starts.
      */
     public readonly alwaysRediscover = true;
 
@@ -759,9 +726,7 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
                         // even if no session is ever started. The bundled kernel
                         // additionally needs this on every extension update, or
                         // the spec keeps pointing into the removed extension
-                        // directory. Only a kernel that has proven it runs is
-                        // advertised this way: the spec outlives the window, and
-                        // Quarto has no discovery of its own to fall back on.
+                        // directory.
                         if (candidate.source === 'System' || candidate.source === 'Bundled') {
                             writeKernelJson(kernelSpecDir, candidate.kernelPath);
                         }
