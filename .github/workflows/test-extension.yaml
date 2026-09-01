@@ -108,21 +108,17 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.86.0
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          # Building the kernel is by far the longest step here (~2.5 min warm,
-          # ~15 min cold), so the cache matters — but only main writes it, or
-          # every branch push would add an entry of its own.
-          shared-key: ${{ runner.os }}-test-extension
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Install tree-sitter-cli
         run: npm install -g tree-sitter-cli
 
       - name: Install XVFB
         run: sudo apt-get -y update && sudo apt-get -y install xvfb
 
+      # Deliberately uncached. This is the longest step in the workflow by far
+      # — around 16 minutes cold against 2.5 warm — but a cargo cache for it
+      # would be another entry of roughly half a gigabyte against a 10 GB repo
+      # limit that is already most of the way spent. The build is the price of
+      # the job; the cache budget is shared with every other workflow.
       - name: Build the kernel
         working-directory: .
         run: cargo build --release --bin ggsql-jupyter
