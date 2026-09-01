@@ -110,6 +110,12 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          # Building the kernel is by far the longest step here (~2.5 min warm,
+          # ~15 min cold), so the cache matters — but only main writes it, or
+          # every branch push would add an entry of its own.
+          shared-key: ${{ runner.os }}-test-extension
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install tree-sitter-cli
         run: npm install -g tree-sitter-cli
@@ -131,5 +137,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Downloads Positron, which is deliberately not cached: the daily channel
+      # moves most days, so a cache would hold an entry of ~1 GB per version for
+      # a download that takes under a minute.
       - name: Run integration tests
         run: xvfb-run -a npm run test:integration
