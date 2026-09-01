@@ -516,6 +516,9 @@ jobs:
         # stable. ggsql-wasm/rust-toolchain.toml also selects stable for the build.
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Update apt package index
+        run: sudo apt-get update
+
       - name: Install LLVM
         run: sudo apt-get install -y llvm
 
