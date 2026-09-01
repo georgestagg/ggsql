@@ -42,7 +42,8 @@
   alongside every ggsql kernel found on the machine — a Jupyter kernelspec, a
   native install, one on `PATH`, or the path in `ggsql.kernelPath` — each named
   for the version it reports, so the New Console Session picker shows which is
-  which. The bundled kernel is the default.
+  which. A kernel too old to report one is still offered, named without a
+  version. The bundled kernel is the default.
 
 - `ggsql-jupyter` accepts `--version`.
 

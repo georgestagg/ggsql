@@ -299,10 +299,21 @@ const VERSION_PATTERN = /\b(\d+\.\d+\.\d+\S*)/;
  */
 export type KernelProbe = (kernelPath: string) => Promise<KernelInfo | undefined>;
 
+/** What running the kernel with one argument came to. */
+type RunOutcome =
+    /** It was exec'd, and either exited zero or did not. */
+    | { exec: true; ok: boolean; stdout: string; reason: string }
+    /** It never started, so nothing can be concluded from its output. */
+    | { exec: false; reason: string };
+
 /**
- * Run the kernel and read the version it reports.
+ * Run the kernel with a single argument and report how far it got.
+ *
+ * The distinction that matters is between a binary that never started and one
+ * that ran and exited non-zero: only the second says anything about the
+ * argument it was given.
  */
-export function probeKernel(kernelPath: string): Promise<KernelInfo | undefined> {
+function runKernel(kernelPath: string, arg: string): Promise<RunOutcome> {
     return new Promise(resolve => {
         // On Windows a file that is not a valid executable fails the
         // CreateProcess call itself, which Node surfaces as a synchronous
@@ -310,26 +321,55 @@ export function probeKernel(kernelPath: string): Promise<KernelInfo | undefined>
         try {
             cp.execFile(
                 kernelPath,
-                ['--version'],
+                [arg],
                 { timeout: KERNEL_PROBE_TIMEOUT_MS, windowsHide: true },
                 (err, stdout) => {
-                    if (err) {
-                        log(`Kernel probe failed for ${kernelPath}: ${err.message}`);
-                        resolve(undefined);
-                        return;
+                    if (!err) {
+                        resolve({ exec: true, ok: true, stdout, reason: '' });
+                    } else if (typeof err.code === 'number') {
+                        // An exit status, rather than one of the errno strings
+                        // a failure to spawn reports, so the binary did start.
+                        resolve({ exec: true, ok: false, stdout, reason: err.message });
+                    } else {
+                        resolve({ exec: false, reason: err.message });
                     }
-                    const version = VERSION_PATTERN.exec(stdout)?.[1];
-                    if (!version) {
-                        log(`Kernel at ${kernelPath} reported no version: ${stdout.trim()}`);
-                    }
-                    resolve({ version });
                 },
             );
         } catch (err) {
-            log(`Kernel probe failed for ${kernelPath}: ${(err as Error).message}`);
-            resolve(undefined);
+            resolve({ exec: false, reason: (err as Error).message });
         }
     });
+}
+
+/**
+ * Run the kernel and read the version it reports.
+ */
+export async function probeKernel(kernelPath: string): Promise<KernelInfo | undefined> {
+    const reportedVersion = await runKernel(kernelPath, '--version');
+    if (!reportedVersion.exec) {
+        log(`Kernel probe failed for ${kernelPath}: ${reportedVersion.reason}`);
+        return undefined;
+    }
+    if (reportedVersion.ok) {
+        const version = VERSION_PATTERN.exec(reportedVersion.stdout)?.[1];
+        if (!version) {
+            log(`Kernel at ${kernelPath} reported no version: ${reportedVersion.stdout.trim()}`);
+        }
+        return { version };
+    }
+
+    // A kernel released before `--version` rejects the argument, which says
+    // nothing about whether it runs: one killed by the dynamic linker for want
+    // of a shared library exits non-zero in exactly the same way. `--help` is
+    // the question every version answers, so let that settle it rather than
+    // reading an exit status or matching the wording of an error.
+    const help = await runKernel(kernelPath, '--help');
+    if (!help.exec || !help.ok) {
+        log(`Kernel probe failed for ${kernelPath}: ${help.reason}`);
+        return undefined;
+    }
+    log(`Kernel at ${kernelPath} predates \`--version\`, so is offered without one`);
+    return { version: undefined };
 }
 
 interface ProbeCacheEntry extends KernelInfo {
@@ -400,8 +440,7 @@ async function inspectKernel(
     // Only the bundled kernel has to prove it runs. It is built for this
     // platform but not for every system it can be installed on, and that
     // failure is invisible to the filesystem. A kernel the user installed is
-    // their own business, and one older than the `--version` flag cannot answer
-    // the probe at all, so it is offered without a version rather than dropped.
+    // their own business, so it is still offered when it would not start.
     return candidate.source === 'Bundled' ? undefined : { ...candidate };
 }
 

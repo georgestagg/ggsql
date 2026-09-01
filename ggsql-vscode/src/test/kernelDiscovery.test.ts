@@ -454,10 +454,19 @@ suite('runtime registration', () => {
 		);
 		fs.mkdirSync(path.join(extensionPath, 'bundled', 'bin', binaryName), { recursive: true });
 
-		const kernelSpecDir = tempDir();
-		const runtimes = await collect(managerFor(extensionPath, kernelSpecDir).manager.discoverAllRuntimes());
-		assert.deepStrictEqual(runtimes, []);
-		assert.strictEqual(fs.existsSync(path.join(kernelSpecDir, 'kernel.json')), false);
+		// "Registers nothing" is a claim about every runtime discovery yields,
+		// so the developer's own installs have to be out of the picture.
+		isolateHostEnv(tempDir());
+		try {
+			const kernelSpecDir = tempDir();
+			const runtimes = await collect(
+				managerFor(extensionPath, kernelSpecDir).manager.discoverAllRuntimes(),
+			);
+			assert.deepStrictEqual(runtimes, []);
+			assert.strictEqual(fs.existsSync(path.join(kernelSpecDir, 'kernel.json')), false);
+		} finally {
+			restoreHostEnv();
+		}
 	});
 
 	test('a bundled kernel that cannot run leaves the installed one registered', async function () {
@@ -581,13 +590,20 @@ suite('runtime registration', () => {
 			return { version: STUB_VERSION };
 		};
 
-		const first = managerFor(extensionPath, tempDir(), { probe, globalState });
-		assert.strictEqual((await collect(first.manager.discoverAllRuntimes()))[0].runtimeVersion, STUB_VERSION);
-		assert.strictEqual(probes, 1);
+		// The count is per kernel, so it only means one thing if the bundled
+		// kernel is the only one discovery can see.
+		isolateHostEnv(tempDir());
+		try {
+			const first = managerFor(extensionPath, tempDir(), { probe, globalState });
+			assert.strictEqual((await collect(first.manager.discoverAllRuntimes()))[0].runtimeVersion, STUB_VERSION);
+			assert.strictEqual(probes, 1);
 
-		const second = managerFor(extensionPath, tempDir(), { probe, globalState });
-		assert.strictEqual((await collect(second.manager.discoverAllRuntimes()))[0].runtimeVersion, STUB_VERSION);
-		assert.strictEqual(probes, 1, 'the kernel was probed again');
+			const second = managerFor(extensionPath, tempDir(), { probe, globalState });
+			assert.strictEqual((await collect(second.manager.discoverAllRuntimes()))[0].runtimeVersion, STUB_VERSION);
+			assert.strictEqual(probes, 1, 'the kernel was probed again');
+		} finally {
+			restoreHostEnv();
+		}
 	});
 
 	test('a kernel replaced in place is probed again', async () => {
@@ -800,6 +816,33 @@ suite('kernel probe', () => {
 		const kernelPath = path.join(dir, binaryName);
 		fs.writeFileSync(kernelPath, '#!/bin/sh\nexit 1\n');
 		fs.chmodSync(kernelPath, 0o755);
+		assert.strictEqual(await probeKernel(kernelPath), undefined);
+	});
+
+	test('a kernel older than --version passes, without one', async function () {
+		// Kernels released before the flag reject it the way clap does, exiting
+		// non-zero. That is indistinguishable by exit status from a binary the
+		// loader killed, so the probe falls back to `--help`, which every
+		// version answers. Dropping these would take away the install the user
+		// already had.
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const kernelPath = writeStubKernel(
+			tempDir(),
+			0o755,
+			'#!/bin/sh\ncase "$1" in --help) exit 0 ;; *) echo "error: unexpected argument" >&2; exit 2 ;; esac\n',
+		);
+		assert.deepStrictEqual(await probeKernel(kernelPath), { version: undefined });
+	});
+
+	test('a binary that rejects every argument does not pass', async function () {
+		// The `--help` fallback must not become a way back in for a kernel that
+		// exec's and then dies, which is the failure the probe exists for.
+		if (process.platform === 'win32') {
+			this.skip();
+		}
+		const kernelPath = writeStubKernel(tempDir(), 0o755, '#!/bin/sh\nexit 127\n');
 		assert.strictEqual(await probeKernel(kernelPath), undefined);
 	});
 
