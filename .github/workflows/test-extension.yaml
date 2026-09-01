@@ -108,17 +108,29 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.86.0
 
+      # Borrow publish.yaml's cargo cache rather than keeping one of our own.
+      # That workflow runs on every PR too and builds this very binary, with
+      # the same toolchain and lockfile, so the key matches exactly and the
+      # dependencies come back warm — the kernel build is ~16 minutes cold and
+      # under 3 warm. `save-if: false` is the point: this job only ever reads,
+      # so it costs nothing against a 10 GB repo-wide cache limit that other
+      # workflows have already mostly spent.
+      #
+      # The coupling is to publish.yaml's `shared-key` and its 1.86 toolchain.
+      # Change either there and this silently goes cold, which is slow rather
+      # than broken; the same is true if that entry is ever evicted.
+      - name: Restore the cargo cache built by publish.yaml
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os }}-publish
+          save-if: false
+
       - name: Install tree-sitter-cli
         run: npm install -g tree-sitter-cli
 
       - name: Install XVFB
         run: sudo apt-get -y update && sudo apt-get -y install xvfb
 
-      # Deliberately uncached. This is the longest step in the workflow by far
-      # — around 16 minutes cold against 2.5 warm — but a cargo cache for it
-      # would be another entry of roughly half a gigabyte against a 10 GB repo
-      # limit that is already most of the way spent. The build is the price of
-      # the job; the cache budget is shared with every other workflow.
       - name: Build the kernel
         working-directory: .
         run: cargo build --release --bin ggsql-jupyter
