@@ -97,3 +97,17 @@ pub fn infer_scale_target_type(scale: &Scale) -> Option<ArrayElementType> {
         ScaleTypeKind::Identity => None,
     }
 }
+
+/// Infer a scale type from an explicit input range, used when no data trains the
+/// scale (e.g. a diagonal rule that keeps its own position out of scale
+/// training, but the user gave `SCALE x FROM (0, 10)`). A numeric or temporal
+/// range is continuous; a string/boolean range is discrete.
+pub fn infer_scale_type_from_input_range(range: &[ArrayElement]) -> Option<ScaleType> {
+    match ArrayElement::infer_type(range)? {
+        ArrayElementType::Number
+        | ArrayElementType::Date
+        | ArrayElementType::DateTime
+        | ArrayElementType::Time => Some(ScaleType::continuous()),
+        ArrayElementType::Boolean | ArrayElementType::String => Some(ScaleType::discrete()),
+    }
+}

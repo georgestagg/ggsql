@@ -7,12 +7,16 @@ Provides commands for executing ggsql queries with various data sources and outp
 use clap::{Parser, Subcommand, ValueEnum};
 use ggsql::reader::{Reader, Spec};
 use ggsql::validate::validate;
+use ggsql::writer::{Writer, WriterOptions};
 use ggsql::{parser, VERSION};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 #[cfg(feature = "vegalite")]
-use ggsql::writer::{VegaLiteWriter, Writer};
+use ggsql::writer::VegaLiteWriter;
+
+#[cfg(feature = "png")]
+use ggsql::writer::PngWriter;
 
 mod docs {
     include!(concat!(env!("OUT_DIR"), "/docs_data.rs"));
@@ -27,6 +31,32 @@ pub struct Cli {
     pub command: Commands,
 }
 
+enum Output {
+    Text(String),
+    /// Only a raster writer produces bytes, so nothing constructs this when no
+    /// such writer is compiled in.
+    #[cfg_attr(not(feature = "png"), allow(dead_code))]
+    Bin(Vec<u8>),
+}
+
+/// The writer to render with, plus the `--writer-option` settings for it.
+struct WriterSpec {
+    name: String,
+    options: WriterOptions,
+}
+
+impl WriterSpec {
+    /// Build from the raw flags, exiting with the parse error if an option is
+    /// not `key=value`.
+    fn new(name: String, options: Vec<String>) -> Self {
+        let options = WriterOptions::parse(options).unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+        Self { name, options }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Execute a ggsql query
@@ -35,15 +65,33 @@ pub enum Commands {
         query: String,
 
         /// Data source connection string (duckdb://, sqlite://, odbc://)
-        #[arg(long, default_value = "duckdb://memory")]
+        #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format (vegalite)
-        #[arg(long, default_value = "vegalite")]
+        /// In-memory cache backend wrapping the reader (duckdb, sqlite). Off by default.
+        #[arg(long)]
+        cache: Option<String>,
+
+        /// Output format: vegalite (JSON), or png (raster image; requires the
+        /// `png` feature and a GPU adapter)
+        #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
+        /// Settings for the chosen writer, as `key=value`. Repeatable, and one
+        /// flag may carry several settings separated by `;` (quote it, as most
+        /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
+        /// png writer takes width, height, units, dpi, and background;
+        /// the vegalite writer takes none.
+        #[arg(
+            short = 'D',
+            long = "writer-option",
+            visible_alias = "writer-options",
+            value_name = "KEY=VALUE[;...]"
+        )]
+        writer_options: Vec<String>,
+
         /// Output file path
-        #[arg(long)]
+        #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Show verbose output (execution details, statistics)
@@ -57,15 +105,33 @@ pub enum Commands {
         file: PathBuf,
 
         /// Data source connection string (duckdb://, sqlite://, odbc://)
-        #[arg(long, default_value = "duckdb://memory")]
+        #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// Output format (vegalite)
-        #[arg(long, default_value = "vegalite")]
+        /// In-memory cache backend wrapping the reader (duckdb, sqlite). Off by default.
+        #[arg(long)]
+        cache: Option<String>,
+
+        /// Output format: vegalite (JSON), or png (raster image; requires the
+        /// `png` feature and a GPU adapter)
+        #[arg(short, long, default_value = "vegalite")]
         writer: String,
 
+        /// Settings for the chosen writer, as `key=value`. Repeatable, and one
+        /// flag may carry several settings separated by `;` (quote it, as most
+        /// shells read `;` themselves): `-D 'width=1600;dpi=150'`. The
+        /// png writer takes width, height, units, dpi, and background;
+        /// the vegalite writer takes none.
+        #[arg(
+            short = 'D',
+            long = "writer-option",
+            visible_alias = "writer-options",
+            value_name = "KEY=VALUE[;...]"
+        )]
+        writer_options: Vec<String>,
+
         /// Output file path
-        #[arg(long)]
+        #[arg(short, long)]
         output: Option<PathBuf>,
 
         /// Show verbose output (execution details, statistics)
@@ -89,7 +155,7 @@ pub enum Commands {
         query: String,
 
         /// Data source connection string for column validation (duckdb://, sqlite://, polars://)
-        #[arg(long)]
+        #[arg(short, long)]
         reader: Option<String>,
     },
 
@@ -147,27 +213,33 @@ fn main() -> anyhow::Result<()> {
         Commands::Exec {
             query,
             reader,
+            cache,
             writer,
+            writer_options,
             output,
             verbose,
         } => {
             if verbose {
                 eprintln!("Executing query: {}", query);
             }
-            cmd_exec(query, reader, writer, output, verbose);
+            let writer = WriterSpec::new(writer, writer_options);
+            cmd_exec(query, reader, cache, &writer, output, verbose);
         }
 
         Commands::Run {
             file,
             reader,
+            cache,
             writer,
+            writer_options,
             output,
             verbose,
         } => {
             if verbose {
                 eprintln!("Running query from file: {}", file.display());
             }
-            cmd_run(file, reader, writer, output, verbose);
+            let writer = WriterSpec::new(writer, writer_options);
+            cmd_run(file, reader, cache, &writer, output, verbose);
         }
 
         Commands::Parse { query, format } => {
@@ -194,9 +266,16 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_run(file: PathBuf, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+fn cmd_run(
+    file: PathBuf,
+    reader: String,
+    cache: Option<String>,
+    writer: &WriterSpec,
+    output: Option<PathBuf>,
+    verbose: bool,
+) {
     match std::fs::read_to_string(&file) {
-        Ok(query) => cmd_exec(query, reader, writer, output, verbose),
+        Ok(query) => cmd_exec(query, reader, cache, writer, output, verbose),
         Err(e) => {
             eprintln!("Failed to read file {}: {}", file.display(), e);
             std::process::exit(1);
@@ -204,79 +283,67 @@ fn cmd_run(file: PathBuf, reader: String, writer: String, output: Option<PathBuf
     }
 }
 
-fn cmd_exec(query: String, reader: String, writer: String, output: Option<PathBuf>, verbose: bool) {
+fn cmd_exec(
+    query: String,
+    reader: String,
+    cache: Option<String>,
+    writer: &WriterSpec,
+    output: Option<PathBuf>,
+    verbose: bool,
+) {
+    use ggsql::reader::connection;
+
     if verbose {
         eprintln!("Reader: {}", reader);
-        eprintln!("Writer: {}", writer);
+        if let Some(ref cache) = cache {
+            eprintln!("Cache: {}", cache);
+        }
+        eprintln!("Writer: {}", writer.name);
         if let Some(ref output_file) = output {
             eprintln!("Output: {}", output_file.display());
         }
     }
 
-    if reader.starts_with("duckdb://") {
-        #[cfg(feature = "duckdb")]
-        {
-            let r = match ggsql::reader::DuckDBReader::from_connection_string(&reader) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Failed to create reader: {}", e);
+    // Build the reader. A composite `<cache>+<primary>://` URI is handled by
+    // `reader_from_uri`; the `--cache` flag is an explicit alternative and may
+    // not be combined with a composite URI.
+    let built = match cache {
+        Some(cache_scheme) => {
+            if connection::split_cache_uri(&reader).is_some() {
+                eprintln!(
+                    "Cannot combine --cache with a composite '<cache>+<primary>://' connection string"
+                );
+                std::process::exit(1);
+            }
+            // `--cache <scheme>` is sugar for the composite `<scheme>+<primary>://` URI.
+            match reader.split_once("://") {
+                Some((scheme, rest)) => {
+                    connection::reader_from_uri(&format!("{cache_scheme}+{scheme}://{rest}"))
+                }
+                None => {
+                    eprintln!("Invalid --reader connection string: {reader}");
                     std::process::exit(1);
                 }
-            };
-            exec_with_reader(&query, &r, &writer, output, verbose);
+            }
         }
-        #[cfg(not(feature = "duckdb"))]
-        {
-            eprintln!("DuckDB reader not compiled in. Rebuild with --features duckdb");
+        None => connection::reader_from_uri(&reader),
+    };
+
+    let reader = match built {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to create reader: {}", e);
             std::process::exit(1);
         }
-    } else if reader.starts_with("sqlite://") {
-        #[cfg(feature = "sqlite")]
-        {
-            let r = match ggsql::reader::SqliteReader::from_connection_string(&reader) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Failed to create reader: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            exec_with_reader(&query, &r, &writer, output, verbose);
-        }
-        #[cfg(not(feature = "sqlite"))]
-        {
-            eprintln!("SQLite reader not compiled in. Rebuild with --features sqlite");
-            std::process::exit(1);
-        }
-    } else if reader.starts_with("odbc://") {
-        #[cfg(feature = "odbc")]
-        {
-            let r = match ggsql::reader::OdbcReader::from_connection_string(&reader) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("Failed to create reader: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            exec_with_reader(&query, &r, &writer, output, verbose);
-        }
-        #[cfg(not(feature = "odbc"))]
-        {
-            eprintln!("ODBC reader not compiled in. Rebuild with --features odbc");
-            std::process::exit(1);
-        }
-    } else if reader.starts_with("postgres://") || reader.starts_with("postgresql://") {
-        eprintln!("PostgreSQL reader is not yet implemented");
-        std::process::exit(1);
-    } else {
-        eprintln!("Unsupported connection string: {}", reader);
-        std::process::exit(1);
-    }
+    };
+
+    exec_with_reader(&query, reader.as_ref(), writer, output, verbose);
 }
 
-fn exec_with_reader<R: Reader>(
+fn exec_with_reader<R: Reader + ?Sized>(
     query: &str,
     reader: &R,
-    writer: &str,
+    writer: &WriterSpec,
     output: Option<PathBuf>,
     verbose: bool,
 ) {
@@ -309,7 +376,7 @@ fn exec_with_reader<R: Reader>(
     render_spec(spec, writer, output, verbose);
 }
 
-fn render_spec(spec: Spec, writer: &str, output: Option<PathBuf>, verbose: bool) {
+fn render_spec(spec: Spec, writer: &WriterSpec, output: Option<PathBuf>, verbose: bool) {
     if verbose {
         let metadata = spec.metadata();
         eprintln!("\nQuery executed:");
@@ -323,47 +390,53 @@ fn render_spec(spec: Spec, writer: &str, output: Option<PathBuf>, verbose: bool)
         std::process::exit(1);
     }
 
-    // Check writer
-    if writer != "vegalite" {
-        eprintln!("\nNote: Writer '{}' not yet implemented", writer);
-        eprintln!("Available writers: vegalite")
-    }
-
-    #[cfg(not(feature = "vegalite"))]
-    {
-        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
-        std::process::exit(1)
-    }
-
-    // Render
-    let vl_writer = VegaLiteWriter::new();
-    let json_output = match vl_writer.render(&spec) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Failed to generate Vega-Lite output: {}", e);
-            std::process::exit(1);
+    let render = match writer.name.as_str() {
+        "vegalite" => render_vegalite(&spec, &writer.options),
+        "png" => render_png(&spec, &writer.options),
+        other => {
+            eprintln!("Unknown writer '{}'", other);
+            eprintln!("Available writers: png, vegalite");
+            std::process::exit(1)
         }
     };
 
-    if output.is_none() {
-        // Empty output location, write to stdout
-        println!("{}", json_output);
-        return;
-    }
-    let output = output.unwrap();
-
-    // Write to file
-    match std::fs::write(&output, json_output) {
-        Ok(_) => {
-            if verbose {
-                eprintln!("\nVega-Lite JSON written to: {}", output.display());
+    match (render, output) {
+        (Output::Text(txt), None) => {
+            println!("{}", txt);
+        }
+        (Output::Text(txt), Some(path)) => match std::fs::write(&path, txt) {
+            Ok(_) => {
+                if verbose {
+                    eprintln!("\nVega-Lite JSON written to: {}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to write to output file: {}", e);
+                std::process::exit(1);
+            }
+        },
+        (Output::Bin(buf), None) => {
+            if std::io::stdout().is_terminal() {
+                eprintln!("Suppressing output in terminal. Pipe output to another process or use --output <FILE> to save to a file.");
+            } else {
+                std::io::stdout().write_all(&buf).unwrap_or_else(|e| {
+                    eprintln!("Failed to write buffer with the error: {}", e);
+                    std::process::exit(1);
+                });
             }
         }
-        Err(e) => {
-            eprintln!("Failed to write to output file: {}", e);
-            std::process::exit(1);
-        }
-    }
+        (Output::Bin(buf), Some(path)) => match std::fs::write(&path, buf) {
+            Ok(_) => {
+                if verbose {
+                    eprintln!("\nPNG written to: {}", path.display());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to write to output file: {}", e);
+                std::process::exit(1);
+            }
+        },
+    };
 }
 
 fn cmd_parse(query: String, format: String) {
@@ -430,7 +503,7 @@ fn cmd_validate(query: String, _reader: Option<String>) {
 }
 
 // Prints a CSV-like output to stdout with aligned columns
-fn print_table_fallback<R: Reader>(query: &str, reader: &R, max_rows: usize) {
+fn print_table_fallback<R: Reader + ?Sized>(query: &str, reader: &R, max_rows: usize) {
     let source_tree = match parser::SourceTree::new(query) {
         Ok(st) => st,
         Err(e) => {
@@ -709,4 +782,56 @@ fn cmd_skill(format: Option<DocsFormat>) {
             }
         }
     }
+}
+
+fn render_vegalite(spec: &Spec, options: &WriterOptions) -> Output {
+    #[cfg(feature = "vegalite")]
+    {
+        // Configure from --writer-option, then render
+        let vl_writer = unwrap_writer(VegaLiteWriter::from_options(options));
+        match vl_writer.render(spec) {
+            Ok(json) => Output::Text(json),
+            Err(e) => {
+                eprintln!("Failed to generate Vega-Lite output: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(feature = "vegalite"))]
+    {
+        let _ = (spec, options);
+        eprintln!("VegaLite writer not compiled in. Rebuild with --features vegalite");
+        std::process::exit(1)
+    }
+}
+
+fn render_png(spec: &Spec, options: &WriterOptions) -> Output {
+    #[cfg(feature = "png")]
+    {
+        // Configure from --writer-option, then render
+        let png_writer = unwrap_writer(PngWriter::from_options(options));
+        match png_writer.render(spec) {
+            Ok(png) => Output::Bin(png),
+            Err(e) => {
+                eprintln!("Failed to generate PNG output: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(feature = "png"))]
+    {
+        let _ = (spec, options);
+        eprintln!("PNG writer not compiled in. Rebuild with --features png");
+        std::process::exit(1)
+    }
+}
+
+/// A writer built from its options, or the option error on stderr and a
+/// non-zero exit — an unusable setting is the user's mistake, not a warning.
+#[cfg(any(feature = "vegalite", feature = "png"))]
+fn unwrap_writer<W>(writer: ggsql::Result<W>) -> W {
+    writer.unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    })
 }

@@ -32,14 +32,14 @@ ggsql-jupyter/
 
 1. `ggsql-jupyter --install` writes a kernelspec into the active Python environment (Jupyter, conda, uv, virtualenv — auto-detected).
 2. `ggsql-jupyter <connection-file>` is the entry point Jupyter invokes; it reads the connection JSON, opens the five ZMQ sockets (shell, control, iopub, stdin, heartbeat), and runs `kernel.rs`'s message loop.
-3. Each `execute_request` is dispatched through `executor.rs` → `ggsql::reader::DuckDBReader::execute(...)`. The kernel keeps a single persistent in-memory DuckDB session so cells share state.
+3. Each `execute_request` is dispatched through `executor.rs` → `ggsql::reader::DuckDBReader::execute(...)`. The kernel keeps a single persistent in-memory DuckDB session so cells share state. Readers are built via the library factory `ggsql::reader::connection::reader_from_uri`, so a composite `<cache>+<primary>://` connection string (e.g. via `-- @connect:`) wraps the reader in an in-memory caching layer — the persistent kernel session means repeated cells reuse cached remote reads.
 4. The result is wrapped by `display.rs` into a Jupyter `display_data` message — Vega-Lite specs go through vega-embed in an HTML payload (works in classic Jupyter, JupyterLab, and Positron); pure SQL goes out as an HTML table.
 
 ## Positron-specific bits
 
 - Kernel info advertises `"output_location": "plot"` so visualizations route to Positron's Plot pane.
 - `data_explorer.rs` implements Positron's data-explorer comm channel (registered query results become explorable tables).
-- The companion VS Code extension (`ggsql-vscode/`) discovers this binary via the `ggsql.kernelPath` setting, the active Jupyter kernelspec, or `PATH`.
+- The companion VS Code extension (`ggsql-vscode/`) ships a copy of this binary and also discovers installed ones via the `ggsql.kernelPath` setting, the Jupyter kernelspec directories, the native install locations, or `PATH`. It runs each one with `--version` to name the runtime it registers, so **keep `--version` working**: a kernel that does not answer it is still offered, but without a version in the picker. See [Finding the kernel](../ggsql-vscode/CLAUDE.md#finding-the-kernel).
 
 ## Build & install
 

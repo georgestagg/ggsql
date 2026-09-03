@@ -130,6 +130,19 @@ impl ScaleTypeTrait for Continuous {
                 ),
             },
             ParamDefinition {
+                name: "minor_breaks",
+                // No static default: the effective one is the transform's
+                // `default_minor_break_count()` (1 linear, 8 log family, 3 temporal),
+                // resolved in `ScaleTypeTrait::resolve`.
+                default: DefaultParamValue::Null,
+                // Number (minors *per major interval*, 0 for none), Array of numbers
+                // (explicit positions), or String (temporal interval).
+                constraint: ParamConstraint::number_or_array_or_string(
+                    NumberConstraint::count(0.0),
+                    ArrayConstraint::of_numbers(NumberConstraint::unconstrained()),
+                ),
+            },
+            ParamDefinition {
                 name: "pretty",
                 default: DefaultParamValue::Boolean(true),
                 constraint: ParamConstraint::boolean(),

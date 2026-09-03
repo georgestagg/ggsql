@@ -32,14 +32,14 @@
       {
         "id": "ggsql",
         "extensions": [
+          ".gsql",
           ".ggsql",
-          ".ggsql.sql",
-          ".gsql"
+          ".ggsql.sql"
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icon.png",
-          "dark": "./icon.png"
+          "light": "./resources/ggsql-lang-icon.svg",
+          "dark": "./resources/ggsql-lang-icon.svg"
         }
       }
     ],
@@ -81,6 +81,17 @@
         "command": "ggsql.runCurrentAdvance",
         "category": "ggsql",
         "title": "Run Query and Advance"
+      },
+      {
+        "command": "ggsql.createNewFile",
+        "category": "ggsql",
+        "title": "New ggsql File",
+        "shortTitle": "ggsql File"
+      },
+      {
+        "command": "ggsql.resetSqlAssociationPrompt",
+        "category": "ggsql",
+        "title": "Reset .sql File Association Prompt"
       }
     ],
     "keybindings": [
@@ -88,18 +99,18 @@
         "command": "ggsql.runCurrentAdvance",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       },
       {
         "command": "ggsql.runCurrentAdvance",
         "key": "shift+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       },
       {
         "command": "ggsql.runQuery",
         "key": "ctrl+shift+enter",
         "mac": "cmd+shift+enter",
-        "when": "editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
+        "when": "isPositron && editorTextFocus && editorLangId == ggsql && ggsql.hasCodeCells && !findInputFocussed && !replaceInputFocussed"
       }
     ],
     "menus": {
@@ -107,11 +118,40 @@
         {
           "command": "ggsql.sourceCurrentFile",
           "group": "navigation@0",
-          "when": "resourceLangId == ggsql && !isInDiffEditor"
+          "when": "isPositron && (resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
         },
         {
           "command": "workbench.action.positronConsole.executeCode",
-          "when": "resourceLangId == ggsql && !isInDiffEditor"
+          "when": "isPositron && (resourceLangId == ggsql || (resourceLangId == sql && config.ggsql.enableSqlFiles)) && !isInDiffEditor"
+        }
+      ],
+      "file/newFile": [
+        {
+          "command": "ggsql.createNewFile",
+          "group": "ggsql",
+          "when": "!virtualWorkspace"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ggsql.sourceCurrentFile",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runQuery",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runCellsAbove",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runNextCell",
+          "when": "isPositron"
+        },
+        {
+          "command": "ggsql.runCurrentAdvance",
+          "when": "isPositron"
         }
       ]
     },
@@ -122,7 +162,12 @@
         "ggsql.kernelPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the ggsql-jupyter executable. If empty, uses 'ggsql-jupyter' from PATH."
+          "markdownDescription": "Path to a `ggsql-jupyter` executable to offer alongside the kernels found automatically, listed ahead of them. A bare name is looked up on `PATH`. Leave this empty unless you have a kernel in a place the extension does not look: it ships one, and it finds the ones installed on this machine."
+        },
+        "ggsql.enableSqlFiles": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer ggsql run buttons and code cells in plain `.sql` files. ggsql is a superset of SQL, so the ggsql console can execute them. Turn this off if you use `.sql` files with other database tooling.\n\nTo also give `.sql` files ggsql syntax highlighting, map them to the ggsql language with `#files.associations#`. See [Using ggsql with `.sql` files](https://ggsql.org/get_started/tooling/positron-vscode.html#sql-files) for details."
         }
       }
     }
@@ -135,21 +180,33 @@
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "npm run check-types && node esbuild.js --production",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "pretest": "npm run compile-tests && npm run package",
+    "test:grammar": "vscode-tmgrammar-test -g syntaxes/ggsql.tmLanguage.json \"src/test/grammar/*.gsql\"",
+    "test:extension": "vscode-test",
+    "test:integration": "npm run compile-tests && npm run package && node ./out-test/test/runIntegration.js",
+    "test": "npm run test:grammar && npm run test:extension"
   },
   "dependencies": {
     "toml": "^3.0.0"
   },
   "devDependencies": {
-    "@posit-dev/positron": "^0.2.2",
+    "@posit-dev/positron": "^0.2.7",
+    "@posit-dev/positron-test-electron": "^0.0.3",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^18.x",
     "@types/vscode": "^1.75.0",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
     "@typescript-eslint/parser": "^8.57.1",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.27.4",
     "eslint": "^10.0.3",
+    "mocha": "^11.7.6",
     "npm-run-all": "^4.1.5",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vscode-tmgrammar-test": "^0.1.3"
   },
   "overrides": {
     "uri-js": "npm:uri-js-replace"

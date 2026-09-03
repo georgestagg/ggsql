@@ -1,0 +1,48 @@
+-- SYNTAX TEST "source.ggsql"
+
+-- a leading comment
+-- <------------------- comment.line.double-dash.ggsql
+
+SELECT date, revenue, region FROM sales WHERE year = 2024
+-- <----- keyword.other.ggsql
+--                           ^^^^ keyword.other.ggsql
+--                                      ^^^^^ keyword.other.ggsql
+--                                                   ^^^^ constant.numeric.ggsql
+
+VISUALISE date AS x, revenue AS y, region AS color
+-- <-------- keyword.other.ggsql
+--             ^^ keyword.other.ggsql
+--                ^ support.type.aesthetic.ggsql
+--                              ^ support.type.aesthetic.ggsql
+--                                           ^^^^^ support.type.aesthetic.ggsql
+
+DRAW point
+-- <--- keyword.other.ggsql
+--   ^^^^^ support.type.geom.ggsql
+
+DRAW line
+--   ^^^^ support.type.geom.ggsql
+
+DRAW bar
+--   ^^^ support.type.geom.ggsql
+
+SCALE DISCRETE color TO viridis
+-- <---- keyword.other.ggsql
+--    ^^^^^^^^ keyword.control.scale-modifier.ggsql
+--                      ^^^^^^^ constant.language.scale-type.ggsql
+
+SCALE y VIA log10
+--          ^^^^^ constant.language.scale-type.ggsql
+
+LABEL title => 'Sales by Region', x => 'Date', y => 'Revenue'
+-- <---- keyword.other.ggsql
+--    ^^^^^ support.type.property.ggsql
+--          ^^ keyword.operator.fatarrow.ggsql
+--             ^^^^^^^^^^^^^^^^^ string.quoted.single.ggsql
+--                                ^ support.type.property.ggsql
+--                                             ^ support.type.property.ggsql
+
+FACET region SETTING free => 'y', missing => 'repeat'
+-- <---- keyword.other.ggsql
+--                   ^^^^ support.type.property.ggsql
+--                                ^^^^^^^ support.type.property.ggsql

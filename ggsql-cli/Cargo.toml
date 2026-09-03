@@ -14,6 +14,13 @@ build = "build.rs"
 name = "ggsql"
 path = "src/main.rs"
 
+# Visual test harness: renders every `{ggsql}` cell in the docs into an HTML
+# report. Gated so a plain workspace build never pulls in the GPU stack.
+[[example]]
+name = "visual_test"
+path = "examples/visual_test.rs"
+required-features = ["png", "duckdb", "vegalite", "builtin-data"]
+
 [dependencies]
 ggsql = { workspace = true }
 
@@ -43,6 +50,7 @@ parquet = ["ggsql/parquet"]
 sqlite = ["ggsql/sqlite"]
 odbc = ["ggsql/odbc"]
 vegalite = ["ggsql/vegalite"]
+png = ["ggsql/png"]
 builtin-data = ["ggsql/builtin-data"]
 all-readers = ["duckdb", "sqlite", "odbc"]
 

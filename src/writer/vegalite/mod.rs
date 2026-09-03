@@ -27,7 +27,7 @@ mod projection;
 
 use crate::plot::ArrayElement;
 use crate::plot::{ParameterValue, Parameters, Scale, ScaleTypeKind};
-use crate::writer::Writer;
+use crate::writer::{Writer, WriterOptions};
 use crate::{naming, AestheticValue, DataFrame, GgsqlError, Plot, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -201,11 +201,15 @@ fn build_layers(
             }));
         }
 
+        // Build encoding for this layer. Some encodings need a `calculate` of their
+        // own — an identity-scaled column is converted per row — and those run after
+        // the source filter, so they are appended to the same array.
+        let (mut encoding, encoding_transforms) =
+            build_layer_encoding(layer, df, spec, projection)?;
+        transforms.extend(encoding_transforms);
+
         // Set transform array on layer spec
         layer_spec["transform"] = json!(transforms);
-
-        // Build encoding for this layer
-        let mut encoding = build_layer_encoding(layer, df, spec, projection)?;
 
         // For point marks, remove fill: null from encoding — Vega-Lite point marks
         // are unfilled by default, so omitting it achieves the same visual result
@@ -245,13 +249,17 @@ fn build_layers(
 ///
 /// The `projection` determines how internal position aesthetics (pos1, pos2) are
 /// mapped to Vega-Lite encoding channel names (x/y for cartesian, theta/radius for polar).
+///
+/// Returns the encoding plus any `calculate` transforms its channels depend on (see
+/// `EncodingContext::transforms`), which the caller must add to the layer.
 fn build_layer_encoding(
     layer: &crate::plot::Layer,
     df: &DataFrame,
     spec: &Plot,
     projection: &dyn ProjectionRenderer,
-) -> Result<serde_json::Map<String, Value>> {
+) -> Result<(serde_json::Map<String, Value>, Vec<Value>)> {
     let mut encoding = serde_json::Map::new();
+    let mut transforms: Vec<Value> = Vec::new();
 
     // Get aesthetic context for name transformation
     let aesthetic_ctx = spec.get_aesthetic_context();
@@ -280,6 +288,7 @@ fn build_layer_encoding(
         spec,
         titled_families: &mut titled_families,
         primary_aesthetics: &primary_aesthetics,
+        transforms: &mut transforms,
     };
 
     // Build encoding channels for each aesthetic mapping
@@ -355,37 +364,23 @@ fn build_layer_encoding(
         encoding::RenderContext::new(&spec.scales, projection, spec.get_aesthetic_context());
     let (_, _, pos1_offset, pos2, _, pos2_offset) = &context.channels;
 
-    // Add pos1 offset encoding for dodged positions (pos1offset column)
-    // This column is created by position::apply_dodge() for Position::Dodge
-    // The offset values are centered around 0 (e.g., -0.3, 0, +0.3 for 3 groups)
-    // We set domain [-0.5, 0.5] to ensure the scale is symmetric and maps to full band width
+    // Add the offset encodings for dodged and jittered positions (the
+    // pos1offset / pos2offset columns, created by the position adjustment).
+    // The offset values are centered around 0 (e.g., -0.3, 0, +0.3 for 3
+    // groups) and read as band fractions — see `encoding::offset_encoding`.
     let pos1offset_col = naming::aesthetic_column("pos1offset");
     if df.column(&pos1offset_col).is_ok() {
         encoding.insert(
             pos1_offset.clone(),
-            json!({
-                "field": pos1offset_col,
-                "type": "quantitative",
-                "scale": {
-                    "domain": [-0.5, 0.5]
-                }
-            }),
+            encoding::offset_encoding(&pos1offset_col, false),
         );
     }
 
-    // Add pos2 offset encoding for vertical jitter (pos2offset column)
-    // This column is created by position::Jitter when pos2 axis is discrete
     let pos2offset_col = naming::aesthetic_column("pos2offset");
     if df.column(&pos2offset_col).is_ok() {
         encoding.insert(
             pos2_offset.clone(),
-            json!({
-                "field": pos2offset_col,
-                "type": "quantitative",
-                "scale": {
-                    "domain": [-0.5, 0.5]
-                }
-            }),
+            encoding::offset_encoding(&pos2offset_col, true),
         );
     }
 
@@ -406,7 +401,7 @@ fn build_layer_encoding(
     let renderer = get_renderer(&layer.geom);
     renderer.modify_encoding(&mut encoding, layer, &context)?;
 
-    Ok(encoding)
+    Ok((encoding, transforms))
 }
 
 /// Apply faceting to Vega-Lite spec
@@ -743,7 +738,7 @@ fn apply_facet_label_renaming(
 
     let label_expr = if is_binned {
         // For binned facets: reuse build_symbol_legend_label_mapping and build_label_expr
-        build_binned_facet_label_expr(label_mapping, scale)
+        build_binned_facet_label_expr(scale)
     } else {
         // For discrete facets: compare datum.value against string values
         build_discrete_facet_label_expr(label_mapping)
@@ -753,98 +748,28 @@ fn apply_facet_label_renaming(
     facet_def["header"] = json!({ "labelExpr": label_expr });
 }
 
-/// Build labelExpr for binned facet values.
+/// Build a `labelExpr` naming each panel of a binned facet by its bin's range.
 ///
-/// For binned facets, `datum.value` contains the bin midpoint (e.g., 25 for bin [20-30)).
-/// This function maps midpoint values to range-style labels like "Lower – Upper",
-/// using custom labels from label_mapping when available.
-///
-/// Unlike `build_symbol_legend_label_mapping` which maps Vega-Lite's auto-generated
-/// range labels, this function maps numeric midpoints to our range labels.
-fn build_binned_facet_label_expr(
-    label_mapping: Option<&HashMap<String, Option<String>>>,
-    scale: Option<&Scale>,
-) -> String {
+/// Unlike `build_symbol_legend_label_mapping`, which keys on Vega-Lite's
+/// auto-generated range labels, this keys on the numeric midpoints the facet
+/// column carries.
+fn build_binned_facet_label_expr(scale: Option<&Scale>) -> String {
     let Some(scale) = scale else {
         return "datum.value".to_string();
     };
-
-    let breaks = match scale.properties.get("breaks") {
-        Some(ParameterValue::Array(arr)) => arr,
-        _ => return "datum.value".to_string(),
-    };
-
-    if breaks.len() < 2 {
-        return "datum.value".to_string();
-    }
-
-    // Get closed property for determining open-format labels
-    let closed = scale
-        .properties
-        .get("closed")
-        .and_then(|v| match v {
-            ParameterValue::String(s) => Some(s.as_str()),
-            _ => None,
+    // A facet column carries each bin's midpoint, so the expression compares
+    // `datum.value` against those rather than against Vega-Lite's own range
+    // text. The labels themselves are ggsql's, shared with the symbol legend and
+    // the raster writer via `Scale::binned_bins`.
+    let midpoint_to_range: Vec<(String, Option<String>)> = scale
+        .binned_bins()
+        .iter()
+        .filter_map(|bin| {
+            let midpoint =
+                calculate_midpoint_string(&bin.lower, &bin.upper, scale.transform.as_ref())?;
+            Some((midpoint, Some(bin.label.clone())))
         })
-        .unwrap_or("left");
-
-    let num_bins = breaks.len() - 1;
-
-    // Build mapping from midpoint to range label
-    let mut midpoint_to_range: Vec<(String, Option<String>)> = Vec::new();
-
-    for i in 0..num_bins {
-        let lower = &breaks[i];
-        let upper = &breaks[i + 1];
-
-        // Calculate midpoint for comparison
-        let midpoint_str = calculate_midpoint_string(lower, upper, scale.transform.as_ref());
-        let Some(midpoint_str) = midpoint_str else {
-            continue;
-        };
-
-        // Get break values as strings (for default labels)
-        let lower_str = lower.to_key_string();
-        let upper_str = upper.to_key_string();
-
-        // Build the range label
-        let range_label = if let Some(label_mapping) = label_mapping {
-            // Check if terminals are suppressed
-            let lower_suppressed = label_mapping.get(&lower_str) == Some(&None);
-            let upper_suppressed = label_mapping.get(&upper_str) == Some(&None);
-
-            // Get custom labels (fall back to break values)
-            let lower_label = label_mapping
-                .get(&lower_str)
-                .cloned()
-                .flatten()
-                .unwrap_or_else(|| lower_str.clone());
-            let upper_label = label_mapping
-                .get(&upper_str)
-                .cloned()
-                .flatten()
-                .unwrap_or_else(|| upper_str.clone());
-
-            // Determine label format based on terminal suppression
-            if i == 0 && lower_suppressed {
-                // First bin with suppressed lower terminal → open format
-                let symbol = if closed == "right" { "≤" } else { "<" };
-                Some(format!("{} {}", symbol, upper_label))
-            } else if i == num_bins - 1 && upper_suppressed {
-                // Last bin with suppressed upper terminal → open format
-                let symbol = if closed == "right" { ">" } else { "≥" };
-                Some(format!("{} {}", symbol, lower_label))
-            } else {
-                // Standard range format: "lower – upper"
-                Some(format!("{} – {}", lower_label, upper_label))
-            }
-        } else {
-            // No label mapping - use default range format with break values
-            Some(format!("{} – {}", lower_str, upper_str))
-        };
-
-        midpoint_to_range.push((midpoint_str, range_label));
-    }
+        .collect();
 
     if midpoint_to_range.is_empty() {
         return "datum.value".to_string();
@@ -1070,6 +995,25 @@ impl VegaLiteWriter {
                 "stroke": null,
                 "fill": "#EBEBEB"
             },
+            // A band fraction is a fraction of the full step, as in ggplot2 —
+            // so a bar at `width => 0.9` occupies 90% of its step and the gap
+            // between bars is the remaining 10%. Vega-Lite otherwise subtracts
+            // its own default `bandPaddingInner` from `bandwidth()` first,
+            // narrowing every banded mark a second time: bars, dodge and jitter
+            // spread, violin and boxplot widths, discrete tile extents. ggsql
+            // has no band-padding concept of its own, so pinning this to 0 is
+            // what makes the two writers agree on width.
+            //
+            // A band scale carrying a nested `xOffset`/`yOffset` — every dodged,
+            // jittered, half-boxplot or violin layer — takes its padding from
+            // `bandWithNestedOffsetPadding*` instead, which defaults to 0.2/0.2.
+            // Left alone it shrinks each offset to 80% of the fraction ggsql
+            // resolved *and* insets the band centres, moving the category ticks.
+            "scale": {
+                "bandPaddingInner": 0,
+                "bandWithNestedOffsetPaddingInner": 0,
+                "bandWithNestedOffsetPaddingOuter": 0
+            },
             "axis": {
                 "domain": false,
                 "grid": true,
@@ -1123,6 +1067,13 @@ impl Default for VegaLiteWriter {
 
 impl Writer for VegaLiteWriter {
     type Output = String;
+
+    /// Vega-Lite output is resolution-independent — size, DPI and background are
+    /// the consumer's business — so this writer takes no options and rejects any.
+    fn from_options(options: &WriterOptions) -> Result<Self> {
+        options.reject_unknown(&[])?;
+        Ok(Self::new())
+    }
 
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<String> {
         // 1. Validate spec
@@ -1285,6 +1236,25 @@ mod tests {
                 _ => c,
             })
             .collect()
+    }
+
+    /// A resolved binned scale, as `resolve` would leave one.
+    fn binned_scale(
+        breaks: Vec<ArrayElement>,
+        label_mapping: HashMap<String, Option<String>>,
+        closed: &str,
+    ) -> Scale {
+        let mut scale = Scale::new("fill");
+        scale.scale_type = Some(crate::plot::ScaleType::binned());
+        scale
+            .properties
+            .insert("breaks".to_string(), ParameterValue::Array(breaks));
+        scale.properties.insert(
+            "closed".to_string(),
+            ParameterValue::String(closed.to_string()),
+        );
+        scale.label_mapping = Some(label_mapping);
+        scale
     }
 
     fn rewrite_refs(val: &mut Value) {
@@ -1747,6 +1717,187 @@ mod tests {
         assert_eq!(range[1].as_f64().unwrap(), 20.0 * POINTS_TO_PIXELS);
     }
 
+    /// An identity-scaled column is a per-row literal, so it must reach Vega-Lite
+    /// in the same unit a literal does: `size` as a radius in points, converted to
+    /// an area in px². The conversion is a `calculate` transform because Vega-Lite
+    /// has no per-datum arithmetic in an encoding.
+    #[test]
+    fn test_identity_column_converts_like_literal() {
+        use crate::plot::{Scale, ScaleType};
+
+        let writer = VegaLiteWriter::new();
+
+        let mut spec = Plot::new();
+        spec.layers.push(
+            Layer::new(Geom::point())
+                .with_aesthetic(
+                    "pos1".to_string(),
+                    AestheticValue::standard_column("x".to_string()),
+                )
+                .with_aesthetic(
+                    "pos2".to_string(),
+                    AestheticValue::standard_column("y".to_string()),
+                )
+                .with_aesthetic(
+                    "size".to_string(),
+                    AestheticValue::standard_column("radius".to_string()),
+                ),
+        );
+        let mut scale = Scale::new("size");
+        scale.scale_type = Some(ScaleType::identity());
+        spec.scales.push(scale);
+
+        let df = df! {
+            "x" => vec![1, 2],
+            "y" => vec![1, 2],
+            "radius" => vec![3.0, 3.0],
+        }
+        .unwrap();
+
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+        let layer = &vl_spec["layer"][0];
+
+        // The encoding reads the derived field, unscaled
+        let size = &layer["encoding"]["size"];
+        assert_eq!(size["field"].as_str().unwrap(), "radius_visual");
+        assert!(size["scale"].is_null(), "identity scale stays unscaled");
+
+        // ... which a calculate transform fills with the literal conversion
+        let calculate = layer["transform"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|t| t.get("calculate").and_then(|c| c.as_str()))
+            .expect("identity size needs a calculate transform");
+        assert_eq!(
+            calculate,
+            format!("datum['radius'] * datum['radius'] * {POINTS_TO_AREA}")
+        );
+
+        // A radius of 3 pt is the same area whether it arrives as a column or a literal
+        let literal = build_spec_with_size_literal(&writer);
+        assert_eq!(3.0 * 3.0 * POINTS_TO_AREA, literal);
+    }
+
+    /// A name-valued identity column (`shape`, `linetype`) needs the same name →
+    /// Vega-Lite value mapping a literal gets: without it `'star'` reaches Vega as a
+    /// symbol name it cannot parse, and `'dashed'` as a dash array it cannot read.
+    #[test]
+    fn test_identity_names_convert_like_literals() {
+        use crate::plot::scale::{linetype_to_stroke_dash, shape_to_svg_path};
+        use crate::plot::{ArrayElement, Scale, ScaleType};
+
+        let writer = VegaLiteWriter::new();
+
+        for (aesthetic, geom, names) in [
+            ("shape", Geom::point(), ["star", "square"]),
+            ("linetype", Geom::line(), ["dashed", "dotted"]),
+        ] {
+            let mut spec = Plot::new();
+            spec.layers.push(
+                Layer::new(geom)
+                    .with_aesthetic(
+                        "pos1".to_string(),
+                        AestheticValue::standard_column("x".to_string()),
+                    )
+                    .with_aesthetic(
+                        "pos2".to_string(),
+                        AestheticValue::standard_column("y".to_string()),
+                    )
+                    .with_aesthetic(
+                        aesthetic.to_string(),
+                        AestheticValue::standard_column("name".to_string()),
+                    ),
+            );
+            let mut scale = Scale::new(aesthetic);
+            scale.scale_type = Some(ScaleType::identity());
+            scale.input_range = Some(
+                names
+                    .iter()
+                    .map(|n| ArrayElement::String(n.to_string()))
+                    .collect(),
+            );
+            spec.scales.push(scale);
+
+            let df = df! {
+                "x" => vec![1, 2],
+                "y" => vec![1, 2],
+                "name" => names.to_vec(),
+            }
+            .unwrap();
+
+            let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+            let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+            let layer = &vl_spec["layer"][0];
+
+            let calculate = layer["transform"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find_map(|t| t.get("calculate").and_then(|c| c.as_str()))
+                .unwrap_or_else(|| panic!("identity {aesthetic} needs a calculate transform"));
+
+            // Every resolved name maps to the value its literal would have produced,
+            // and an unrecognised one falls through to the datum
+            for name in names {
+                let expected = match aesthetic {
+                    "shape" => json!(shape_to_svg_path(name).unwrap()),
+                    _ => json!(linetype_to_stroke_dash(name).unwrap()),
+                };
+                assert!(
+                    calculate.contains(&format!("== '{name}' ? {expected}")),
+                    "{aesthetic}: {name} should map to {expected} in {calculate}"
+                );
+            }
+            assert!(
+                calculate.ends_with("datum['name']"),
+                "{aesthetic}: unrecognised values should pass through: {calculate}"
+            );
+
+            let channel = if aesthetic == "shape" {
+                "shape"
+            } else {
+                "strokeDash"
+            };
+            assert_eq!(
+                layer["encoding"][channel]["field"].as_str().unwrap(),
+                "name_visual"
+            );
+            assert!(layer["encoding"][channel]["scale"].is_null());
+        }
+    }
+
+    /// The `size` value Vega-Lite receives for `SETTING size => 3`.
+    fn build_spec_with_size_literal(writer: &VegaLiteWriter) -> f64 {
+        let mut spec = Plot::new();
+        let mut layer = Layer::new(Geom::point())
+            .with_aesthetic(
+                "pos1".to_string(),
+                AestheticValue::standard_column("x".to_string()),
+            )
+            .with_aesthetic(
+                "pos2".to_string(),
+                AestheticValue::standard_column("y".to_string()),
+            );
+        layer.mappings.insert(
+            "size".to_string(),
+            AestheticValue::Literal(crate::plot::ParameterValue::Number(3.0)),
+        );
+        spec.layers.push(layer);
+
+        let df = df! {
+            "x" => vec![1, 2],
+            "y" => vec![1, 2],
+        }
+        .unwrap();
+        let json_str = writer.write(&spec, &wrap_data(df)).unwrap();
+        let vl_spec: Value = serde_json::from_str(&json_str).unwrap();
+        vl_spec["layer"][0]["encoding"]["size"]["value"]
+            .as_f64()
+            .unwrap()
+    }
+
     #[test]
     fn test_literal_color() {
         let writer = VegaLiteWriter::new();
@@ -1936,7 +2087,8 @@ mod tests {
         label_mapping.insert("75".to_string(), Some("Very High".to_string()));
         label_mapping.insert("100".to_string(), Some("Max".to_string())); // Will be excluded
 
-        let result = build_symbol_legend_label_mapping(&breaks, &label_mapping, "left");
+        let result =
+            build_symbol_legend_label_mapping(&binned_scale(breaks, label_mapping, "left"));
 
         // VL generates: "0 – 25", "25 – 50", "50 – 75", "≥ 75"
         // We map to range format using custom labels: "lower_label – upper_label"
@@ -2070,7 +2222,11 @@ mod tests {
         label_mapping.insert("100".to_string(), None); // Suppressed
 
         // Test with closed='left' (default)
-        let result_left = build_symbol_legend_label_mapping(&breaks, &label_mapping, "left");
+        let result_left = build_symbol_legend_label_mapping(&binned_scale(
+            breaks.clone(),
+            label_mapping.clone(),
+            "left",
+        ));
 
         // First bin: suppressed lower terminal → "< 25" (open format)
         assert_eq!(
@@ -2086,7 +2242,8 @@ mod tests {
         );
 
         // Test with closed='right'
-        let result_right = build_symbol_legend_label_mapping(&breaks, &label_mapping, "right");
+        let result_right =
+            build_symbol_legend_label_mapping(&binned_scale(breaks, label_mapping, "right"));
 
         // First bin: suppressed lower terminal → "≤ 25" (right-closed means upper included)
         assert_eq!(
@@ -2517,7 +2674,8 @@ mod tests {
         label_mapping.insert("40".to_string(), Some("High".to_string()));
         label_mapping.insert("60".to_string(), Some("Very High".to_string()));
 
-        let expr = build_binned_facet_label_expr(Some(&label_mapping), Some(&scale));
+        scale.label_mapping = Some(label_mapping);
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // Should contain midpoint comparisons:
         // Bin [0, 20) -> midpoint 10
@@ -2580,7 +2738,8 @@ mod tests {
         label_mapping.insert("50".to_string(), Some("High".to_string()));
         label_mapping.insert("100".to_string(), Some("Max".to_string()));
 
-        let expr = build_binned_facet_label_expr(Some(&label_mapping), Some(&scale));
+        scale.label_mapping = Some(label_mapping);
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // First bin with suppressed lower terminal → open format "< 50" or "< High"
         // (uses upper bound label since lower is suppressed)
@@ -2615,7 +2774,7 @@ mod tests {
         );
 
         // No label_mapping - should use break values in range format
-        let expr = build_binned_facet_label_expr(None, Some(&scale));
+        let expr = build_binned_facet_label_expr(Some(&scale));
 
         // Should use default range format with break values
         assert!(

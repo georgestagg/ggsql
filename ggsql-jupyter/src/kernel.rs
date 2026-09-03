@@ -137,17 +137,14 @@ impl KernelServer {
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
-                    tracing::warn!("Received SIGINT, shutting down gracefully");
-                    // Send a final idle status before exiting
-                    // Note: We don't have a parent message here, so we'll send without one
-                    let msg = self.create_message(
-                        "status",
-                        json!({"execution_state": "idle"}),
-                        None,
-                    );
-                    let zmq_msg = self.serialize_message_with_topic(&msg, "status")?;
-                    let _ = self.iopub.send(zmq_msg).await;
-                    break;
+                    // With `interrupt_mode: "signal"`, the frontend sends SIGINT to
+                    // interrupt a running cell, not to stop the kernel. Emit a busy
+                    // -> idle pair to acknowledge the interrupt.
+                    // TODO: When cell execution becomes async, cancel any in-flight
+                    //       request here instead.
+                    tracing::debug!("Received SIGINT; acknowledging.");
+                    self.send_status_initial("busy").await?;
+                    self.send_status_initial("idle").await?;
                 }
             }
         }
@@ -323,21 +320,24 @@ impl KernelServer {
         }
 
         // Execute the query
+        let uri_before = self.executor.reader_uri().to_string();
         let result = self.executor.execute(code);
+        let connection_changed = self.executor.reader_uri() != uri_before;
+        if connection_changed {
+            let uri = self.executor.reader_uri().to_string();
+            self.open_connection_comm(&uri).await?;
+        }
 
         match result {
             Ok(exec_result) => {
-                // If the connection changed, open a new connection comm
-                let is_connection_changed =
+                // A bare connection change renders nothing.
+                let suppress_output =
                     matches!(&exec_result, ExecutionResult::ConnectionChanged { .. });
-                if let ExecutionResult::ConnectionChanged { ref uri, .. } = &exec_result {
-                    self.open_connection_comm(uri).await?;
-                }
 
                 // Send execute_result (not display_data)
                 // Per Jupyter spec: execute_result includes execution_count
                 // Only send if there's something to display (DDL returns None)
-                if !silent && !is_connection_changed {
+                if !silent && !suppress_output {
                     if let Some(display_data) = format_display_data(exec_result, &hints) {
                         // Build message content, including output_location if present
                         let mut content = json!({

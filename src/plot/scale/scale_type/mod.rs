@@ -27,7 +27,9 @@ use std::sync::Arc;
 
 use super::transform::{Transform, TransformKind};
 use crate::plot::aesthetic::{is_facet_aesthetic, is_position_aesthetic};
-use crate::plot::types::{validate_parameter, DefaultParamValue, ParamDefinition, Parameters};
+use crate::plot::types::{
+    format_number, validate_parameter, DefaultParamValue, ParamDefinition, Parameters,
+};
 use crate::plot::{ArrayElement, ColumnInfo, ParameterValue};
 
 // Scale type implementations
@@ -823,13 +825,23 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
 
     /// Labelled breaks: `(numeric_position, display_label)` pairs.
     ///
-    /// Default: pairs each `numeric_breaks()` value with its string form.
+    /// Default: labels each break from its own typed `ArrayElement`, so a
+    /// temporal break reads as its ISO string rather than as the epoch number
+    /// its position projects to. The label is the element's `to_key_string()`,
+    /// which is also how `label_mapping` is keyed — so the `RENAMING` and
+    /// label-template overrides the caller applies actually match.
     /// Discrete/ordinal override to pair position indices with input-range
-    /// category names.  `label_mapping` overrides are applied by the caller.
+    /// category names.
     fn break_labels(&self, scale: &super::Scale) -> Vec<(f64, String)> {
+        if let Some(ParameterValue::Array(breaks)) = scale.properties.get("breaks") {
+            return breaks
+                .iter()
+                .filter_map(|b| b.to_f64().map(|v| (v, b.to_key_string())))
+                .collect();
+        }
         self.numeric_breaks(scale)
             .into_iter()
-            .map(|v| (v, format!("{v}")))
+            .map(|v| (v, format_number(v)))
             .collect()
     }
 
@@ -916,60 +928,80 @@ pub trait ScaleTypeTrait: std::fmt::Debug + std::fmt::Display + Send + Sync {
                 Some(ParameterValue::String(interval_str)) => {
                     // Temporal interval string like "2 months", "week"
                     // Only valid for temporal transforms (Date, DateTime, Time)
-                    use super::super::breaks::{
-                        temporal_breaks_date, temporal_breaks_datetime, temporal_breaks_time,
-                        TemporalInterval,
-                    };
-
-                    if let Some(interval) = TemporalInterval::create_from_str(interval_str) {
-                        if let Some(ref range) = scale.input_range {
-                            let breaks: Vec<ArrayElement> = match resolved_transform
-                                .transform_kind()
-                            {
-                                TransformKind::Date => {
-                                    let min = range[0].to_f64().unwrap_or(0.0) as i32;
-                                    let max = range[range.len() - 1].to_f64().unwrap_or(0.0) as i32;
-                                    temporal_breaks_date(min, max, interval)
-                                        .into_iter()
-                                        .map(ArrayElement::String)
-                                        .collect()
-                                }
-                                TransformKind::DateTime => {
-                                    let min = range[0].to_f64().unwrap_or(0.0) as i64;
-                                    let max = range[range.len() - 1].to_f64().unwrap_or(0.0) as i64;
-                                    temporal_breaks_datetime(min, max, interval)
-                                        .into_iter()
-                                        .map(ArrayElement::String)
-                                        .collect()
-                                }
-                                TransformKind::Time => {
-                                    let min = range[0].to_f64().unwrap_or(0.0) as i64;
-                                    let max = range[range.len() - 1].to_f64().unwrap_or(0.0) as i64;
-                                    temporal_breaks_time(min, max, interval)
-                                        .into_iter()
-                                        .map(ArrayElement::String)
-                                        .collect()
-                                }
-                                _ => vec![], // Non-temporal transforms don't support interval strings
-                            };
-
-                            if !breaks.is_empty() {
-                                // Convert string breaks to appropriate temporal ArrayElement types
-                                let converted: Vec<ArrayElement> = breaks
-                                    .iter()
-                                    .map(|elem| resolved_transform.parse_value(elem))
-                                    .collect();
-                                // Filter to input range
-                                let filtered =
-                                    super::super::breaks::filter_breaks_to_range(&converted, range);
-                                scale
-                                    .properties
-                                    .insert("breaks".to_string(), ParameterValue::Array(filtered));
-                            }
+                    if let Some(range) = scale.input_range.as_deref() {
+                        if let Some(breaks) =
+                            temporal_interval_breaks(interval_str, range, &resolved_transform)
+                        {
+                            scale
+                                .properties
+                                .insert("breaks".to_string(), ParameterValue::Array(breaks));
                         }
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // 5b. Resolve minor breaks against the majors from step 5.
+        //
+        // Break positions are ggsql's to own, minor as well as major: a writer reads
+        // these through `Scale::numeric_minor_breaks()` and never generates its own.
+        // `minor_breaks` mirrors `breaks` — a count, explicit positions, or a temporal
+        // interval string — except that its count is *per major interval* rather than a
+        // target for the whole axis, because that is the unit a minor break is defined
+        // in. Absent, the transform's own density applies (one midpoint for linear, the
+        // 2-9 ladder for the log family, three per interval for temporal).
+        //
+        // `Some(vec![])` and `None` mean different things downstream: the first is
+        // "resolved to no minors" (`minor_breaks => 0`, which a writer must honour by
+        // drawing none) and the second is "not resolved", which leaves a writer free to
+        // fall back on its own. Binned overrides `resolve` and so never reaches this: a
+        // binned axis's ticks are its bin edges, with nothing to subdivide. Runs before
+        // the label template because minor breaks carry no labels.
+        if self.supports_breaks() {
+            if let (Some(ParameterValue::Array(majors)), Some(range)) =
+                (scale.properties.get("breaks"), scale.input_range.as_deref())
+            {
+                let positions: Vec<f64> = majors.iter().filter_map(|b| b.to_f64()).collect();
+                let extent = match (
+                    range.first().and_then(|e| e.to_f64()),
+                    range.last().and_then(|e| e.to_f64()),
+                ) {
+                    (Some(min), Some(max)) => Some((min, max)),
+                    _ => None,
+                };
+                let derive = |n: usize| -> Vec<ArrayElement> {
+                    resolved_transform
+                        .calculate_minor_breaks(&positions, n, extent)
+                        .into_iter()
+                        .map(|v| resolved_transform.wrap_numeric(v))
+                        .collect()
+                };
+                let minors = match scale.properties.get("minor_breaks") {
+                    // Explicit positions, converted through the transform like
+                    // explicit majors are.
+                    Some(ParameterValue::Array(explicit)) => explicit
+                        .iter()
+                        .map(|elem| resolved_transform.parse_value(elem))
+                        .collect(),
+                    // Minors per major interval; 0 asks for none.
+                    Some(ParameterValue::Number(n)) => derive(*n as usize),
+                    // Calendar interval, same syntax the majors accept.
+                    Some(ParameterValue::String(interval)) => {
+                        temporal_interval_breaks(interval, range, &resolved_transform)
+                            .unwrap_or_default()
+                    }
+                    _ => derive(resolved_transform.default_minor_break_count()),
+                };
+                // Drop anything outside the domain, the same way the majors are
+                // filtered.
+                let minors = match scale.input_range.as_ref() {
+                    Some(range) => super::super::breaks::filter_breaks_to_range(&minors, range),
+                    None => minors,
+                };
+                scale
+                    .properties
+                    .insert("minor_breaks".to_string(), ParameterValue::Array(minors));
             }
         }
 
@@ -1131,17 +1163,18 @@ pub(super) fn categorical_numeric_domain(scale: &super::Scale) -> Option<(f64, f
 }
 
 /// Labelled breaks for categorical scales: pairs position indices with category names.
+///
+/// The label doubles as the lookup key into `label_mapping`, so it must be the
+/// element's `to_key_string()` — the same form `RENAMING` writes its keys in.
+/// Formatting a number through `to_json()` instead yields `"6.0"` against a key
+/// of `"6"`, which silently drops every rename on a non-string domain.
 pub(super) fn categorical_break_labels(scale: &super::Scale) -> Vec<(f64, String)> {
     let Some(range) = scale.input_range.as_ref() else {
         return Vec::new();
     };
     let mut out = Vec::with_capacity(range.len());
     for (i, elem) in range.iter().enumerate() {
-        let label = match elem {
-            ArrayElement::String(s) => s.clone(),
-            other => format!("{}", other.to_json()),
-        };
-        out.push(((i + 1) as f64, label));
+        out.push(((i + 1) as f64, elem.to_key_string()));
     }
     out
 }
@@ -1733,7 +1766,6 @@ pub(crate) fn expand_numeric_range_selective(
 }
 
 /// Get expand factors from properties, using defaults for continuous/temporal scales.
-#[allow(dead_code)]
 pub(crate) fn get_expand_factors(properties: &Parameters) -> (f64, f64) {
     properties
         .get("expand")
@@ -1770,6 +1802,55 @@ pub(crate) fn get_expand_factors_for_aesthetic(
 
     // Final fallback (should not normally reach here after resolve_properties)
     (DEFAULT_EXPAND_MULT, DEFAULT_EXPAND_ADD)
+}
+
+/// Break positions for a temporal interval string like `"2 months"` or `"week"`,
+/// wrapped in the transform's value variant and filtered to `range`.
+///
+/// `None` when the string isn't a recognisable interval, when the transform isn't
+/// temporal (only Date / DateTime / Time have a calendar to step through), or when
+/// the interval yields nothing inside the range — in each case the caller keeps
+/// whatever it had. Shared by the `breaks` and `minor_breaks` settings, which accept
+/// the same interval syntax.
+pub(crate) fn temporal_interval_breaks(
+    interval_str: &str,
+    range: &[ArrayElement],
+    transform: &Transform,
+) -> Option<Vec<ArrayElement>> {
+    use super::breaks::{
+        filter_breaks_to_range, temporal_breaks_date, temporal_breaks_datetime,
+        temporal_breaks_time, TemporalInterval,
+    };
+
+    let interval = TemporalInterval::create_from_str(interval_str)?;
+    let min = range.first()?.to_f64()?;
+    let max = range.last()?.to_f64()?;
+    let breaks: Vec<ArrayElement> = match transform.transform_kind() {
+        TransformKind::Date => temporal_breaks_date(min as i32, max as i32, interval)
+            .into_iter()
+            .map(ArrayElement::String)
+            .collect(),
+        TransformKind::DateTime => temporal_breaks_datetime(min as i64, max as i64, interval)
+            .into_iter()
+            .map(ArrayElement::String)
+            .collect(),
+        TransformKind::Time => temporal_breaks_time(min as i64, max as i64, interval)
+            .into_iter()
+            .map(ArrayElement::String)
+            .collect(),
+        // Non-temporal transforms have no calendar to step through.
+        _ => return None,
+    };
+    if breaks.is_empty() {
+        return None;
+    }
+    // Convert the ISO strings to the transform's temporal variant, then drop any
+    // that fell outside the domain.
+    let converted: Vec<ArrayElement> = breaks
+        .iter()
+        .map(|elem| transform.parse_value(elem))
+        .collect();
+    Some(filter_breaks_to_range(&converted, range))
 }
 
 /// Clip an input range to a transform's valid domain.
@@ -1924,12 +2005,14 @@ pub(crate) fn resolve_common_steps<T: ScaleTypeTrait + ?Sized>(
     //
     // Then clip to the transform's valid domain to prevent invalid values
     // (e.g., expansion producing negative values for log scales)
+    let mut applied_expand = (0.0, 0.0);
     if let Some(range) = base_range {
         let is_position = is_position_aesthetic(aesthetic);
         let is_deduced = !scale.explicit_input_range
             || input_range_has_nulls(original_user_range.as_deref().unwrap_or(&[]));
 
         if !is_discrete_range && is_position && is_deduced {
+            applied_expand = (mult, add);
             let expanded =
                 expand_numeric_range_selective(&range, mult, add, original_user_range.as_deref());
             scale.input_range = Some(clip_to_transform_domain(&expanded, &resolved_transform));
@@ -1937,6 +2020,28 @@ pub(crate) fn resolve_common_steps<T: ScaleTypeTrait + ?Sized>(
             // No expansion for discrete scales, material aesthetics, or fully explicit ranges
             scale.input_range = Some(range);
         }
+    }
+
+    // Record the factors that were actually applied, normalised to [mult, add],
+    // so a consumer that has to expand a range of its own later — a writer
+    // computing a per-panel domain for a free facet dimension, via
+    // `Scale::expand_range` — pads it exactly as resolution padded the global
+    // one. Two things are only visible from here: `context.default_expand` (zero
+    // for a polar full-circle theta), and the decision *not* to expand at all,
+    // which an explicit `FROM (0, 100)` makes.
+    //
+    // Only where `expand` is a property the scale accepts in the first place
+    // (`resolve_properties` drops the default for a material aesthetic, and a
+    // discrete scale rejects the parameter outright) — recording it elsewhere
+    // would manufacture state that user input could not have produced.
+    if is_position_aesthetic(aesthetic) && scale.properties.contains_key("expand") {
+        scale.properties.insert(
+            "expand".to_string(),
+            ParameterValue::Array(vec![
+                ArrayElement::Number(applied_expand.0),
+                ArrayElement::Number(applied_expand.1),
+            ]),
+        );
     }
 
     // 4. Convert input_range values using transform (e.g., ISO strings → Date/DateTime/Time)
@@ -3233,6 +3338,217 @@ mod tests {
             }
             _ => panic!("breaks should be an Array after resolution"),
         }
+    }
+
+    #[test]
+    fn test_resolve_derives_minor_breaks_between_majors() {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::continuous());
+        scale.input_range = Some(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]);
+        scale
+            .properties
+            .insert("breaks".to_string(), ParameterValue::Number(5.0));
+
+        let context = ScaleDataContext::new();
+        ScaleType::continuous()
+            .resolve(&mut scale, &context, "x")
+            .unwrap();
+
+        // Identity asks for one minor per major interval, so minors interleave the
+        // majors and land on none of them.
+        let majors = scale.numeric_breaks();
+        let minors = scale.numeric_minor_breaks().expect("minors resolved");
+        assert!(!minors.is_empty(), "minors should be derived from majors");
+        for m in &minors {
+            assert!(
+                !majors.iter().any(|j| (j - m).abs() < 1e-9),
+                "minor {m} coincides with a major: {majors:?}"
+            );
+        }
+        for w in majors.windows(2) {
+            assert_eq!(
+                minors.iter().filter(|m| **m > w[0] && **m < w[1]).count(),
+                1,
+                "expected one minor in ({}, {}): {minors:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_derives_temporal_minor_breaks_as_dates() {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::continuous());
+        scale.transform = Some(Transform::date());
+        scale.input_range = Some(vec![
+            ArrayElement::Date(19738), // 2024-01-15
+            ArrayElement::Date(19889), // 2024-06-15
+        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::String("2 months".to_string()),
+        );
+
+        let context = ScaleDataContext::new();
+        ScaleType::continuous()
+            .resolve(&mut scale, &context, "x")
+            .unwrap();
+
+        // Minors are wrapped by the transform, like the majors, so a writer gets
+        // typed values rather than raw day numbers.
+        match scale.properties.get("minor_breaks") {
+            Some(ParameterValue::Array(minors)) => {
+                assert!(!minors.is_empty());
+                for m in minors {
+                    assert!(
+                        matches!(m, ArrayElement::Date(_)),
+                        "minor should be a Date element: {m:?}"
+                    );
+                }
+            }
+            other => panic!("minors should be a resolved Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_discrete_has_no_minor_breaks() {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::discrete());
+        scale.input_range = Some(vec![
+            ArrayElement::String("a".to_string()),
+            ArrayElement::String("b".to_string()),
+        ]);
+
+        let context = ScaleDataContext::new();
+        ScaleType::discrete()
+            .resolve(&mut scale, &context, "x")
+            .unwrap();
+
+        // Not applicable rather than empty, so a consumer keeps its own fallback.
+        assert_eq!(scale.numeric_minor_breaks(), None);
+    }
+
+    /// A resolved continuous scale over `0..=100` with `n` requested major breaks and
+    /// the given `minor_breaks` setting.
+    fn resolved_with_minor_setting(setting: Option<ParameterValue>) -> crate::plot::scale::Scale {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::continuous());
+        scale.input_range = Some(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]);
+        scale
+            .properties
+            .insert("breaks".to_string(), ParameterValue::Number(5.0));
+        if let Some(value) = setting {
+            scale.properties.insert("minor_breaks".to_string(), value);
+        }
+        let context = ScaleDataContext::new();
+        ScaleType::continuous()
+            .resolve(&mut scale, &context, "x")
+            .unwrap();
+        scale
+    }
+
+    #[test]
+    fn test_minor_breaks_setting_count_is_per_major_interval() {
+        // Three per interval, unlike `breaks` whose count targets the whole axis.
+        let scale = resolved_with_minor_setting(Some(ParameterValue::Number(3.0)));
+        let majors = scale.numeric_breaks();
+        let minors = scale.numeric_minor_breaks().expect("minors resolved");
+        for w in majors.windows(2) {
+            assert_eq!(
+                minors.iter().filter(|m| **m > w[0] && **m < w[1]).count(),
+                3,
+                "expected three minors in ({}, {}): {minors:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_minor_breaks_setting_zero_suppresses() {
+        // Resolves to an empty array — "draw none" — not to the default density.
+        let scale = resolved_with_minor_setting(Some(ParameterValue::Number(0.0)));
+        assert_eq!(scale.numeric_minor_breaks(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn test_minor_breaks_setting_explicit_positions_are_filtered_to_domain() {
+        let scale = resolved_with_minor_setting(Some(ParameterValue::Array(vec![
+            ArrayElement::Number(-10.0), // outside the domain, dropped
+            ArrayElement::Number(10.0),
+            ArrayElement::Number(90.0),
+            ArrayElement::Number(150.0), // outside the domain, dropped
+        ])));
+        assert_eq!(scale.numeric_minor_breaks(), Some(vec![10.0, 90.0]));
+    }
+
+    #[test]
+    fn test_minor_breaks_setting_interval_string_on_a_date_scale() {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::continuous());
+        scale.transform = Some(Transform::date());
+        scale.input_range = Some(vec![
+            ArrayElement::Date(19738), // 2024-01-15
+            ArrayElement::Date(19889), // 2024-06-15
+        ]);
+        scale.properties.insert(
+            "breaks".to_string(),
+            ParameterValue::String("2 months".to_string()),
+        );
+        scale.properties.insert(
+            "minor_breaks".to_string(),
+            ParameterValue::String("week".to_string()),
+        );
+
+        let context = ScaleDataContext::new();
+        ScaleType::continuous()
+            .resolve(&mut scale, &context, "x")
+            .unwrap();
+
+        // Weekly minors under bi-monthly majors: far more minors than majors, and
+        // every one inside the *resolved* domain (which expansion widened past the
+        // data extent).
+        let majors = scale.numeric_breaks();
+        let minors = scale.numeric_minor_breaks().expect("minors resolved");
+        assert!(
+            minors.len() > majors.len(),
+            "weekly minors ({}) should outnumber bi-monthly majors ({})",
+            minors.len(),
+            majors.len()
+        );
+        let (min, max) = scale.numeric_domain().expect("resolved domain");
+        for m in &minors {
+            assert!(*m >= min && *m <= max, "minor {m} outside [{min}, {max}]");
+        }
+    }
+
+    #[test]
+    fn test_minor_breaks_setting_rejects_a_negative_count() {
+        use crate::plot::scale::Scale;
+
+        let mut scale = Scale::new("x");
+        scale.scale_type = Some(ScaleType::continuous());
+        scale.input_range = Some(vec![ArrayElement::Number(0.0), ArrayElement::Number(100.0)]);
+        scale
+            .properties
+            .insert("minor_breaks".to_string(), ParameterValue::Number(-1.0));
+
+        let context = ScaleDataContext::new();
+        let err = ScaleType::continuous()
+            .resolve(&mut scale, &context, "x")
+            .expect_err("a negative minor count is not a count");
+        assert!(err.contains("minor_breaks"), "unexpected message: {err}");
     }
 
     #[test]

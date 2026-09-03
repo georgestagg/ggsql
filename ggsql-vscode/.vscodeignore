@@ -1,13 +1,14 @@
 .vscode/**
 .vscode-test/**
+.positron-test/**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
 **/tsconfig.json
+tsconfig.test.json
 **/.eslintrc.json
 **/*.map
 **/*.ts
-!**/*.d.ts
 node_modules/**
 .editorconfig
 src/**
@@ -15,3 +16,5 @@ esbuild.js
 out/**/*.map
 package-lock.json
 *.vsix
+out-test/**
+.vscode-test.mjs
