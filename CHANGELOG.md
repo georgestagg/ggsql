@@ -84,6 +84,8 @@
   jittered and half-sided layers too, where Vega-Lite reserved a further 20% of
   every step: their marks were narrower, their displacements smaller, and their
   category ticks pulled toward the middle of the panel.
+- Position scales like `SCALE lon` and `SCALE lat` transfer their limits to
+  map projections, and transfer their `breaks` setting to the graticule (#492).
 
 ### Fixed
 - Positron no longer offers a ggsql runtime on a machine that has no kernel.
