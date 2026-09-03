@@ -43,6 +43,16 @@
   transformation. This has no Vega-Lite equivalent and is ignored by that writer;
   the png writer draws them.
 
+- The VS Code / Positron extension now ships the `ggsql-jupyter` kernel, so
+  installing the extension is all that is needed to run queries. It is offered
+  alongside every ggsql kernel found on the machine — a Jupyter kernelspec, a
+  native install, one on `PATH`, or the path in `ggsql.kernelPath` — each named
+  for the version it reports, so the New Console Session picker shows which is
+  which. A kernel too old to report one is still offered, named without a
+  version. The bundled kernel is the default.
+
+- `ggsql-jupyter` accepts `--version`.
+
 ### Changed
 - A `FROM` on the `VISUALISE` clause now takes exactly one bare source. It
   previously reused the SQL `FROM` grammar while only ever reading the first
@@ -76,6 +86,7 @@
   category ticks pulled toward the middle of the panel.
 
 ### Fixed
+- Positron no longer offers a ggsql runtime on a machine that has no kernel.
 - A dodged violin or half-boxplot on a categorical `y` axis is no longer flipped
   in the Vega-Lite writer. Both took their band displacement from an encoding of
   their own that read a ggsql offset as pointing down the screen, so their groups
