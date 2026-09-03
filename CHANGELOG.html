@@ -2,7 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.11.1">
+<meta name="generator" content="quarto-1.11.3">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
@@ -43,14 +43,14 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="site_libs/quarto-html/anchor.min.js"></script>
 <link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-041fcb6de14cfebf3cfb04646aa79d47.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dcb1874e0c6aa5279562b677d1a72506.css" rel="stylesheet" class="quarto-color-scheme" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dark-dcb1874e0c6aa5279562b677d1a72506.css" rel="stylesheet" class="quarto-color-scheme quarto-color-alternate" id="quarto-text-highlighting-styles">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-dcb1874e0c6aa5279562b677d1a72506.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-0eb099264140c91dd9517778053a8802.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-769b07ee8b35def4ca00bdda92b28d1f.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-0eb099264140c91dd9517778053a8802.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-27d9141d6de982451b3f5cbbd2944b4c.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-dcd3eca948fe9d3317e121b05665202f.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-27d9141d6de982451b3f5cbbd2944b4c.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script src="site_libs/quarto-contrib/iconify-3.0.0/iconify-icon.min.js"></script>
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
@@ -103,7 +103,7 @@ gradient teal.
 <meta name="twitter:image-width" content="1000">
 </head>
 
-<body class="nav-fixed quarto-light">
+<body class="nav-fixed quarto-light"><a id="quarto-skip-link" class="visually-hidden-focusable" href="#quarto-document-content">Skip to main content</a>
 
 <div id="quarto-search-results"></div>
   <header id="quarto-header" class="headroom fixed-top">
@@ -119,7 +119,7 @@ gradient teal.
     </a>
   </div>
             <div id="quarto-search" class="" title="Search"></div>
-          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
   <span class="navbar-toggler-icon"></span>
 </button>
           <div class="collapse navbar-collapse" id="navbarCollapse">
@@ -286,7 +286,7 @@ gradient teal.
 <div class="toc-actions"><ul><li><a href="https://github.com/posit-dev/ggsql/issues" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
-<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+<main class="content" id="quarto-document-content" tabindex="-1"><header id="title-block-header" class="quarto-title-block"></header>
 
 
 
@@ -296,12 +296,14 @@ gradient teal.
 <section id="added" class="level3">
 <h3 class="anchored" data-anchor-id="added">Added</h3>
 <ul>
-<li>New caching layer that wraps any <code>Reader</code> with an in-memory, writeable cache backend (currently duckdb or sqlite), making write-constrained databases usable and avoiding repeated remote reads during interactive iteration. Memoized reads are bounded by a TTL and an LRU byte budget, configurable per connection. The cache can be cleared mid-session with the <code>-- @uncache</code> meta-command.</li>
-<li>New <code>PngWriter</code> renders a plot to a PNG raster image via <a href="https://github.com/posit-dev/hephaestus">hephaestus</a>, behind a new off-by-default <code>png</code> feature (<code>--writer png</code> in the CLI). <code>LABEL caption</code> and the new <code>minor_breaks</code> setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.</li>
-<li>Writers can be configured from key–value options: <code>Writer::from_options</code> takes a <code>WriterOptions</code> set, and the CLI collects them from a repeatable <code>--writer-option key=value</code> flag on <code>exec</code> and <code>run</code> (short <code>-D</code>, also spellable <code>--writer-options</code>). Several settings can be collapsed into one flag separated by <code>;</code> — <code>-D 'width=1600;dpi=150'</code>, quoted because shells read <code>;</code> themselves — and the two forms mix. The png writer takes <code>width</code>, <code>height</code>, <code>units</code> (<code>px</code>, <code>in</code>, <code>cm</code>, <code>mm</code>, <code>pt</code>), <code>dpi</code>, and <code>background</code> (any CSS color, including <code>transparent</code>), defaulting to a 1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An unknown key or unusable value is an error naming the option, not a silently ignored setting.</li>
-<li><code>--reader</code>, <code>--writer</code>, and <code>--output</code> gained the short forms <code>-r</code>, <code>-w</code>, and <code>-o</code> on <code>exec</code> and <code>run</code>; <code>validate --reader</code> also takes <code>-r</code>.</li>
-<li>Text is rendered as rich text (markdown) by the png writer. A text layer’s <code>label</code> is parsed for <code>**bold**</code>, <code>*italic*</code>, <code>_underline_</code>, <code>~~strike~~</code>, <code>`code`</code> and marquee-style <code>{selector body}</code> spans that set a colour or size (<code>{.red hot}</code>, <code>{#0072B2 blue}</code>, <code>{.20 big}</code>), and so are the plot title, subtitle, caption and axis titles set with <code>LABEL</code>. Legend titles and break labels (axis tick labels, legend keys) do not parse yet and show their markers. The new <code>parse</code> setting on the text layer turns it off for that layer (<code>SETTING parse =&gt; false</code>), drawing the label exactly as given; it defaults to <code>true</code>. Chrome text has no switch yet. The Vega-Lite writer has no rich-text equivalent and ignores <code>parse</code>, always drawing text literally.</li>
-<li>New <code>minor_breaks</code> setting on continuous scales, controlling the unlabelled subdivisions between breaks: a whole number of minor breaks <em>per interval between two breaks</em> (<code>0</code> removes them), an array of exact positions, or — for temporal scales — an interval such as <code>'week'</code>. Defaults to a value chosen by the transformation. This has no Vega-Lite equivalent and is ignored by that writer; the png writer draws them.</li>
+<li><p>New caching layer that wraps any <code>Reader</code> with an in-memory, writeable cache backend (currently duckdb or sqlite), making write-constrained databases usable and avoiding repeated remote reads during interactive iteration. Memoized reads are bounded by a TTL and an LRU byte budget, configurable per connection. The cache can be cleared mid-session with the <code>-- @uncache</code> meta-command.</p></li>
+<li><p>New <code>PngWriter</code> renders a plot to a PNG raster image via <a href="https://github.com/posit-dev/hephaestus">hephaestus</a>, behind a new off-by-default <code>png</code> feature (<code>--writer png</code> in the CLI). <code>LABEL caption</code> and the new <code>minor_breaks</code> setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.</p></li>
+<li><p>Writers can be configured from key–value options: <code>Writer::from_options</code> takes a <code>WriterOptions</code> set, and the CLI collects them from a repeatable <code>--writer-option key=value</code> flag on <code>exec</code> and <code>run</code> (short <code>-D</code>, also spellable <code>--writer-options</code>). Several settings can be collapsed into one flag separated by <code>;</code> — <code>-D 'width=1600;dpi=150'</code>, quoted because shells read <code>;</code> themselves — and the two forms mix. The png writer takes <code>width</code>, <code>height</code>, <code>units</code> (<code>px</code>, <code>in</code>, <code>cm</code>, <code>mm</code>, <code>pt</code>), <code>dpi</code>, and <code>background</code> (any CSS color, including <code>transparent</code>), defaulting to a 1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An unknown key or unusable value is an error naming the option, not a silently ignored setting.</p></li>
+<li><p><code>--reader</code>, <code>--writer</code>, and <code>--output</code> gained the short forms <code>-r</code>, <code>-w</code>, and <code>-o</code> on <code>exec</code> and <code>run</code>; <code>validate --reader</code> also takes <code>-r</code>.</p></li>
+<li><p>Text is rendered as rich text (markdown) by the png writer. A text layer’s <code>label</code> is parsed for <code>**bold**</code>, <code>*italic*</code>, <code>_underline_</code>, <code>~~strike~~</code>, <code>`code`</code> and marquee-style <code>{selector body}</code> spans that set a colour or size (<code>{.red hot}</code>, <code>{#0072B2 blue}</code>, <code>{.20 big}</code>), and so are the plot title, subtitle, caption and axis titles set with <code>LABEL</code>. Legend titles and break labels (axis tick labels, legend keys) do not parse yet and show their markers. The new <code>parse</code> setting on the text layer turns it off for that layer (<code>SETTING parse =&gt; false</code>), drawing the label exactly as given; it defaults to <code>true</code>. Chrome text has no switch yet. The Vega-Lite writer has no rich-text equivalent and ignores <code>parse</code>, always drawing text literally.</p></li>
+<li><p>New <code>minor_breaks</code> setting on continuous scales, controlling the unlabelled subdivisions between breaks: a whole number of minor breaks <em>per interval between two breaks</em> (<code>0</code> removes them), an array of exact positions, or — for temporal scales — an interval such as <code>'week'</code>. Defaults to a value chosen by the transformation. This has no Vega-Lite equivalent and is ignored by that writer; the png writer draws them.</p></li>
+<li><p>The VS Code / Positron extension now ships the <code>ggsql-jupyter</code> kernel, so installing the extension is all that is needed to run queries. It is offered alongside every ggsql kernel found on the machine — a Jupyter kernelspec, a native install, one on <code>PATH</code>, or the path in <code>ggsql.kernelPath</code> — each named for the version it reports, so the New Console Session picker shows which is which. A kernel too old to report one is still offered, named without a version. The bundled kernel is the default.</p></li>
+<li><p><code>ggsql-jupyter</code> accepts <code>--version</code>.</p></li>
 </ul>
 </section>
 <section id="changed" class="level3">
@@ -316,6 +318,7 @@ gradient teal.
 <section id="fixed" class="level3">
 <h3 class="anchored" data-anchor-id="fixed">Fixed</h3>
 <ul>
+<li>Positron no longer offers a ggsql runtime on a machine that has no kernel.</li>
 <li>A dodged violin or half-boxplot on a categorical <code>y</code> axis is no longer flipped in the Vega-Lite writer. Both took their band displacement from an encoding of their own that read a ggsql offset as pointing down the screen, so their groups came out in the opposite order to every other mark — a violin put the first group above the second where a boxplot of the same data put it below, and a half-boxplot’s box parted company with its own whiskers once dodged. Violins are also clipped to the panel now, as every other mark is.</li>
 <li>An identity-scaled column is now read exactly like the equivalent literal. <code>SCALE IDENTITY &lt;aes&gt;</code> hands its values straight to the aesthetic, so they mean what the same value written with <code>SETTING</code> means, but several were passed to the renderer unconverted: a <code>size</code> column was read as a symbol area in pixels² rather than the radius in points <code>SETTING size =&gt; 3</code> gives (markers far too small), a <code>shape</code> column of names such as <code>'star'</code> made Vega-Lite fail to render at all, and a <code>linetype</code> column of names such as <code>'dashed'</code> drew a solid line in both writers. <code>size</code>, <code>linewidth</code>, <code>fontsize</code>, <code>shape</code> and <code>linetype</code> identity columns now convert per row, so an identity column and a setting produce the same drawing. A value the aesthetic already understands still passes through untouched.</li>
 <li><code>DRAW bar MAPPING &lt;category&gt; AS y</code> produced a single bar against a synthetic axis instead of horizontal bars. A layer whose geom synthesises its primary position (bar, boxplot) now transposes when the user maps a <em>discrete</em> <code>y</code>, and stays put when they map a continuous one — that being the value axis, where a lone <code>DRAW boxplot MAPPING &lt;value&gt; AS y</code> already belongs.</li>

@@ -3,11 +3,20 @@
 ### Added
 
 - New caching layer that wraps any `Reader` with an in-memory, writeable cache backend (currently duckdb or sqlite), making write-constrained databases usable and avoiding repeated remote reads during interactive iteration. Memoized reads are bounded by a TTL and an LRU byte budget, configurable per connection. The cache can be cleared mid-session with the `-- @uncache` meta-command.
+
 - New `PngWriter` renders a plot to a PNG raster image via [hephaestus](https://github.com/posit-dev/hephaestus), behind a new off-by-default `png` feature (`--writer png` in the CLI). `LABEL caption` and the new `minor_breaks` setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.
+
 - Writers can be configured from key–value options: `Writer::from_options` takes a `WriterOptions` set, and the CLI collects them from a repeatable `--writer-option key=value` flag on `exec` and `run` (short `-D`, also spellable `--writer-options`). Several settings can be collapsed into one flag separated by `;` — `-D 'width=1600;dpi=150'`, quoted because shells read `;` themselves — and the two forms mix. The png writer takes `width`, `height`, `units` (`px`, `in`, `cm`, `mm`, `pt`), `dpi`, and `background` (any CSS color, including `transparent`), defaulting to a 1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An unknown key or unusable value is an error naming the option, not a silently ignored setting.
+
 - `--reader`, `--writer`, and `--output` gained the short forms `-r`, `-w`, and `-o` on `exec` and `run`; `validate --reader` also takes `-r`.
+
 - Text is rendered as rich text (markdown) by the png writer. A text layer’s `label` is parsed for `**bold**`, `*italic*`, `_underline_`, `~~strike~~`, `` `code` `` and marquee-style `{selector body}` spans that set a colour or size (`{.red hot}`, `{#0072B2 blue}`, `{.20 big}`), and so are the plot title, subtitle, caption and axis titles set with `LABEL`. Legend titles and break labels (axis tick labels, legend keys) do not parse yet and show their markers. The new `parse` setting on the text layer turns it off for that layer (`SETTING parse => false`), drawing the label exactly as given; it defaults to `true`. Chrome text has no switch yet. The Vega-Lite writer has no rich-text equivalent and ignores `parse`, always drawing text literally.
+
 - New `minor_breaks` setting on continuous scales, controlling the unlabelled subdivisions between breaks: a whole number of minor breaks *per interval between two breaks* (`0` removes them), an array of exact positions, or — for temporal scales — an interval such as `'week'`. Defaults to a value chosen by the transformation. This has no Vega-Lite equivalent and is ignored by that writer; the png writer draws them.
+
+- The VS Code / Positron extension now ships the `ggsql-jupyter` kernel, so installing the extension is all that is needed to run queries. It is offered alongside every ggsql kernel found on the machine — a Jupyter kernelspec, a native install, one on `PATH`, or the path in `ggsql.kernelPath` — each named for the version it reports, so the New Console Session picker shows which is which. A kernel too old to report one is still offered, named without a version. The bundled kernel is the default.
+
+- `ggsql-jupyter` accepts `--version`.
 
 ### Changed
 
@@ -18,6 +27,7 @@
 
 ### Fixed
 
+- Positron no longer offers a ggsql runtime on a machine that has no kernel.
 - A dodged violin or half-boxplot on a categorical `y` axis is no longer flipped in the Vega-Lite writer. Both took their band displacement from an encoding of their own that read a ggsql offset as pointing down the screen, so their groups came out in the opposite order to every other mark — a violin put the first group above the second where a boxplot of the same data put it below, and a half-boxplot’s box parted company with its own whiskers once dodged. Violins are also clipped to the panel now, as every other mark is.
 - An identity-scaled column is now read exactly like the equivalent literal. `SCALE IDENTITY <aes>` hands its values straight to the aesthetic, so they mean what the same value written with `SETTING` means, but several were passed to the renderer unconverted: a `size` column was read as a symbol area in pixels² rather than the radius in points `SETTING size => 3` gives (markers far too small), a `shape` column of names such as `'star'` made Vega-Lite fail to render at all, and a `linetype` column of names such as `'dashed'` drew a solid line in both writers. `size`, `linewidth`, `fontsize`, `shape` and `linetype` identity columns now convert per row, so an identity column and a setting produce the same drawing. A value the aesthetic already understands still passes through untouched.
 - `DRAW bar MAPPING <category> AS y` produced a single bar against a synthetic axis instead of horizontal bars. A layer whose geom synthesises its primary position (bar, boxplot) now transposes when the user maps a *discrete* `y`, and stays put when they map a continuous one — that being the value axis, where a lone `DRAW boxplot MAPPING <value> AS y` already belongs.

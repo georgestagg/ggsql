@@ -1,3 +1,5 @@
+[Skip to main content](#quarto-content)
+
 # QUERY ![](assets/visualize.svg)VISUALIZE UNDERSTAND
 
 ggsql brings the elegance of the [Grammar of Graphics](get_started/grammar.llms.md) to SQL. Write familiar queries, add visualization clauses, and see your data transform into beautiful, composable charts — no context switching, no separate tools, just SQL with superpowers.
