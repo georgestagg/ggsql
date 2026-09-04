@@ -168,11 +168,15 @@ impl WriterOptions {
     /// Returns `GgsqlError::WriterError` naming the unknown keys and listing
     /// the supported ones.
     pub fn reject_unknown(&self, known: &[&str]) -> Result<()> {
+        // The declared names are normalised too, so a writer may declare the
+        // hyphenated spelling its docs use (`embed-fonts`) and still match a
+        // key given either way. The error still lists them as declared.
+        let canonical: Vec<String> = known.iter().map(|key| normalise_key(key)).collect();
         let unknown: Vec<&str> = self
             .values
             .keys()
             .map(String::as_str)
-            .filter(|key| !known.contains(key))
+            .filter(|key| !canonical.iter().any(|k| k == key))
             .collect();
         if unknown.is_empty() {
             return Ok(());

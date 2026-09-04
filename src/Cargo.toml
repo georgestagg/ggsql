@@ -83,6 +83,28 @@ vegalite = []
 graphics = ["dep:hephaestus"]
 raster = ["graphics", "hephaestus/vello"]
 
+# One feature per output format, each pulling in exactly one codec. The knob
+# each writer exposes is the axis its format actually has — png trades encode
+# time for size, jpeg trades quality for size, tiff picks a compressor, and
+# webp is lossless with no rate control at all — so they share no setting they
+# would each have to reinterpret.
 png = ["raster", "hephaestus/png"]
+jpeg = ["raster", "hephaestus/jpeg"]
+tiff = ["raster", "hephaestus/tiff"]
+webp = ["raster", "hephaestus/webp"]
+
+# The vector writers need only `graphics`: they record the composition's own
+# drawing commands rather than rasterising them, so they pull in no wgpu, need
+# no GPU adapter at render time, and compile on the MSRV toolchain.
+svg = ["graphics", "hephaestus/svg"]
+pdf = ["graphics", "hephaestus/pdf"]
+
+# The plot-document writer. Named after the format, which ggsql does not own —
+# see `src/writer/hephaestus/CLAUDE.md` on why that is accurate rather than a
+# leak. `hep-read` is test-only: it is what lets the round trip be asserted.
+hep = ["graphics", "hephaestus/document-write"]
+hep-read = ["hep", "hephaestus/document-read"]
+
 builtin-data = []
 all-readers = ["duckdb", "sqlite", "odbc"]
+all-writers = ["vegalite", "png", "jpeg", "tiff", "webp", "svg", "pdf", "hep"]

@@ -54,8 +54,24 @@ mod hephaestus;
 #[cfg(feature = "graphics")]
 pub use hephaestus::{rgba, Canvas, Color};
 
+#[cfg(feature = "raster")]
+pub use hephaestus::RasterRenderer;
+
+#[cfg(feature = "jpeg")]
+pub use hephaestus::JpegWriter;
+#[cfg(feature = "webp")]
+pub use hephaestus::WebpWriter;
+
+#[cfg(feature = "hep")]
+pub use hephaestus::HepWriter;
+#[cfg(feature = "pdf")]
+pub use hephaestus::PdfWriter;
+#[cfg(feature = "svg")]
+pub use hephaestus::SvgWriter;
 #[cfg(feature = "png")]
-pub use hephaestus::{PngWriter, RasterRenderer};
+pub use hephaestus::{PngCompression, PngWriter};
+#[cfg(feature = "tiff")]
+pub use hephaestus::{TiffCompression, TiffWriter};
 
 /// Trait for visualization output writers
 ///

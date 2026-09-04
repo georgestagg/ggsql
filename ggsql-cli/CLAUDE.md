@@ -13,7 +13,8 @@ ggsql-cli/
 ├── examples/
 │   └── visual_test.rs  Dev harness: renders the doc examples into an HTML report
 └── src/
-    └── main.rs         clap CLI: exec, run, parse, validate, docs, skill
+    ├── main.rs         clap CLI: exec, run, parse, validate, docs, skill
+    └── writers.rs      The writer registry — one row per writer, plus dispatch
 ```
 
 The binary name is `ggsql` (not `ggsql-cli`) — that's what release artifacts and `$PATH` see.
@@ -34,7 +35,17 @@ The binary name is `ggsql` (not `ggsql-cli`) — that's what release artifacts a
 
 Only public `ggsql::*` API is used (`reader`, `writer`, `validate`, `parser`, `VERSION`) — this crate has no awareness of internal modules.
 
-`exec` and `run` share a `WriterSpec { name, options }`: `--writer` names the writer and repeated `--writer-option key=value` flags (short `-D`, visible alias `--writer-options`, several settings per flag when separated by `;`) become a `ggsql::writer::WriterOptions`, parsed up front in `main` so a malformed pair fails before any SQL runs. The two travel together down `cmd_exec` → `exec_with_reader` → `render_spec`, which dispatches on the name and hands the options to `Writer::from_options`. Adding a setting to a writer therefore needs no CLI change; which keys exist is the writer's business, and an unknown one is its error to report. User-facing keys are documented in [`/doc/get_started/tooling/cli.qmd`](../doc/get_started/tooling/cli.qmd).
+`exec` and `run` share their flags through one `#[derive(Args)] RenderArgs` (`--reader`, `--writer`, `-D`, `--output`, `--verbose`) that both subcommands `#[command(flatten)]`, so a flag's help text and default exist once. `RenderArgs::writer()` resolves them into a `WriterSpec { info, options }` **in `main`, before any SQL runs** — an unknown `--writer`, a writer whose feature is off, and a `-D` pair that is not `key=value` all fail there rather than after the query has executed. `WriterSpec` then travels down `cmd_exec` → `exec_with_reader` → `render_spec`.
+
+Which keys a writer accepts is the writer's business, and an unknown one is its error to report — so adding a setting needs no CLI change. User-facing keys are documented in [`/doc/get_started/tooling/cli.qmd`](../doc/get_started/tooling/cli.qmd).
+
+### The writer registry
+
+[`src/writers.rs`](src/writers.rs) holds one `WriterInfo` row per writer: its name and aliases, the cargo feature that compiles it, the `label` used in messages ("PNG", "Vega-Lite JSON"), a `blurb` and an `options` line for help, `compiled: cfg!(feature = "…")`, and a `render` function pointer. Dispatch, `--writer`'s long help, `-D`'s long help and the "unknown writer" message are all generated from that list, so **adding a writer means adding a row and its render function** — nothing else in the CLI changes. Because `compiled` is a field rather than a `#[cfg]` around the row, the help and the error can name a writer this build lacks and say which feature would bring it in, which is the more common mistake than a misspelled name.
+
+Render functions return `Result<(Output, Vec<String>), String>`: the output plus anything the writer had to degrade to produce it. They report failure rather than exiting, so `render_spec` owns how a problem is presented. **Warnings go to stderr unconditionally, not behind `-v`** — something the writer could not express is a defect in the file the user is about to ship, and stderr keeps it out of a piped artifact.
+
+`open_reader(uri) -> Result<Box<dyn Reader>, String>` is the matching single place for connection strings. `ggsql::reader::Reader` is object-safe on purpose, so every subcommand that needs data shares one function that knows which schemes exist and which of them this build has.
 
 ## Build & install
 
@@ -60,7 +71,7 @@ The macOS codesign step uses [`/entitlements.plist`](../entitlements.plist) at t
 default = ["duckdb", "sqlite", "vegalite", "ipc", "parquet", "builtin-data", "odbc"]
 ```
 
-Each feature passes through to `ggsql/<feature>`. The `vegalite` flag also gates the writer-rendering path in `main.rs` via `#[cfg(feature = "vegalite")]`.
+Each feature passes through to `ggsql/<feature>`. A writer feature gates only its own row's render function in `writers.rs`; the row itself is always present.
 
 ## Testing
 

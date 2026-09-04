@@ -7,6 +7,28 @@
   and the new `minor_breaks` setting have no Vega-Lite equivalent and render
   only here. Requires a working GPU adapter — hardware or software, e.g.
   lavapipe — at render time.
+- Six more output formats, each with its own writer and its own off-by-default
+  feature: `jpeg`, `tiff`, `webp`, `svg`, `pdf`, and `hep`. Every one takes the
+  same canvas settings as `png` (`width`, `height`, `units`, `dpi`,
+  `background`) plus whatever its own format actually offers — `png` and `tiff`
+  a `compression`, `jpeg` a `quality`, `svg` a `text` mode with `embed-fonts`
+  and `id-prefix`, `pdf` a `compress` and `links`, `hep` a `lossy` and
+  `embed-fonts`. `webp` has none: it is lossless with no rate control, and on
+  plot content it is both about as fast to encode as `png compression=fast` and
+  roughly half the size, which makes it the best default for a raster plot sent
+  over a wire.
+
+  **`svg`, `pdf` and `hep` need no GPU adapter and no wgpu at all** — they
+  record the same drawing commands the rasteriser would have executed, so they
+  work on a headless box, in a container with no graphics stack, and in CI. They
+  also build on Rust 1.86, so they remain available to the R bindings.
+
+  `svg` and `pdf` produce resolution-independent output whose text stays
+  selectable, and a canvas given in a physical unit is declared as one, so
+  `-D 'width=6;height=4;units=in;dpi=300'` yields a file that prints six inches
+  wide. `hep` produces no picture at all: it captures the resolved plot —
+  scales, breaks, labels, theme, geometry and data — so a host can render it
+  itself at any size and re-render on resize without re-running the query.
 - Writers can be configured from key–value options: `Writer::from_options` takes
   a `WriterOptions` set, and the CLI collects them from a repeatable
   `--writer-option key=value` flag on `exec` and `run` (short `-D`, also
@@ -38,6 +60,12 @@
   the png writer draws them.
 
 ### Changed
+- `--writer` now lists every format ggsql knows in its long help, marking the
+  ones the running build does not have and naming the feature that would bring
+  each in — the more common mistake than a misspelled name. `-D`'s long help
+  lists each writer's settings. An unknown writer, a writer whose feature is
+  off, and an unusable setting are all now reported **before** the query runs
+  rather than after.
 - The png writer now records its render resolution in the PNG itself, so a
   figure rendered above 96 dpi reports its true physical size instead of being
   read as 72 dpi by whatever opens it.

@@ -65,12 +65,20 @@ The pipeline that takes a parsed `Plot` plus a `Reader` and produces a fully-res
 
 ### `writer/`
 
-`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes, and `from_options` for configuration a frontend collects as key–value pairs — `options.rs`'s `WriterOptions`, parsed from the CLI's `--writer-option`). Two implementations:
+`Writer` trait in `mod.rs` (associated `Output` type so writers can return text or bytes, and `from_options` for configuration a frontend collects as key–value pairs — `options.rs`'s `WriterOptions`, parsed from the CLI's `--writer-option`). Two families:
 
 - **Vega-Lite** (`vegalite` feature, default) — emits Vega-Lite JSON. Deep-dive: [`writer/vegalite/CLAUDE.md`](writer/vegalite/CLAUDE.md).
-- **PNG** (`png` feature, non-default) — `PngWriter` renders PNG bytes via a GPU (wgpu/vello) backend. The module implementing it is `writer/hephaestus/`, after the renderer it wraps; that name is internal, and the module is private so only `PngWriter` is public. Deep-dive (architecture + known gaps): [`writer/hephaestus/CLAUDE.md`](writer/hephaestus/CLAUDE.md). Excluded from the MSRV 1.86 build (hephaestus needs 1.88) and needs a GPU adapter at render time.
+- **The renderer-backed writers** (seven of them, none default) — all live in `writer/hephaestus/`, named after the renderer they wrap; that name is internal, and the module is private so only the writers, `Canvas` and `RasterRenderer` are public. They share their whole pipeline — `Canvas` for configuration, `compose` for the plot composition, then either `raster` for pixels or `vector` for drawing commands — and differ only in what they do with the result. Deep-dive (architecture + known gaps): [`writer/hephaestus/CLAUDE.md`](writer/hephaestus/CLAUDE.md).
 
-`ggplot2` and `plotters` are reserved feature flags with no implementation.
+  | Feature | Writer | Output | GPU |
+  | --- | --- | --- | --- |
+  | `png` / `jpeg` / `tiff` / `webp` | `PngWriter`, `JpegWriter`, `TiffWriter`, `WebpWriter` | image bytes | required |
+  | `svg` / `pdf` | `SvgWriter`, `PdfWriter` | vector text / one PDF page | **none** |
+  | `hep` | `HepWriter` | a `.hep` plot document — no picture | **none** |
+
+  The last three go through the same composition and the same `render` call (which takes `&mut dyn SceneBuilder`), so they need no adapter, pull in no wgpu, and **compile on the MSRV 1.86 toolchain** — `cargo +1.86 check --features svg,pdf,hep --ignore-rust-version`, where the flag is needed only because `parley` *declares* 1.88 while compiling fine on 1.86. Only the raster writers are genuinely 1.88+.
+
+Two **internal** features carry the split, enabled by the writer features rather than named directly: `graphics` is the shared composition layer, and `raster = graphics + hephaestus/vello` adds the GPU rasteriser. Only `raster` pulls in wgpu, vello and pollster, which is what lets a vector-only build skip them — `cargo tree --features graphics` shows none of the three, `--features png` shows 18. `graphics` is also the single module gate for `writer/hephaestus/`, so adding a format needs no change there.
 
 ### `plot/`
 
@@ -103,9 +111,19 @@ Defined in `Cargo.toml`:
 | `parquet` | ✓ | Parquet support in readers/data |
 | `spatial` | ✓ | Spatial/geometry support (geozero for WKT↔GeoJSON) |
 | `vegalite` | ✓ | Vega-Lite writer |
-| `png` | — | PNG raster writer (GPU; excluded from the MSRV build) |
+| `graphics` | — | *Internal.* The shared plot-composition layer; no GPU |
+| `raster` | — | *Internal.* `graphics` + the GPU rasteriser (wgpu/vello) |
+| `png` | — | PNG writer (`raster`; excluded from the MSRV build) |
+| `jpeg` | — | JPEG writer (`raster`) |
+| `tiff` | — | TIFF writer (`raster`) |
+| `webp` | — | WebP writer (`raster`) |
+| `svg` | — | SVG writer (`graphics`; no GPU, MSRV-clean) |
+| `pdf` | — | PDF writer (`graphics`; no GPU, MSRV-clean) |
+| `hep` | — | `.hep` plot-document writer (`graphics`; no GPU, MSRV-clean) |
+| `hep-read` | — | **Test-only.** Reading a `.hep` back, for the round-trip test |
 | `builtin-data` | ✓ | Bundled penguins/airquality datasets |
 | `all-readers` | — | `duckdb` + `sqlite` + `odbc` |
+| `all-writers` | — | every writer above except the test-only `hep-read` |
 
 `ggsql-wasm` builds with `default-features = false` plus `vegalite`, `sqlite`, `builtin-data`. `ggsql-jupyter` builds with `duckdb`, `vegalite`.
 

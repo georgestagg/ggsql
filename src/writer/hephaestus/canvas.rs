@@ -32,6 +32,13 @@ const MAX_DIMENSION: f64 = 32_768.0;
 /// the shared ones lead the "supported options" list in the error.
 pub const CANVAS_OPTIONS: &[&str] = &["width", "height", "units", "dpi", "background"];
 
+/// The canvas keys that describe a *size* rather than an appearance.
+///
+/// A writer whose canvas is only a hint needs to tell "no size was asked for"
+/// apart from "a size was asked for that happens to equal the default", and
+/// these are the keys that decide it.
+pub const CANVAS_HINT_OPTIONS: &[&str] = &["width", "height", "units", "dpi"];
+
 /// Units a `width` / `height` option may be given in.
 const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
 
@@ -134,6 +141,22 @@ impl Canvas {
     pub fn dpi_hint(&self) -> Option<f64> {
         Some(self.dpi)
     }
+
+    /// The background as a vector backend wants it: `None` when fully
+    /// transparent.
+    ///
+    /// A rasteriser is always handed a colour to clear with, even a transparent
+    /// one. A vector backend instead takes `None` to mean *emit no background
+    /// element at all*, which is what a transparent canvas should become — a
+    /// full-canvas rect painted in transparent black is a real element that
+    /// some consumers still composite, and it is dead weight in every other.
+    pub fn vector_background(&self) -> Option<Color> {
+        if self.background.components[3] <= 0.0 {
+            None
+        } else {
+            Some(self.background)
+        }
+    }
 }
 
 impl Default for Canvas {
@@ -166,4 +189,109 @@ fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
         )));
     }
     Ok(rounded as u32)
+}
+
+/// Test-only access to a writer's canvas.
+///
+/// Implemented by every renderer-backed writer so the shared option behaviour
+/// can be asserted generically instead of once per format.
+#[cfg(test)]
+pub(super) trait Canvased {
+    fn canvas(&self) -> &Canvas;
+}
+
+/// Assert the five shared canvas options behave identically for `W`.
+///
+/// They are parsed in one place, so they are asserted in one place too, and a
+/// writer's own tests cover only the keys its format adds. Calling this per
+/// writer is what catches a writer that parses a canvas key itself, or forgets
+/// to pass its own keys through to [`Canvas::from_options`] — either way the
+/// shared behaviour stops matching.
+///
+/// Transparency is not covered here: a format without an alpha channel refuses
+/// it. See [`assert_transparent_background`] for the writers that accept it.
+#[cfg(test)]
+pub(super) fn assert_canvas_semantics<W: crate::writer::Writer + Canvased + std::fmt::Debug>() {
+    let build = |pairs: &[&str]| -> Result<W> { W::from_options(&WriterOptions::parse(pairs)?) };
+    let dims = |pairs: &[&str]| -> (u32, u32, f64) {
+        let writer = build(pairs).unwrap();
+        let c = writer.canvas();
+        (c.width, c.height, c.dpi)
+    };
+
+    // No options: the documented defaults, on an opaque white canvas.
+    assert_eq!(dims(&[]), (DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI));
+    let white = *build(&[]).unwrap().canvas();
+    assert_eq!(white.background.components, [1.0, 1.0, 1.0, 1.0]);
+    assert!(!white.physical, "a pixel canvas is not a physical one");
+
+    // A pixel canvas is taken verbatim, and DPI only scales the chrome on it.
+    assert_eq!(
+        dims(&["width=1600", "height=1200"]),
+        (1600, 1200, DEFAULT_DPI)
+    );
+    assert_eq!(
+        dims(&["width=800", "units=px", "dpi=72"]),
+        (800, DEFAULT_HEIGHT, 72.0)
+    );
+
+    // A physical canvas goes through inches, so it grows with DPI.
+    assert_eq!(
+        dims(&["width=8", "height=6", "units=in", "dpi=100"]),
+        (800, 600, 100.0)
+    );
+    // 2.54 cm = 1 in; 25.4 mm = 1 in; 72 pt = 1 in.
+    assert_eq!(dims(&["width=2.54", "units=cm", "dpi=96"]).0, 96);
+    assert_eq!(dims(&["width=25.4", "units=mm", "dpi=96"]).0, 96);
+    assert_eq!(dims(&["width=72", "units=pt", "dpi=96"]).0, 96);
+    // An unset dimension stays a pixel count even when the caller works in inches.
+    assert_eq!(dims(&["width=5", "units=in", "dpi=200"]).1, DEFAULT_HEIGHT);
+    assert!(
+        build(&["width=5", "units=in"]).unwrap().canvas().physical,
+        "inches are a physical unit"
+    );
+
+    // An opaque CSS color, in the spellings a user reaches for.
+    let red = *build(&["background=#ff0000"]).unwrap().canvas();
+    assert_eq!(red.background.components, [1.0, 0.0, 0.0, 1.0]);
+    assert!(build(&["background=rgb(0, 0, 255)"]).is_ok());
+    assert!(build(&["background=white"]).is_ok());
+
+    // Every bad value names the option that carries it.
+    let cases = [
+        ("units=furlongs", "'units' expects"),
+        ("dpi=0", "'dpi' expects a positive number"),
+        ("dpi=high", "'dpi' expects a number"),
+        ("width=0", "'width' resolves to 0 px"),
+        ("width=-4", "'width' resolves to -4 px"),
+        ("height=1e9", "'height' resolves to"),
+        ("background=nope", "'background' expects a CSS color"),
+    ];
+    for (option, expected) in cases {
+        let err = build(&[option]).unwrap_err().to_string();
+        assert!(err.contains(expected), "{option}: {err}");
+    }
+
+    // And an unknown key is reported rather than ignored, with the shared keys
+    // leading the list so the nearest miss is the first thing read.
+    let err = build(&["with=1600"]).unwrap_err().to_string();
+    assert!(err.contains("unknown writer option 'with'"), "{err}");
+    assert!(err.contains("supported options: width, height"), "{err}");
+}
+
+/// Assert `W` accepts a transparent canvas, in both spellings.
+///
+/// Separate from [`assert_canvas_semantics`] because a format with no alpha
+/// channel refuses one instead — see `JpegWriter`.
+#[cfg(test)]
+pub(super) fn assert_transparent_background<W: crate::writer::Writer + Canvased>() {
+    for spelling in ["background=transparent", "background=none"] {
+        let options = WriterOptions::parse([spelling]).unwrap();
+        let writer = W::from_options(&options).unwrap();
+        assert_eq!(
+            writer.canvas().background.components[3],
+            0.0,
+            "{spelling} should be fully transparent"
+        );
+    }
 }
