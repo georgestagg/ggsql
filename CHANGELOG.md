@@ -38,6 +38,9 @@
   the png writer draws them.
 
 ### Changed
+- The png writer now records its render resolution in the PNG itself, so a
+  figure rendered above 96 dpi reports its true physical size instead of being
+  read as 72 dpi by whatever opens it.
 - Dodging now only takes effect where groups actually meet on a position. A
   layer whose grouping gives every group a position of its own — `colour` mapped
   to the same column as the discrete axis, say — is drawn at its full width

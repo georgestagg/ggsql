@@ -1,75 +1,58 @@
-//! PNG raster writer.
+//! Renderer-backed writers.
 //!
-//! Renders a resolved ggsql `Spec` to PNG bytes via the [`hephaestus`] 2D scene
-//! renderer. Only [`PngWriter`] is public; the renderer behind it is an
-//! implementation detail.
+//! Every writer here renders a resolved ggsql `Spec` through the [`hephaestus`]
+//! 2D scene renderer. Only the writers themselves are public; the renderer
+//! behind them is an implementation detail, and this module is private.
+//!
+//! The work splits three ways, which is what keeps one writer per format small:
+//!
+//! - [`compose`] turns a `Plot` into a live `PlotComposition`. Format-independent,
+//!   and where nearly all the code is.
+//! - [`canvas`] carries the size, resolution and background, and parses the
+//!   options they come from.
+//! - [`raster`] rasterises a composition to pixels. **The only part that needs a
+//!   GPU adapter** — a vector writer builds a scene from the same composition
+//!   and never comes through here.
 //!
 //! **Scope**: multi-layer plots under Cartesian, Polar, and Map projections,
 //! with `FACET` faceting (Wrap/Grid, fixed + free scales); every geom except
-//! `arrow`; all scale types and transforms, material aesthetics, plot and axis
-//! titles, and legends. A geom outside [`geom::is_supported`] is rejected by
-//! [`PngWriter::validate`].
+//! `arrow`, which is a stub no writer implements; all scale types and
+//! transforms, material aesthetics, plot and axis titles, and legends.
 //!
 //! Architecture — the abstractions and the invariants they keep — and the
 //! inventory of deferred work are documented in
 //! `src/writer/hephaestus/CLAUDE.md`.
-//!
-//! Rendering uses hephaestus's Vello (GPU) backend, so a working wgpu adapter
-//! (hardware or software, e.g. lavapipe) is required at render time.
 
+mod canvas;
 mod channels;
+mod compose;
 mod facet;
 mod geom;
 mod projection;
+mod raster;
 mod scales;
 mod wiring;
 
 use std::collections::HashMap;
 
-use hephaestus::backend::vello::VelloRenderer;
 pub use hephaestus::color::{rgba, Color};
-use hephaestus::geometry::Size;
-use hephaestus::plot::{scale, AspectMode, Plot as HPlot, PlotComposition};
-use hephaestus::png::encode_png;
-use hephaestus::scales::chrome::AxisSide;
-use hephaestus::shape::ShapeRegistry;
-use hephaestus::{Renderer, SceneBuilder};
+#[cfg(feature = "png")]
+use hephaestus::png::{encode_png, PngCompression};
 
-use crate::naming;
-use crate::plot::layer::geom::GeomType;
-use crate::plot::layer::is_transposed;
-use crate::plot::ParameterValue;
-use crate::writer::hephaestus::projection::apply_projection;
-use crate::writer::hephaestus::scales::build_scale;
+pub use canvas::Canvas;
+#[cfg(test)]
+use canvas::{DEFAULT_DPI, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+#[cfg(feature = "raster")]
+pub use raster::RasterRenderer;
+
 use crate::writer::{Writer, WriterOptions};
-use crate::{DataFrame, GgsqlError, Layer, Plot, Result};
+use crate::{DataFrame, GgsqlError, Plot, Result};
 
-use wiring::Ctx;
+/// Option keys [`PngWriter`] adds to the shared canvas set.
+const PNG_OPTIONS: &[&str] = &["compression"];
 
-/// Default canvas width in pixels.
-const DEFAULT_WIDTH: u32 = 1500;
-/// Default canvas height in pixels.
-const DEFAULT_HEIGHT: u32 = 1000;
-/// Default resolution. DPI converts the theme's physical sizes (text, stroke
-/// widths, spacing — all in points) to pixels, so it sets how large the chrome
-/// is relative to the canvas as well as the print size of a physical figure.
-const DEFAULT_DPI: f64 = 300.0;
-
-/// Largest canvas dimension accepted, in pixels. Far beyond any real figure, but
-/// small enough that a slipped unit conversion fails with a message instead of
-/// exhausting GPU memory.
-const MAX_DIMENSION: f64 = 32_768.0;
-
-/// Fraction of a map's bounding-box span added as breathing room around it, so
-/// marks on the boundary are not drawn against the panel edge. Matches the
-/// Vega-Lite writer's projection fit (`span * 1.1`).
-const MAP_PADDING: f64 = 0.1;
-
-/// Option keys [`PngWriter::from_options`] understands.
-const OPTIONS: &[&str] = &["width", "height", "units", "dpi", "background"];
-
-/// Units a `width` / `height` option may be given in.
-const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
+/// How hard the PNG encoder works to make the file small.
+const COMPRESSION_VALUES: &[&str] = &["none", "fast", "balanced", "small"];
 
 /// Writer that renders a ggsql plot to a PNG image.
 ///
@@ -85,35 +68,93 @@ const UNITS: &[&str] = &["px", "in", "cm", "mm", "pt"];
 /// | `units` | `px`, `in`, `cm`, `mm`, or `pt` — how `width`/`height` are read | `px` |
 /// | `dpi` | Pixels per inch; converts physical sizes, including `units` | 300 |
 /// | `background` | Any CSS color, e.g. `white`, `#ff0000`, `transparent` | `white` |
-#[derive(Debug, Clone, PartialEq)]
+/// | `compression` | `none`, `fast`, `balanced`, or `small` | `balanced` |
+///
+/// `compression` trades encode time against file size, losslessly either way.
+/// `balanced` is what a file wants. `fast` is for a caller on a frame deadline —
+/// a host encoding a plot per resize, say — where it costs a fraction of the
+/// time for about half again the bytes.
+///
+/// Rendering requires a working wgpu adapter (hardware or software, e.g.
+/// lavapipe) at render time.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PngWriter {
-    width: u32,
-    height: u32,
-    dpi: f64,
-    background: Color,
+    canvas: Canvas,
+    compression: PngCompression,
 }
 
 impl PngWriter {
     /// Create a writer for the given pixel dimensions and DPI, white background.
     pub fn new(width: u32, height: u32, dpi: f64) -> Self {
         Self {
-            width,
-            height,
-            dpi,
-            background: rgba(1.0, 1.0, 1.0, 1.0),
+            canvas: Canvas::new(width, height, dpi),
+            compression: PngCompression::Balanced,
         }
     }
 
     /// Set the background color used to clear the canvas before rendering.
     pub fn background(mut self, color: Color) -> Self {
-        self.background = color;
+        self.canvas = self.canvas.background(color);
         self
+    }
+
+    /// Set how hard the encoder works to make the file small.
+    pub fn compression(mut self, compression: PngCompression) -> Self {
+        self.compression = compression;
+        self
+    }
+
+    /// Render through a renderer the caller keeps, rather than building one.
+    ///
+    /// Constructing a [`RasterRenderer`] creates a GPU device and compiles the
+    /// rasteriser's shaders, so a host rendering more than one figure should
+    /// build one once and pass it here.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GgsqlError::WriterError` if the plot cannot be composed, the
+    /// render fails, or the encode fails.
+    pub fn write_with(
+        &self,
+        spec: &Plot,
+        data: &HashMap<String, DataFrame>,
+        renderer: &mut RasterRenderer,
+    ) -> Result<Vec<u8>> {
+        compose::validate_plot(spec)?;
+        let mut view = compose::build_composition(spec, data)?;
+        let pixels = raster::render_rgba8(&mut view, &self.canvas, renderer)?;
+        // `render_to_buffer` hands out straight (un-premultiplied) alpha, which
+        // is exactly what PNG stores, so the buffer encodes as-is.
+        encode_png(
+            self.canvas.width,
+            self.canvas.height,
+            &pixels,
+            self.compression,
+            self.canvas.dpi_hint(),
+        )
+        .map_err(|e| GgsqlError::WriterError(format!("png encode failed: {e}")))
+    }
+
+    /// [`Self::write_with`] from a resolved `Spec`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::write_with`].
+    pub fn render_with(
+        &self,
+        spec: &crate::reader::Spec,
+        renderer: &mut RasterRenderer,
+    ) -> Result<Vec<u8>> {
+        self.write_with(spec.plot(), spec.data(), renderer)
     }
 }
 
 impl Default for PngWriter {
     fn default() -> Self {
-        Self::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI)
+        Self {
+            canvas: Canvas::default(),
+            compression: PngCompression::Balanced,
+        }
     }
 }
 
@@ -121,411 +162,29 @@ impl Writer for PngWriter {
     type Output = Vec<u8>;
 
     fn from_options(options: &WriterOptions) -> Result<Self> {
-        options.reject_unknown(OPTIONS)?;
-
-        let dpi = match options.number("dpi")? {
-            Some(dpi) if dpi > 0.0 => dpi,
-            Some(dpi) => {
-                return Err(GgsqlError::WriterError(format!(
-                    "writer option 'dpi' expects a positive number, got '{dpi}'"
-                )))
-            }
-            None => DEFAULT_DPI,
+        let canvas = Canvas::from_options(options, PNG_OPTIONS)?;
+        let compression = match options.one_of("compression", COMPRESSION_VALUES)? {
+            Some("none") => PngCompression::None,
+            Some("fast") => PngCompression::Fast,
+            Some("small") => PngCompression::Small,
+            _ => PngCompression::Balanced,
         };
-        // `units` interprets the dimensions the caller supplies; the defaults are
-        // pixel counts, so they stand whatever the unit is.
-        let units = options.one_of("units", UNITS)?.unwrap_or("px");
-        let width = match options.number("width")? {
-            Some(width) => to_pixels(width, units, dpi, "width")?,
-            None => DEFAULT_WIDTH,
-        };
-        let height = match options.number("height")? {
-            Some(height) => to_pixels(height, units, dpi, "height")?,
-            None => DEFAULT_HEIGHT,
-        };
-
-        let mut writer = Self::new(width, height, dpi);
-        if let Some(raw) = options.get("background") {
-            // `none` is a familiar spelling of a transparent canvas that CSS
-            // itself doesn't accept as a color.
-            let color = match raw.trim().to_lowercase().as_str() {
-                "none" => rgba(0.0, 0.0, 0.0, 0.0),
-                _ => scales::parse_color(raw).ok_or_else(|| {
-                    GgsqlError::WriterError(format!(
-                        "writer option 'background' expects a CSS color, got '{raw}'"
-                    ))
-                })?,
-            };
-            writer = writer.background(color);
-        }
-        Ok(writer)
+        Ok(Self {
+            canvas,
+            compression,
+        })
     }
 
     fn validate(&self, spec: &Plot) -> Result<()> {
-        if spec.layers.is_empty() {
-            return Err(GgsqlError::WriterError(
-                "png writer requires at least one layer".into(),
-            ));
-        }
-        for layer in &spec.layers {
-            let geom_type = layer.geom.geom_type();
-            if !geom::is_supported(geom_type) {
-                return Err(GgsqlError::WriterError(format!(
-                    "png writer does not support the '{geom_type}' geom yet"
-                )));
-            }
-        }
-        Ok(())
+        compose::validate_plot(spec)
     }
 
     fn write(&self, spec: &Plot, data: &HashMap<String, DataFrame>) -> Result<Self::Output> {
-        self.validate(spec)?;
-
-        // FACET → a grid of named panels (a single panel when unfaceted). Each
-        // panel becomes one hephaestus `Plot` sharing the composition's scales.
-        let (composition, panels) = facet::build_panels(spec, data)?;
-        // The composition owns the shape registry backing composition-level legend
-        // glyphs (point markers, line dashes).
-        let mut view = PlotComposition::new(&composition)
-            .shape_registry(ShapeRegistry::with_builtins())
-            .theme(wiring::ggsql_theme());
-
-        // Plot title/subtitle/caption from the LABEL clause. These live on the
-        // composition, not the per-panel plots, so one label spans the whole
-        // figure — which is also correct for the unfaceted 1x1 case (a plot-level
-        // title would resolve to the same layout row and be painted over).
-        if let Some(text) = wiring::plot_label(spec, "title") {
-            view = view.title(text);
-        }
-        if let Some(text) = wiring::plot_label(spec, "subtitle") {
-            view = view.subtitle(text);
-        }
-        if let Some(text) = wiring::plot_label(spec, "caption") {
-            view = view.caption(text);
-        }
-
-        // Axis titles are composition chrome too: one centred title per
-        // dimension for the whole figure, rather than one per panel rail.
-        for (side, text) in projection::composition_axis_titles(spec) {
-            view = view.axis_title(side, text);
-        }
-
-        // Register the fixed (shared) scales once, globally. Every panel binds
-        // its position channels to these names, giving fixed-scale faceting.
-        for scale in &spec.scales {
-            let kind = match scale.aesthetic.as_str() {
-                "fill" | "stroke" => scales::RangeKind::Color,
-                "shape" => scales::RangeKind::Shape,
-                "linetype" => scales::RangeKind::Linetype,
-                // The text geom's font aesthetics: a scale over them resolves a
-                // range of family names / weights, not numbers.
-                "typeface" => scales::RangeKind::Text,
-                "fontweight" => scales::RangeKind::FontWeight,
-                "italic" => scales::RangeKind::Bool,
-                _ => {
-                    if scale.aesthetic.starts_with("pos") {
-                        scales::RangeKind::Position
-                    } else {
-                        scales::RangeKind::Number
-                    }
-                }
-            };
-            if let Some(hs) = build_scale(scale, kind) {
-                view.insert_scale(scale.aesthetic.clone(), hs);
-            }
-        }
-
-        // Frame a map to its bounding box. Under a `PROJECT map` every mark, the
-        // clip boundary and the graticules share one pre-projected data space, so
-        // the position scales must span the map's extent rather than the marks'
-        // — otherwise the data is zoomed in and drifts off the boundary. A
-        // spatial layer additionally has no `pos1`/`pos2` columns at all (it
-        // positions by geometry), so ggsql resolves no position scales for it and
-        // these are the only ones. The bbox comes from ggsql
-        // (`computed["bbox"]` when projected, else the geometry extent), keeping
-        // the "writer never invents extents" principle.
-        let map_bbox = map_bbox(spec, data)?;
-        if let Some((xmin, ymin, xmax, ymax)) = map_bbox {
-            view.insert_scale("pos1".to_string(), scale::continuous(map_range(xmin, xmax)));
-            view.insert_scale("pos2".to_string(), scale::continuous(map_range(ymin, ymax)));
-        }
-
-        // Legends are collected from the first panel only and registered once on
-        // the composition's own legend ring, so a faceted plot gets a single shared
-        // legend rather than one per panel. Every panel produces the same legends
-        // (all built from the globally resolved scales), so one capture suffices.
-        let legend_sink = std::cell::RefCell::new(Vec::new());
-        let mut legends_captured = false;
-
-        for panel in &panels {
-            // Slice each layer's data to this panel. A Grid cell whose facet
-            // combination doesn't occur in the data still becomes a panel — framed,
-            // axed and strip-labelled like any other, just with no marks — so the
-            // grid stays rectangular and its strips keep describing every row and
-            // column (the ggplot2 look).
-            let slices: Vec<(&Layer, DataFrame)> = spec
-                .layers
-                .iter()
-                .enumerate()
-                .map(|(idx, layer)| {
-                    Ok((
-                        layer,
-                        facet::panel_dataframe(layer_dataframe(layer, idx, data)?, panel)?,
-                    ))
-                })
-                .collect::<Result<_>>()?;
-            let empty = slices.iter().all(|(_, df)| df.height() == 0);
-
-            // Fixed dimensions bind the shared `pos1`/`pos2`; free dimensions get
-            // a per-panel scale whose domain is computed from this panel's slices
-            // (the one place the writer computes extents — free facets only).
-            let mut ps = facet::PanelScales::new(spec, panel);
-            let layer_dfs: Vec<&DataFrame> = slices.iter().map(|(_, df)| df).collect();
-            if ps.free_x {
-                match scales::free_position_scale(spec.find_scale("pos1"), &layer_dfs, "pos1") {
-                    Some(hs) => view.insert_scale(ps.pos1.clone(), hs),
-                    // No panel extent to free the dimension over (an empty cell),
-                    // so read the shared scale rather than leave the axis and the
-                    // channel bindings pointing at a scale that was never inserted.
-                    None => ps.use_shared("pos1"),
-                }
-            }
-            if ps.free_y {
-                match scales::free_position_scale(spec.find_scale("pos2"), &layer_dfs, "pos2") {
-                    Some(hs) => view.insert_scale(ps.pos2.clone(), hs),
-                    None => ps.use_shared("pos2"),
-                }
-            }
-
-            // Build every layer's geom into this panel; geoms bind channels and
-            // record legends (first panel only) into `legend_sink`, drawing in
-            // layer (DRAW) = z-order. An empty panel builds no geoms — a hephaestus
-            // geom over zero rows has nothing to draw — and so must not count as
-            // the legend-capturing panel either.
-            let panel_legends = (!legends_captured).then_some(&legend_sink);
-            let mut plot = HPlot::new(&composition, panel.id.as_str())
-                .shape_registry(ShapeRegistry::with_builtins());
-            if !empty {
-                for (layer, df) in &slices {
-                    let ctx = Ctx {
-                        spec,
-                        layer,
-                        df,
-                        transposed: is_transposed(layer),
-                        pos1_scale: &ps.pos1,
-                        pos2_scale: &ps.pos2,
-                        legends: panel_legends,
-                    };
-                    geom::build_into_plot(&mut plot, &ctx)?;
-                }
-                legends_captured = true;
-            } else {
-                // hephaestus draws a panel's grid lines from the scales bound to
-                // the projection's channels — which a geom would have bound. With
-                // no geoms to do it, bind the position channels here so an empty
-                // cell carries the same grid as its populated neighbours. A
-                // position ggsql resolved no scale for stays unbound, since a
-                // binding to an unregistered scale fails validation.
-                for (channel, name) in [("x", &ps.pos1), ("y", &ps.pos2)] {
-                    if view.scale(name).is_some() {
-                        plot.set_binding(channel, name.clone());
-                    }
-                }
-            }
-
-            // Axes are created per coordinate system, edge-only for fixed scales.
-            plot = apply_projection(plot, spec, panel, &ps);
-
-            // Lock a map panel to square units so the projection keeps its
-            // proportions (a globe stays round), the raster analog of the
-            // Vega-Lite writer's single uniform projection scale.
-            //
-            // `aspect_ratio` is the *data-space* x-unit : y-unit ratio, not a
-            // panel width:height ratio. Map coordinates arrive pre-projected, so
-            // one unit means the same length on both axes and the ratio is 1 —
-            // passing the bbox's own height/width instead stretches every map by
-            // exactly that factor.
-            if map_bbox.is_some() {
-                plot = plot.aspect_ratio(1.0).aspect_mode(AspectMode::Range);
-            }
-
-            // Facet strip labels (Wrap/Grid-column header on top, Grid-row on right).
-            if let Some(text) = &panel.strip_top {
-                plot = plot.strip(AxisSide::Top, text.clone());
-            }
-            if let Some(text) = &panel.strip_right {
-                plot = plot.strip(AxisSide::Right, text.clone());
-            }
-
-            view.attach_plot(plot);
-        }
-
-        // One shared legend for the whole composition (see `legend_sink` above).
-        for legend in legend_sink.into_inner() {
-            view.add_legend(legend);
-        }
-
-        let issues = view.validate();
-        if !issues.is_empty() {
-            return Err(GgsqlError::WriterError(format!(
-                "png writer composition validation failed: {issues:?}"
-            )));
-        }
-
-        render_png(
-            &mut view,
-            self.width,
-            self.height,
-            self.dpi,
-            self.background,
-        )
+        let mut renderer = RasterRenderer::new()?;
+        self.write_with(spec, data, &mut renderer)
     }
 }
 
-/// Convert a canvas dimension given in `units` to whole pixels at `dpi`.
-///
-/// A physical unit goes through inches, so the same figure grows with DPI; `px`
-/// is already the canvas unit, where DPI only scales the chrome.
-fn to_pixels(value: f64, units: &str, dpi: f64, key: &str) -> Result<u32> {
-    let per_inch = match units {
-        "in" => 1.0,
-        "cm" => 2.54,
-        "mm" => 25.4,
-        "pt" => 72.0,
-        _ => return whole_pixels(value, key),
-    };
-    whole_pixels(value / per_inch * dpi, key)
-}
-
-/// Round a pixel count and reject one outside the renderable range.
-fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
-    let rounded = pixels.round();
-    if !(1.0..=MAX_DIMENSION).contains(&rounded) {
-        return Err(GgsqlError::WriterError(format!(
-            "writer option '{key}' resolves to {rounded} px, outside the supported range 1–{MAX_DIMENSION} px"
-        )));
-    }
-    Ok(rounded as u32)
-}
-
-/// The map bounding box `(xmin, ymin, xmax, ymax)`, or `None` when the plot is
-/// not a map. ggsql's resolved `computed["bbox"]` (set under a `PROJECT map`)
-/// wins; a bare `spatial` geom with no projection falls back to the union extent
-/// of its geometry data.
-fn map_bbox(
-    spec: &Plot,
-    data: &HashMap<String, DataFrame>,
-) -> Result<Option<(f64, f64, f64, f64)>> {
-    if let Some(proj) = &spec.project {
-        if let Some(ParameterValue::Array(arr)) = proj.computed.get("bbox") {
-            let nums: Vec<f64> = arr.iter().filter_map(|e| e.to_f64()).collect();
-            if let [xmin, ymin, xmax, ymax] = nums[..] {
-                if [xmin, ymin, xmax, ymax].iter().all(|v| v.is_finite()) {
-                    return Ok(Some((xmin, ymin, xmax, ymax)));
-                }
-            }
-        }
-    }
-
-    let is_spatial = |layer: &Layer| layer.geom.geom_type() == GeomType::Spatial;
-    if !spec.layers.iter().any(is_spatial) {
-        return Ok(None);
-    }
-
-    let geom_col = naming::aesthetic_column("geometry");
-    let (mut xmin, mut ymin, mut xmax, mut ymax) = (
-        f64::INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::NEG_INFINITY,
-    );
-    for (idx, layer) in spec
-        .layers
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| is_spatial(l))
-    {
-        let df = layer_dataframe(layer, idx, data)?;
-        if df.column(&geom_col).is_err() {
-            continue;
-        }
-        for g in channels::column_to_geometry(df, &geom_col)? {
-            if let Some((x0, y0, x1, y1)) = g.bounds() {
-                xmin = xmin.min(x0);
-                ymin = ymin.min(y0);
-                xmax = xmax.max(x1);
-                ymax = ymax.max(y1);
-            }
-        }
-    }
-    Ok(
-        (xmin.is_finite() && ymin.is_finite() && xmax.is_finite() && ymax.is_finite())
-            .then_some((xmin, ymin, xmax, ymax)),
-    )
-}
-
-/// A non-degenerate inclusive range for a map's continuous position scale.
-///
-/// The extent is padded by [`MAP_PADDING`] around its centre, matching the
-/// Vega-Lite writer, which fits the projection to `span * 1.1` centred on the
-/// bbox (`vegalite/projection/map.rs`). A zero-width or inverted extent is
-/// widened instead, so the scale can still map it.
-fn map_range(min: f64, max: f64) -> std::ops::RangeInclusive<f64> {
-    let span = max - min;
-    if span > f64::EPSILON {
-        let pad = span * MAP_PADDING / 2.0;
-        (min - pad)..=(max + pad)
-    } else {
-        (min - 0.5)..=(max + 0.5)
-    }
-}
-
-/// Look up the DataFrame backing a layer by its execution-assigned data key,
-/// falling back to the conventional key for its index as the Vega-Lite writer
-/// does. Execution always assigns the key; the fallback is for a hand-built
-/// `Plot`.
-fn layer_dataframe<'a>(
-    layer: &Layer,
-    idx: usize,
-    data: &'a HashMap<String, DataFrame>,
-) -> Result<&'a DataFrame> {
-    let key = layer
-        .data_key
-        .clone()
-        .unwrap_or_else(|| naming::layer_key(idx));
-    data.get(&key)
-        .ok_or_else(|| GgsqlError::WriterError(format!("no data found for layer key '{key}'")))
-}
-
-/// Render the composition to an RGBA8 buffer and encode it as PNG bytes.
-fn render_png(
-    view: &mut PlotComposition,
-    width: u32,
-    height: u32,
-    dpi: f64,
-    background: Color,
-) -> Result<Vec<u8>> {
-    let mut renderer = VelloRenderer::new().map_err(|e| {
-        GgsqlError::WriterError(format!("could not initialise the GPU renderer: {e}"))
-    })?;
-    {
-        let scene = renderer.scene();
-        scene.clear();
-        view.render(scene, Size::new(width as f64, height as f64), dpi);
-    }
-    let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
-    renderer
-        .render_to_buffer(width, height, background, &mut pixels)
-        .map_err(|e| GgsqlError::WriterError(format!("png render failed: {e}")))?;
-
-    // `render_to_buffer` hands out straight (un-premultiplied) alpha, which is
-    // exactly what PNG stores, so the buffer encodes as-is.
-    encode_png(width, height, &pixels)
-        .map_err(|e| GgsqlError::WriterError(format!("PNG encode failed: {e}")))
-}
-
-/// `from_options` tests. Separate from the render suite below because they need
-/// neither a reader nor a GPU.
 #[cfg(test)]
 mod option_tests {
     use super::*;
@@ -537,16 +196,18 @@ mod option_tests {
     /// The writer's canvas as `(width, height, dpi)`.
     fn canvas(pairs: &[&str]) -> (u32, u32, f64) {
         let writer = writer(pairs).unwrap();
-        (writer.width, writer.height, writer.dpi)
+        let c = writer.canvas;
+        (c.width, c.height, c.dpi)
     }
 
     #[test]
     fn no_options_gives_the_defaults() {
         assert_eq!(canvas(&[]), (DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_DPI));
         let default = PngWriter::default();
-        assert_eq!(canvas(&[]), (default.width, default.height, default.dpi));
+        let dc = default.canvas;
+        assert_eq!(canvas(&[]), (dc.width, dc.height, dc.dpi));
         // White, as `new()` sets it.
-        let background = writer(&[]).unwrap().background;
+        let background = writer(&[]).unwrap().canvas.background;
         assert_eq!(background.components, [1.0, 1.0, 1.0, 1.0]);
     }
 
@@ -584,10 +245,10 @@ mod option_tests {
 
     #[test]
     fn background_accepts_css_colors() {
-        let red = writer(&["background=#ff0000"]).unwrap().background;
+        let red = writer(&["background=#ff0000"]).unwrap().canvas.background;
         assert_eq!(red.components, [1.0, 0.0, 0.0, 1.0]);
         for spelling in ["background=transparent", "background=none"] {
-            let clear = writer(&[spelling]).unwrap().background;
+            let clear = writer(&[spelling]).unwrap().canvas.background;
             assert_eq!(
                 clear.components[3], 0.0,
                 "{spelling} should be fully transparent"
@@ -625,6 +286,7 @@ mod option_tests {
 mod tests {
     use super::*;
     use crate::reader::{DuckDBReader, Reader};
+    use hephaestus::scales::chrome::AxisSide;
 
     fn render(query: &str) -> Result<Vec<u8>> {
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
@@ -1740,7 +1402,7 @@ mod tests {
     fn map_range_pads_like_vegalite() {
         // 10% of the span, split evenly around the centre — the same framing
         // Vega-Lite's projection fit produces from `span * 1.1`.
-        let r = map_range(0.0, 10.0);
+        let r = compose::map_range(0.0, 10.0);
         assert_eq!(*r.start(), -0.5);
         assert_eq!(*r.end(), 10.5);
         assert_eq!((r.end() - r.start()) / 10.0, 1.1);
@@ -1749,7 +1411,7 @@ mod tests {
     #[test]
     fn map_range_widens_a_degenerate_extent() {
         // A single point has no span to pad, so it is widened to a mappable one.
-        let r = map_range(3.0, 3.0);
+        let r = compose::map_range(3.0, 3.0);
         assert_eq!(*r.start(), 2.5);
         assert_eq!(*r.end(), 3.5);
     }

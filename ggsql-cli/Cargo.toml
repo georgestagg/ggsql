@@ -21,6 +21,12 @@ name = "visual_test"
 path = "examples/visual_test.rs"
 required-features = ["png", "duckdb", "vegalite", "builtin-data"]
 
+[dev-dependencies]
+# Decoding renders back to pixels, so `visual_test --baseline` can compare
+# pictures rather than files. Dev-only: nothing in the shipped binary reads a
+# PNG. Same major as the encoder hephaestus uses, so no second copy is built.
+png = "0.18"
+
 [dependencies]
 ggsql = { workspace = true }
 

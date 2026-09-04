@@ -110,6 +110,31 @@ impl WriterOptions {
         }
     }
 
+    /// The value of `key` parsed as a boolean.
+    ///
+    /// Accepts `true`/`false`, `yes`/`no`, `on`/`off` and `1`/`0`, matching how
+    /// keys are normalised: case and surrounding whitespace are ignored. A
+    /// writer with a flag whose default is `true` still gets `None` for
+    /// "unsupplied", so it can tell that apart from an explicit `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GgsqlError::WriterError` if the value is not one of those
+    /// spellings.
+    pub fn boolean(&self, key: &str) -> Result<Option<bool>> {
+        let Some(raw) = self.get(key) else {
+            return Ok(None);
+        };
+        match raw.trim().to_lowercase().as_str() {
+            "true" | "yes" | "on" | "1" => Ok(Some(true)),
+            "false" | "no" | "off" | "0" => Ok(Some(false)),
+            _ => Err(GgsqlError::WriterError(format!(
+                "writer option '{}' expects true or false, got '{raw}'",
+                normalise_key(key)
+            ))),
+        }
+    }
+
     /// The value of `key`, checked against a closed set of allowed values.
     ///
     /// Matching ignores case and surrounding whitespace, mirroring how keys are
@@ -242,6 +267,31 @@ mod tests {
         );
         let options = WriterOptions::parse(["width=inf"]).unwrap();
         assert!(options.number("width").is_err());
+    }
+
+    #[test]
+    fn boolean_accepts_the_usual_spellings() {
+        for yes in ["true", "TRUE", " yes ", "on", "1"] {
+            let options = WriterOptions::new().set("embed_fonts", yes);
+            assert_eq!(options.boolean("embed_fonts").unwrap(), Some(true), "{yes}");
+        }
+        for no in ["false", "No", "off", "0"] {
+            let options = WriterOptions::new().set("embed_fonts", no);
+            assert_eq!(options.boolean("embed_fonts").unwrap(), Some(false), "{no}");
+        }
+        // Unsupplied stays distinct from an explicit `false`, so a writer whose
+        // default is `true` can tell them apart.
+        assert_eq!(WriterOptions::new().boolean("embed_fonts").unwrap(), None);
+    }
+
+    #[test]
+    fn boolean_rejects_anything_else() {
+        let options = WriterOptions::new().set("embed_fonts", "maybe");
+        let err = options.boolean("embed_fonts").unwrap_err().to_string();
+        assert!(
+            err.contains("'embed_fonts' expects true or false, got 'maybe'"),
+            "{err}"
+        );
     }
 
     #[test]

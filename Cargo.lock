@@ -2282,6 +2282,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ggsql",
+ "png",
  "regex",
  "serde_json",
  "termimad",
@@ -2505,9 +2506,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hephaestus"
-version = "0.1.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca883b65468b673aab28f1c7a86690ad5a00c31a4547c93577ecfd569c47e9b4"
+checksum = "91f060494e66d6e8a9d6cbf513f0f39e212d37a89293b91fc40f61aeb461f9e5"
 dependencies = [
  "bytemuck",
  "clipper2-rust",
@@ -5881,7 +5882,6 @@ dependencies = [
  "thiserror 2.0.18",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
- "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -5902,15 +5902,6 @@ name = "wgpu-core-deps-emscripten"
 version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3487cd6293a963bc5c0c0396f6a2192043c50003c07f4efdccbad3d90ec9d819"
-dependencies = [
- "wgpu-hal",
-]
-
-[[package]]
-name = "wgpu-core-deps-wasm"
-version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c2f2fb042f36920771deb0b966543c5751b18f3d327760ffc90f74e20b2dcd4"
 dependencies = [
  "wgpu-hal",
 ]
