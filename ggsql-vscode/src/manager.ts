@@ -200,12 +200,30 @@ function generateMetadata(
 /**
  * Create a Jupyter kernel spec for ggsql-jupyter
  *
+ * `--session-mode` tells the kernel where its output is meant to go, which it
+ * cannot work out for itself: a plot comm always lands in the Plots pane, so a
+ * notebook session that used one would leave its cell empty. Only we know,
+ * because we are the ones creating the session. Left off, the kernel guesses
+ * from the session id — which is what external Jupyter and Quarto rely on, and
+ * why `writeKernelJson` deliberately does not pass it.
+ *
  * @param kernelPath - Path to the ggsql-jupyter executable
+ * @param readerUri - Data source the kernel should open, if not the default
+ * @param sessionMode - What kind of session this is, when known
  */
-function createKernelSpec(kernelPath: string, readerUri?: string): JupyterKernelSpec {
+function createKernelSpec(
+    kernelPath: string,
+    readerUri?: string,
+    sessionMode?: positron.LanguageRuntimeSessionMode
+): JupyterKernelSpec {
     const argv = [kernelPath, '-f', '{connection_file}'];
     if (readerUri) {
         argv.push('--reader', readerUri);
+    }
+    if (sessionMode) {
+        // The enum's values are already the kernel's spelling (`console`,
+        // `notebook`, `background`), so there is nothing to translate.
+        argv.push('--session-mode', sessionMode);
     }
 
     return {
@@ -420,7 +438,11 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
         const supervisorApi = await getSupervisorApi();
 
         // Create the kernel spec using the runtime's kernel path
-        const kernelSpec = createKernelSpec(runtimeMetadata.runtimePath);
+        const kernelSpec = createKernelSpec(
+            runtimeMetadata.runtimePath,
+            undefined,
+            sessionMetadata.sessionMode
+        );
 
         const dynState = createDynState();
 
@@ -450,6 +472,9 @@ export class GgsqlRuntimeManager implements positron.LanguageRuntimeManager {
 
         const dynState = createDynState(sessionName);
 
+        // No kernel spec here on purpose: the supervisor replays the argv the
+        // session was created with, and a session's mode never changes, so the
+        // restored kernel keeps the `--session-mode` it started with.
         // Re-advertise this kernel on restore
         ensureKernelSpecInstalled(runtimeMetadata.runtimePath);
 

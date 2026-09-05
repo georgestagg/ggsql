@@ -5,48 +5,111 @@
 
 use crate::executor::ExecutionResult;
 use crate::message::MessageHeader;
+use clap::ValueEnum;
 use ggsql::DataFrame;
 use serde_json::{json, Value};
 
-/// Frontend-supplied hints about the output rendering slot.
+/// What the frontend declared itself to be, via `--session-mode`.
 ///
-/// Three render targets, identified by the Jupyter session id on the
-/// incoming execute_request:
+/// Only a frontend that knows which kind of session it is launching passes
+/// this — in practice the ggsql extension, which knows because it is the one
+/// creating the session. Everything else leaves it unset and is classified by
+/// the heuristic below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SessionMode {
+    /// A Positron console session: plots belong in the Plots pane.
+    Console,
+    /// A Positron notebook session: plots belong in the cell.
+    Notebook,
+    /// A Positron background session, attached to no UI at all. Output has
+    /// nowhere special to go, so it is treated exactly like a session Positron
+    /// is not driving.
+    Background,
+}
+
+/// Where a plot this kernel produces is meant to end up.
 ///
-/// - **Positron notebook** (`ggsql-notebook-…`): inline code-chunk output
-///   in an editor view. Rendered into a plain 400px container that watches
-///   layout only when the first measurement collapsed, because Positron
-///   animates the slot during its reveal transition.
-/// - **Positron console** (`ggsql-…`): output lands in the Plots pane. The
+/// The distinction is not cosmetic: Positron routes a plot comm to the Plots
+/// pane whatever kind of session opened it, so a notebook that used the comm
+/// would put its picture in the pane and leave the cell empty. Console and
+/// notebook therefore need different output paths, and this is what tells them
+/// apart.
+///
+/// - **`PositronConsole`**: output lands in the Plots pane. The Vega-Lite
 ///   container upgrades to `100vh` inside `.positron-output-container`, so
 ///   Vega-Lite's own container observer tracks pane resizes.
-/// - **Standalone** (anything else — Jupyter notebook, Quarto render, …):
-///   the HTML embeds in a static document. An outer/inner div wrapper with
-///   a 450px design width applies a uniform CSS-transform scale when the
-///   viewport is narrower, so the plot shrinks in proportion instead of
-///   squashing.
+/// - **`PositronNotebook`**: inline code-chunk output in an editor view.
+///   Rendered into a plain 400px container that watches layout only when the
+///   first measurement collapsed, because Positron animates the slot during
+///   its reveal transition.
+/// - **`Standalone`**: anything else — Jupyter, Quarto, nbconvert, and a
+///   Positron *background* session, which is attached to no UI. The HTML
+///   embeds in a static document. An outer/inner div wrapper with a 450px
+///   design width applies a uniform CSS-transform scale when the viewport is
+///   narrower, so the plot shrinks in proportion instead of squashing.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKind {
+    PositronConsole,
+    PositronNotebook,
+    #[default]
+    Standalone,
+}
+
+impl SessionKind {
+    /// Classify a session, preferring what the frontend declared.
+    ///
+    /// `mode` comes from `--session-mode` and is authoritative: a frontend that
+    /// passes it knows what it launched. The session-id heuristic is the
+    /// fallback for external Jupyter and Quarto, which pass nothing, and for
+    /// older versions of the extension that predate the flag.
+    pub fn resolve(session: &str, mode: Option<SessionMode>) -> Self {
+        match mode {
+            Some(SessionMode::Console) => Self::PositronConsole,
+            Some(SessionMode::Notebook) => Self::PositronNotebook,
+            // A background session has no pane and no cell, so there is no
+            // Positron-specific slot to render into.
+            Some(SessionMode::Background) => Self::Standalone,
+            // Positron's supervisor tags every session it manages with a
+            // `ggsql-` prefix; standalone Jupyter/Quarto uses UUIDs without
+            // one. A session that is not Positron's is standalone whatever
+            // else its id says.
+            None if !session.starts_with("ggsql-") => Self::Standalone,
+            None if session.contains("notebook") => Self::PositronNotebook,
+            None => Self::PositronConsole,
+        }
+    }
+
+    /// Whether the frontend is Positron, in either of its two shapes.
+    pub fn is_positron(self) -> bool {
+        matches!(self, Self::PositronConsole | Self::PositronNotebook)
+    }
+
+    /// Whether output belongs in a notebook cell rather than a pane.
+    pub fn is_notebook(self) -> bool {
+        matches!(self, Self::PositronNotebook)
+    }
+}
+
+/// Frontend-supplied hints about the output rendering slot.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct RenderHints {
-    pub is_notebook: bool,
-    pub is_positron: bool,
+    pub kind: SessionKind,
     pub output_width_px: Option<u32>,
 }
 
 impl RenderHints {
-    pub fn from_request(header: &MessageHeader, content: &Value) -> Self {
-        let session = header.session.as_str();
-        // Positron's supervisor tags every session it manages with a
-        // `ggsql-` prefix; standalone Jupyter/Quarto uses UUIDs without one.
-        let is_positron = session.starts_with("ggsql-");
-        let is_notebook = session.contains("notebook");
+    pub fn from_request(
+        header: &MessageHeader,
+        content: &Value,
+        mode: Option<SessionMode>,
+    ) -> Self {
         let output_width_px = content
             .get("positron")
             .and_then(|p| p.get("output_width_px"))
             .and_then(|v| v.as_u64())
             .and_then(|v| u32::try_from(v).ok());
         Self {
-            is_notebook,
-            is_positron,
+            kind: SessionKind::resolve(header.session.as_str(), mode),
             output_width_px,
         }
     }
@@ -128,8 +191,8 @@ pub fn vegalite_html(spec: &str, hints: &RenderHints) -> String {
         .as_millis();
     let vis_id = format!("vis-{}", timestamp);
 
-    if hints.is_positron {
-        positron_vegalite_html(&spec_json, &vis_id, hints.is_notebook)
+    if hints.kind.is_positron() {
+        positron_vegalite_html(&spec_json, &vis_id, hints.kind.is_notebook())
     } else {
         standalone_vegalite_html(&spec_json, &vis_id)
     }
@@ -453,16 +516,14 @@ mod tests {
 
     fn positron_console() -> RenderHints {
         RenderHints {
-            is_notebook: false,
-            is_positron: true,
+            kind: SessionKind::PositronConsole,
             output_width_px: None,
         }
     }
 
     fn positron_notebook() -> RenderHints {
         RenderHints {
-            is_notebook: true,
-            is_positron: true,
+            kind: SessionKind::PositronNotebook,
             output_width_px: Some(589),
         }
     }
@@ -609,23 +670,79 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_from_request_detects_positron_sessions() {
-        let header = |session: &str| MessageHeader {
+    fn header(session: &str) -> MessageHeader {
+        MessageHeader {
             msg_id: String::new(),
             session: session.to_string(),
             username: String::new(),
             date: String::new(),
             msg_type: String::new(),
             version: String::new(),
-        };
-        let console = RenderHints::from_request(&header("ggsql-c2a5a97b"), &json!({}));
-        assert!(console.is_positron && !console.is_notebook);
+        }
+    }
 
-        let notebook = RenderHints::from_request(&header("ggsql-notebook-abc"), &json!({}));
-        assert!(notebook.is_positron && notebook.is_notebook);
+    fn kind(session: &str, mode: Option<SessionMode>) -> SessionKind {
+        RenderHints::from_request(&header(session), &json!({}), mode).kind
+    }
 
-        let standalone = RenderHints::from_request(&header("abcd-efgh-1234"), &json!({}));
-        assert!(!standalone.is_positron && !standalone.is_notebook);
+    #[test]
+    fn test_from_request_detects_positron_sessions() {
+        // The fallback path, for a frontend that passes no `--session-mode`.
+        assert_eq!(kind("ggsql-c2a5a97b", None), SessionKind::PositronConsole);
+        assert_eq!(
+            kind("ggsql-notebook-abc", None),
+            SessionKind::PositronNotebook
+        );
+        assert_eq!(kind("abcd-efgh-1234", None), SessionKind::Standalone);
+    }
+
+    #[test]
+    fn test_session_mode_overrides_the_heuristic() {
+        // A frontend that declares itself is believed, whatever its session id
+        // happens to look like — the id is a guess, the flag is a statement.
+        assert_eq!(
+            kind("abcd-efgh-1234", Some(SessionMode::Console)),
+            SessionKind::PositronConsole
+        );
+        assert_eq!(
+            kind("ggsql-c2a5a97b", Some(SessionMode::Notebook)),
+            SessionKind::PositronNotebook
+        );
+        assert_eq!(
+            kind("ggsql-notebook-abc", Some(SessionMode::Console)),
+            SessionKind::PositronConsole
+        );
+    }
+
+    #[test]
+    fn test_a_background_session_has_no_positron_slot() {
+        // It is Positron's session, but attached to no UI — so the heuristic's
+        // answer (console, from the `ggsql-` prefix) would aim output at a
+        // pane that is not showing it.
+        assert_eq!(
+            kind("ggsql-bg-4471", Some(SessionMode::Background)),
+            SessionKind::Standalone
+        );
+        assert_eq!(kind("ggsql-bg-4471", None), SessionKind::PositronConsole);
+    }
+
+    #[test]
+    fn test_a_non_positron_session_is_standalone_whatever_its_id_says() {
+        // The old heuristic set `is_notebook` from the id alone, so a
+        // standalone session whose id happened to contain "notebook" carried a
+        // flag the standalone template never read. Now there is one answer.
+        assert_eq!(kind("jupyter-notebook-9f2c", None), SessionKind::Standalone);
+        assert!(!SessionKind::Standalone.is_positron());
+        assert!(!SessionKind::Standalone.is_notebook());
+    }
+
+    #[test]
+    fn test_the_two_positron_kinds_pick_different_templates() {
+        let spec = r#"{"mark":"point"}"#;
+        let console = vegalite_html(spec, &positron_console());
+        let notebook = vegalite_html(spec, &positron_notebook());
+        // The console template alone reaches for the Plots pane.
+        assert!(console.contains("positron-output-container"));
+        assert!(!notebook.contains("positron-output-container"));
     }
 }

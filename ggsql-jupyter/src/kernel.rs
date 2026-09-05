@@ -5,7 +5,7 @@
 
 use crate::connection;
 use crate::data_explorer::{DataExplorerState, RpcResponse};
-use crate::display::{format_display_data, RenderHints};
+use crate::display::{format_display_data, RenderHints, SessionMode};
 use crate::executor::{self, ExecutionResult, QueryExecutor};
 use crate::message::{ConnectionInfo, JupyterMessage, MessageHeader};
 use anyhow::Result;
@@ -29,6 +29,9 @@ pub struct KernelServer {
     connection: ConnectionInfo,
     executor: QueryExecutor,
     session: String,
+    /// What the frontend declared this session to be, if it declared anything.
+    /// `None` leaves classification to the session-id heuristic.
+    session_mode: Option<SessionMode>,
     execution_count: u32,
     key: Vec<u8>,
     // Positron comm IDs
@@ -41,7 +44,11 @@ pub struct KernelServer {
 
 impl KernelServer {
     /// Create a new kernel server from connection info
-    pub async fn new(connection: ConnectionInfo, reader_uri: &str) -> Result<Self> {
+    pub async fn new(
+        connection: ConnectionInfo,
+        reader_uri: &str,
+        session_mode: Option<SessionMode>,
+    ) -> Result<Self> {
         tracing::info!("Initializing kernel server");
 
         // Initialize sockets
@@ -92,6 +99,7 @@ impl KernelServer {
             connection,
             executor,
             session,
+            session_mode,
             execution_count: 0,
             key,
             variables_comm_id: None,
@@ -288,13 +296,13 @@ impl KernelServer {
         let content = &parent.content;
         let code = content["code"].as_str().unwrap_or("");
         let silent = content["silent"].as_bool().unwrap_or(false);
-        let hints = RenderHints::from_request(&parent.header, content);
+        let hints = RenderHints::from_request(&parent.header, content, self.session_mode);
 
         tracing::info!(
-            "Executing code ({} chars, silent={}, notebook={}, width_px={:?})",
+            "Executing code ({} chars, silent={}, session={:?}, width_px={:?})",
             code.len(),
             silent,
-            hints.is_notebook,
+            hints.kind,
             hints.output_width_px
         );
 

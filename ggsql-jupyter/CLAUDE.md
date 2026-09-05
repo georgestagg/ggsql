@@ -35,6 +35,25 @@ ggsql-jupyter/
 3. Each `execute_request` is dispatched through `executor.rs` → `ggsql::reader::DuckDBReader::execute(...)`. The kernel keeps a single persistent in-memory DuckDB session so cells share state.
 4. The result is wrapped by `display.rs` into a Jupyter `display_data` message — Vega-Lite specs go through vega-embed in an HTML payload (works in classic Jupyter, JupyterLab, and Positron); pure SQL goes out as an HTML table.
 
+## Where output goes: `SessionKind`
+
+`display.rs`'s `SessionKind` decides which of three output slots a result is aimed at, and it is the thing every rendering decision keys off:
+
+| `SessionKind` | Slot |
+| --- | --- |
+| `PositronConsole` | Positron's Plots pane |
+| `PositronNotebook` | The notebook cell |
+| `Standalone` | A static document — Jupyter, Quarto, nbconvert |
+
+**The console/notebook split is not cosmetic.** Positron routes a plot comm to the Plots pane whatever kind of session opened it, so a notebook session that used one would put its picture in the pane and leave its cell empty. The two need different output paths, and this is what tells them apart.
+
+`SessionKind::resolve(session, mode)` prefers what the frontend *declared* over what its session id looks like:
+
+- **`--session-mode console|notebook|background`** is authoritative. Only a frontend that creates the session can say, which in practice means the ggsql extension — `manager.ts`'s `createKernelSpec` appends it from `sessionMetadata.sessionMode`. The enum's values are already the flag's spelling, so nothing is translated. `background` maps to `Standalone`: it is Positron's session, but attached to no UI, so there is no Positron slot to render into.
+- **The session-id heuristic** is the fallback: a `ggsql-` prefix means Positron (its supervisor tags every session it manages), and `notebook` in the id means a notebook. It exists for external Jupyter and Quarto, which pass no flag, and for extension versions predating it.
+
+Two places deliberately **do not** pass the flag. `writeKernelJson` and `ggsql-jupyter --install` write kernelspecs for *external* frontends, which are exactly the ones that should classify as `Standalone`. And `restoreSession` doesn't rebuild the spec at all — the supervisor replays the argv the session was created with, and a session's mode never changes.
+
 ## Positron-specific bits
 
 - Kernel info advertises `"output_location": "plot"` so visualizations route to Positron's Plot pane.

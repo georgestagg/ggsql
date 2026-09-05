@@ -10,6 +10,7 @@ mod kernel;
 mod message;
 use anyhow::{Context, Result};
 use clap::Parser;
+use display::SessionMode;
 use message::ConnectionInfo;
 use std::env;
 use std::fs;
@@ -26,6 +27,14 @@ struct Args {
     /// Database connection URI (e.g. "duckdb://memory")
     #[arg(long, default_value = "duckdb://memory")]
     reader: String,
+
+    /// What kind of session this is, when the frontend knows.
+    ///
+    /// Only a frontend creating the session can say — in practice the ggsql
+    /// extension. Left unset, the kernel classifies the session from its id,
+    /// which is what external Jupyter and Quarto rely on.
+    #[arg(long, value_enum)]
+    session_mode: Option<SessionMode>,
 
     /// Install the kernel spec
     #[arg(long)]
@@ -74,7 +83,7 @@ async fn main() -> Result<()> {
     tracing::info!("Creating kernel server");
 
     // Create and run kernel
-    let mut kernel = kernel::KernelServer::new(connection, &args.reader).await?;
+    let mut kernel = kernel::KernelServer::new(connection, &args.reader, args.session_mode).await?;
 
     tracing::info!("Kernel ready, starting event loop");
 
