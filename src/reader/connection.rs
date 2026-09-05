@@ -1,7 +1,8 @@
 //! Connection string handling for data sources.
 //!
-//! Maps URI-style connection strings (`duckdb://…`, `sqlite://…`, `odbc://…`) and
-//! the composite caching form (`<cache>+<primary>://…`) to readers.
+//! Maps URI-style connection strings (`duckdb://…`, `sqlite://…`, `odbc://…`,
+//! `clickhouse://…`) and the composite caching form (`<cache>+<primary>://…`)
+//! to readers.
 
 use crate::reader::Reader;
 use crate::{GgsqlError, Result};
@@ -34,12 +35,12 @@ pub fn split_cache_uri(uri: &str) -> Option<(String, String)> {
 }
 
 /// Cache-config keys recognised in a connection URI's trailing `?` query string.
-#[cfg(any(feature = "duckdb", feature = "sqlite"))]
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
 const KNOWN_CACHE_PARAMS: &[&str] = &["cache_ttl", "cache_max_bytes", "cache_disabled"];
 
 /// Pull cache-config keys out of a connection URI's trailing `?key=value&…`
 /// query string, returning the URI with those keys removed plus the overrides.
-#[cfg(any(feature = "duckdb", feature = "sqlite"))]
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
 fn strip_cache_params(uri: &str) -> (String, crate::reader::cache::CacheConfigOverride) {
     use crate::reader::cache::{parse_human_bytes, CacheConfigOverride};
 
@@ -73,13 +74,14 @@ fn strip_cache_params(uri: &str) -> (String, crate::reader::cache::CacheConfigOv
 }
 
 /// Map a cache-backend scheme to its in-memory connection URI.
-#[cfg(any(feature = "duckdb", feature = "sqlite"))]
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
 fn cache_uri(scheme: &str) -> Result<&'static str> {
     match scheme {
         "duckdb" => Ok("duckdb://memory"),
         "sqlite" => Ok("sqlite://memory"),
+        "chdb" => Ok("chdb://memory"),
         _ => Err(GgsqlError::ReaderError(format!(
-            "Unsupported cache backend '{}'. Supported: duckdb, sqlite",
+            "Unsupported cache backend '{}'. Supported: duckdb, sqlite, chdb",
             scheme
         ))),
     }
@@ -129,13 +131,41 @@ pub fn build_reader(uri: &str) -> Result<Box<dyn Reader + Send>> {
             ));
         }
     }
+    if uri.starts_with("clickhouse://") || uri.starts_with("clickhouses://") {
+        #[cfg(feature = "clickhouse")]
+        {
+            return Ok(Box::new(
+                crate::reader::ClickHouseReader::from_connection_string(uri)?,
+            ));
+        }
+        #[cfg(not(feature = "clickhouse"))]
+        {
+            return Err(GgsqlError::ReaderError(
+                "ClickHouse reader not compiled in. Rebuild with --features clickhouse".to_string(),
+            ));
+        }
+    }
+    if uri.starts_with("chdb://") {
+        #[cfg(feature = "chdb")]
+        {
+            return Ok(Box::new(crate::reader::ChdbReader::from_connection_string(
+                uri,
+            )?));
+        }
+        #[cfg(not(feature = "chdb"))]
+        {
+            return Err(GgsqlError::ReaderError(
+                "chDB reader not compiled in. Rebuild with --features chdb".to_string(),
+            ));
+        }
+    }
     if uri.starts_with("postgres://") || uri.starts_with("postgresql://") {
         return Err(GgsqlError::ReaderError(
             "PostgreSQL reader is not yet implemented".to_string(),
         ));
     }
     Err(GgsqlError::ReaderError(format!(
-        "Unsupported connection string: {}. Supported: duckdb://, sqlite://, odbc://",
+        "Unsupported connection string: {}. Supported: duckdb://, sqlite://, odbc://, clickhouse://, chdb://",
         uri
     )))
 }
@@ -146,31 +176,66 @@ pub fn build_reader(uri: &str) -> Result<Box<dyn Reader + Send>> {
 /// [`CachingReader`]: crate::reader::CachingReader
 pub fn reader_from_uri(uri: &str) -> Result<Box<dyn Reader + Send>> {
     if let Some((primary_uri, cache_scheme)) = split_cache_uri(uri) {
-        #[cfg(any(feature = "duckdb", feature = "sqlite"))]
+        #[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
         {
-            use crate::reader::cache::CacheConfig;
-
             let (primary_uri, over) = strip_cache_params(&primary_uri);
-            let config = CacheConfig::from_env().merge(over);
             let primary = build_reader(&primary_uri)?;
-            let cache = build_reader(cache_uri(&cache_scheme)?)?;
-            return Ok(Box::new(crate::reader::CachingReader::with_config(
-                primary,
-                cache,
-                primary_uri,
-                cache_scheme,
-                config,
-            )));
+            return wrap_in_cache(primary, primary_uri, &cache_scheme, over);
         }
-        #[cfg(not(any(feature = "duckdb", feature = "sqlite")))]
+        #[cfg(not(any(feature = "duckdb", feature = "sqlite", feature = "chdb")))]
         {
             let _ = (&primary_uri, &cache_scheme);
             return Err(GgsqlError::ReaderError(
-                "Caching layer requires the duckdb or sqlite feature".to_string(),
+                "Caching layer requires the duckdb, sqlite or chdb feature".to_string(),
             ));
         }
     }
+
+    // A ClickHouse account that may not create temporary tables (read-only
+    // servers such as play.clickhouse.com) cannot hold the executor's
+    // intermediate tables. Keep them in an embedded chDB engine instead, so
+    // the plain `clickhouse://` URI works there too and only the user's own
+    // reads reach the server.
+    #[cfg(all(feature = "clickhouse", feature = "chdb"))]
+    if uri.starts_with("clickhouse://") || uri.starts_with("clickhouses://") {
+        let (primary_uri, over) = strip_cache_params(uri);
+        let reader = crate::reader::ClickHouseReader::from_connection_string(&primary_uri)?;
+        if reader.supports_temporary_tables() {
+            return Ok(Box::new(reader));
+        }
+        return wrap_in_cache(Box::new(reader), primary_uri, "chdb", over).map_err(|e| {
+            GgsqlError::ReaderError(format!(
+                "This ClickHouse account cannot create temporary tables, so ggsql needs the \
+                 embedded chDB engine to hold intermediate results, but it could not be set up: {e}"
+            ))
+        });
+    }
+
     build_reader(uri)
+}
+
+/// Wrap `primary` in a [`CachingReader`] on a fresh in-memory `cache_scheme`
+/// backend, applying cache settings from the environment and `over`.
+///
+/// [`CachingReader`]: crate::reader::CachingReader
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
+fn wrap_in_cache(
+    primary: Box<dyn Reader + Send>,
+    primary_uri: String,
+    cache_scheme: &str,
+    over: crate::reader::cache::CacheConfigOverride,
+) -> Result<Box<dyn Reader + Send>> {
+    use crate::reader::cache::CacheConfig;
+
+    let config = CacheConfig::from_env().merge(over);
+    let cache = build_reader(cache_uri(cache_scheme)?)?;
+    Ok(Box::new(crate::reader::CachingReader::with_config(
+        primary,
+        cache,
+        primary_uri,
+        cache_scheme.to_string(),
+        config,
+    )))
 }
 
 /// Extract a value from an ODBC connection string by key, stripping braces.
@@ -208,6 +273,26 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(err.contains("not yet implemented"), "got: {err}");
+    }
+
+    #[cfg(feature = "clickhouse")]
+    #[test]
+    fn test_build_reader_clickhouse_dispatch() {
+        // A malformed URI is rejected by the ClickHouse parser, not the
+        // generic "unsupported scheme" path.
+        let err = build_reader("clickhouse://host:notaport")
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("Invalid port"), "got: {err}");
+        // A composite cache URI routes the primary to ClickHouse.
+        assert_eq!(
+            split_cache_uri("duckdb+clickhouses://explorer@play.clickhouse.com:443"),
+            Some((
+                "clickhouses://explorer@play.clickhouse.com:443".to_string(),
+                "duckdb".to_string()
+            ))
+        );
     }
 
     #[cfg(feature = "duckdb")]
@@ -268,7 +353,7 @@ mod tests {
         assert_eq!(split_cache_uri("odbc+://x"), None);
     }
 
-    #[cfg(any(feature = "duckdb", feature = "sqlite"))]
+    #[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
     #[test]
     fn test_strip_cache_params_parses_known_keys() {
         let (uri, over) = strip_cache_params("duckdb://memory?cache_ttl=600");
@@ -284,7 +369,7 @@ mod tests {
         assert_eq!(over.enabled, Some(false));
     }
 
-    #[cfg(any(feature = "duckdb", feature = "sqlite"))]
+    #[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
     #[test]
     fn test_strip_cache_params_keeps_non_cache_segments() {
         // A non-cache `?key=` tail contributes no overrides and is left in place.

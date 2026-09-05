@@ -187,6 +187,7 @@ pub(crate) fn stat_density(
         &bw_cte,
         &data_cte,
         &grid_cte,
+        dialect,
     );
 
     let mut consumed = vec![value_aesthetic.to_string()];
@@ -455,12 +456,16 @@ fn build_grid_cte(
                 .iter()
                 .map(|g| {
                     let q = naming::quote_ident(g);
-                    format!("full_grid.{q} IS NOT DISTINCT FROM bandwidth.{q}")
+                    dialect
+                        .sql_null_safe_equals(&format!("full_grid.{q}"), &format!("bandwidth.{q}"))
                 })
                 .collect();
             let grid_groups_select: Vec<String> = groups
                 .iter()
-                .map(|g| format!("full_grid.{}", naming::quote_ident(g)))
+                .map(|g| {
+                    let q = naming::quote_ident(g);
+                    format!("full_grid.{q} AS {q}")
+                })
                 .collect();
 
             format!(
@@ -511,6 +516,7 @@ fn compute_density(
     bandwidth_cte: &str,
     data_cte: &str,
     grid_cte: &str,
+    dialect: &dyn SqlDialect,
 ) -> String {
     // Build bandwidth join condition (NULL-safe)
     let bandwidth_conditions = if group_by.is_empty() {
@@ -520,7 +526,7 @@ fn compute_density(
             .iter()
             .map(|g| {
                 let q = naming::quote_ident(g);
-                format!("data.{q} IS NOT DISTINCT FROM bandwidth.{q}")
+                dialect.sql_null_safe_equals(&format!("data.{q}"), &format!("bandwidth.{q}"))
             })
             .collect::<Vec<String>>()
             .join(" AND ")
@@ -534,7 +540,7 @@ fn compute_density(
             .iter()
             .map(|g| {
                 let q = naming::quote_ident(g);
-                format!("grid.{q} IS NOT DISTINCT FROM data.{q}")
+                dialect.sql_null_safe_equals(&format!("grid.{q}"), &format!("data.{q}"))
             })
             .collect();
         format!("WHERE {}", grid_data_conds.join(" AND "))
@@ -552,6 +558,15 @@ fn compute_density(
     let grid_groups: Vec<String> = group_by
         .iter()
         .map(|g| format!("grid.{}", naming::quote_ident(g)))
+        .collect();
+    // Projected with an explicit alias: some engines (ClickHouse) otherwise
+    // name an unaliased `grid.col` projection `grid.col`.
+    let grid_groups_select: Vec<String> = group_by
+        .iter()
+        .map(|g| {
+            let q = naming::quote_ident(g);
+            format!("grid.{q} AS {q}")
+        })
         .collect();
     let aggregation = format!(
         "GROUP BY grid.x{grid_group_by}
@@ -597,7 +612,7 @@ fn compute_density(
         intensity_column = intensity_column,
         density_column = density_column,
         aggregation = aggregation,
-        grid_groups = with_trailing_comma(&grid_groups.join(", "))
+        grid_groups = with_trailing_comma(&grid_groups_select.join(", "))
     )
 }
 
@@ -625,7 +640,15 @@ mod tests {
         let data_cte = build_data_cte("x", None, None, query, &groups);
         let grid_cte = build_grid_cte(&groups, 512, None, &AnsiDialect);
         let kernel = choose_kde_kernel(&parameters, None).expect("kernel should be valid");
-        let sql = compute_density("x", &groups, kernel, &bw_cte, &data_cte, &grid_cte);
+        let sql = compute_density(
+            "x",
+            &groups,
+            kernel,
+            &bw_cte,
+            &data_cte,
+            &grid_cte,
+            &AnsiDialect,
+        );
 
         let expected = r#"WITH RECURSIVE
           bandwidth AS (
@@ -701,7 +724,15 @@ mod tests {
         let data_cte = build_data_cte("x", None, None, query, &groups);
         let grid_cte = build_grid_cte(&groups, 512, None, &AnsiDialect);
         let kernel = choose_kde_kernel(&parameters, None).expect("kernel should be valid");
-        let sql = compute_density("x", &groups, kernel, &bw_cte, &data_cte, &grid_cte);
+        let sql = compute_density(
+            "x",
+            &groups,
+            kernel,
+            &bw_cte,
+            &data_cte,
+            &grid_cte,
+            &AnsiDialect,
+        );
 
         let expected = r#"WITH RECURSIVE
           bandwidth AS (
@@ -740,7 +771,7 @@ mod tests {
         FROM (
           SELECT
             grid.x AS "__ggsql_stat_x",
-            grid."region", grid."category",
+            grid."region" AS "region", grid."category" AS "category",
             SUM(data.weight * ((EXP(-0.5 * (grid.x - data.val) * (grid.x - data.val) / (bandwidth.bw * bandwidth.bw))) * 0.3989422804014327)) / MIN(bandwidth.bw) AS "__ggsql_stat_intensity",
             SUM(data.weight) AS "__norm"
           FROM data
@@ -880,7 +911,15 @@ mod tests {
         // Use wide range to capture essentially all density mass
         let grid_cte = build_grid_cte(&groups, 512, None, &AnsiDialect);
         let kernel = choose_kde_kernel(&parameters, None).expect("kernel should be valid");
-        let sql = compute_density("x", &groups, kernel, &bw_cte, &data_cte, &grid_cte);
+        let sql = compute_density(
+            "x",
+            &groups,
+            kernel,
+            &bw_cte,
+            &data_cte,
+            &grid_cte,
+            &AnsiDialect,
+        );
 
         // Execute query
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
@@ -1007,6 +1046,7 @@ mod tests {
             &bw_cte,
             &data_cte_unweighted,
             &grid_cte,
+            &AnsiDialect,
         );
 
         let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
@@ -1017,8 +1057,15 @@ mod tests {
         // With explicit uniform weights (should be equivalent)
         let query_weighted = "SELECT x, 1.0 AS weight FROM (VALUES (1.0), (2.0), (3.0)) AS t(x)";
         let data_cte_weighted = build_data_cte("x", None, Some("weight"), query_weighted, &groups);
-        let sql_weighted =
-            compute_density("x", &groups, kernel, &bw_cte, &data_cte_weighted, &grid_cte);
+        let sql_weighted = compute_density(
+            "x",
+            &groups,
+            kernel,
+            &bw_cte,
+            &data_cte_weighted,
+            &grid_cte,
+            &AnsiDialect,
+        );
         let df_weighted = reader
             .execute_sql(&sql_weighted)
             .expect("SQL should execute");
@@ -1155,7 +1202,15 @@ mod tests {
         let data_cte = build_data_cte("x", None, None, query, &groups);
         let grid_cte = build_grid_cte(&groups, 512, None, &AnsiDialect);
         let kernel = choose_kde_kernel(&parameters, None).expect("kernel should be valid");
-        let sql = compute_density("x", &groups, kernel, &bw_cte, &data_cte, &grid_cte);
+        let sql = compute_density(
+            "x",
+            &groups,
+            kernel,
+            &bw_cte,
+            &data_cte,
+            &grid_cte,
+            &AnsiDialect,
+        );
 
         // Warm-up run
         reader.execute_sql(&sql).expect("Warm-up failed");

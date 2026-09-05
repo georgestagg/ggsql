@@ -36,6 +36,9 @@ bytes = { workspace = true }
 # ADBC reader
 adbc_core = { version = "0.23", optional = true }
 
+# ClickHouse reader (HTTP interface)
+ureq = { workspace = true, optional = true }
+
 # Spatial
 geozero = { workspace = true, optional = true, features = ["with-wkb", "with-wkt", "with-geojson"] }
 
@@ -60,19 +63,23 @@ uuid.workspace = true
 [dev-dependencies]
 jsonschema = { version = "0.44", default-features = false, features = ["resolve-file"] }
 tempfile = "3.8"
-ureq = "3"
+ureq.workspace = true
 adbc_datafusion = "0.23"
 adbc_driver_manager = "0.23"
 
 [features]
-default = ["adbc", "duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc", "spatial"]
+default = ["adbc", "duckdb", "sqlite", "clickhouse", "chdb", "vegalite", "parquet", "builtin-data", "odbc", "spatial"]
 duckdb = ["dep:duckdb"]
 parquet = ["dep:parquet"]
 sqlite = ["dep:rusqlite"]
 adbc = ["dep:adbc_core"]
+# ClickHouse writes Arrow IPC batches LZ4-compressed by default (and a
+# read-only account may not change that), so the decoder needs `ipc_compression`.
+clickhouse = ["dep:ureq", "arrow/ipc", "arrow/ipc_compression"]
+chdb = ["dep:libloading", "arrow/ipc", "arrow/ipc_compression"]
 odbc = ["dep:toml_edit", "dep:libloading"]
 spatial = ["dep:geozero", "rusqlite?/load_extension"]
 vegalite = []
 png = ["dep:hephaestus"]
 builtin-data = []
-all-readers = ["duckdb", "sqlite", "odbc"]
+all-readers = ["duckdb", "sqlite", "odbc", "clickhouse", "chdb"]

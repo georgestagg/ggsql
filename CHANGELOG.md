@@ -2,6 +2,23 @@
 
 ### Added
 
+- ClickHouse support, as two readers behind the new default-on `clickhouse` and
+  `chdb` features. `clickhouse://[user[:password]@]host[:port][/database]` (or
+  `clickhouses://` for TLS) talks to a server's HTTP interface and exchanges data
+  as Arrow IPC streams, so no driver installation is needed; unrecognised URI
+  query parameters are forwarded as ClickHouse settings, and the host, user and
+  password fall back to the `CLICKHOUSE_HOST`/`CLICKHOUSE_USER`/`CLICKHOUSE_PASSWORD`
+  environment variables. `chdb://[path]` runs the embedded chDB engine
+  in-process (libchdb is loaded at runtime, so the build has no new native
+  dependency), and `chdb` is also a new in-memory backend for the caching layer
+  (`chdb+<primary>://…`, `--cache chdb`), so a ClickHouse setup needs no other
+  database engine. Stat transforms run on the server through session-scoped
+  temporary tables; a read-only account such as `play.clickhouse.com` is
+  detected on connect and its intermediate tables are kept in an embedded chDB
+  cache automatically. `DateTime`, `Enum`, `UUID`, IP address, `FixedString`,
+  `Decimal` and wide-integer columns are converted server-side to types the plot
+  pipeline understands. The Jupyter kernel and Positron connections pane
+  recognise both schemes.
 - New caching layer that wraps any `Reader` with an in-memory, writeable cache
   backend (currently duckdb or sqlite), making write-constrained databases
   usable and avoiding repeated remote reads during interactive iteration.

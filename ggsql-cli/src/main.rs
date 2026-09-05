@@ -64,11 +64,11 @@ pub enum Commands {
         /// The ggsql query to execute
         query: String,
 
-        /// Data source connection string (duckdb://, sqlite://, odbc://)
+        /// Data source connection string (duckdb://, sqlite://, odbc://, clickhouse://)
         #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// In-memory cache backend wrapping the reader (duckdb, sqlite). Off by default.
+        /// In-memory cache backend wrapping the reader (duckdb, sqlite, chdb). Off by default.
         #[arg(long)]
         cache: Option<String>,
 
@@ -104,11 +104,11 @@ pub enum Commands {
         /// Path to .sql file containing ggsql query
         file: PathBuf,
 
-        /// Data source connection string (duckdb://, sqlite://, odbc://)
+        /// Data source connection string (duckdb://, sqlite://, odbc://, clickhouse://)
         #[arg(short, long, default_value = "duckdb://memory")]
         reader: String,
 
-        /// In-memory cache backend wrapping the reader (duckdb, sqlite). Off by default.
+        /// In-memory cache backend wrapping the reader (duckdb, sqlite, chdb). Off by default.
         #[arg(long)]
         cache: Option<String>,
 
@@ -154,7 +154,7 @@ pub enum Commands {
         /// The ggsql query to validate
         query: String,
 
-        /// Data source connection string for column validation (duckdb://, sqlite://, polars://)
+        /// Data source connection string for column validation (duckdb://, sqlite://, odbc://, clickhouse://)
         #[arg(short, long)]
         reader: Option<String>,
     },

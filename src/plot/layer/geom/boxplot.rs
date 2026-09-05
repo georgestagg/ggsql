@@ -246,7 +246,9 @@ fn boxplot_sql_filter_outliers(groups: &[String], value: &str, from: &str) -> St
     for column in groups {
         let quoted = naming::quote_ident(column);
         join_pairs.push(format!("raw.{} = summary.{}", quoted, quoted));
-        keep_columns.push(format!("raw.{}", quoted));
+        // Aliased explicitly: some engines (ClickHouse) otherwise name an
+        // unaliased `raw.col` projection `raw.col`.
+        keep_columns.push(format!("raw.{quoted} AS {quoted}"));
     }
 
     let quoted_value = naming::quote_ident(value);

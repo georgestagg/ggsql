@@ -65,6 +65,60 @@ col_a,  col_b, col_c
 12.5,   29.48, gamma
 ```
 
+### ClickHouse
+
+ggsql connects to [ClickHouse](https://clickhouse.com) over its HTTP interface, so no driver needs to be installed. The connection string is
+
+```
+clickhouse://[user[:password]@]host[:port][/database][?param=value&...]
+```
+
+The port defaults to 8123. Use `clickhouses://` (or add `?secure=1`) for a TLS connection, where the port defaults to 8443. Any other query parameter is forwarded to the server with every request, so ClickHouse settings and HTTP parameters such as `session_timezone`, `max_threads` or `session_timeout` can be set per connection. If the connection string does not name them, the host, user and password are taken from the `CLICKHOUSE_HOST`, `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD` environment variables, so a password need not appear on the command line.
+
+```bash
+$ ggsql exec --reader clickhouse://localhost:8123/default \
+  "SELECT number AS x, number * number AS y FROM numbers(10) VISUALISE x, y DRAW line"
+```
+
+Each reader holds one ClickHouse session, and ggsql stores intermediate results in temporary tables inside that session, which is what lets stat transforms such as binning and quantiles run on the server. A read-only account without the `CREATE TEMPORARY TABLE` privilege is detected when connecting; ggsql then keeps the intermediate tables in an embedded [chDB](#chdb) engine and sends only your own query to the server. The public playground works this way:
+
+```bash
+$ ggsql exec --reader clickhouses://explorer@play.clickhouse.com:443 \
+  "SELECT toStartOfMonth(created_at) AS month, count() AS events
+   FROM github_events WHERE created_at >= '2024-01-01'
+   GROUP BY month ORDER BY month
+   VISUALISE month AS x, events AS y DRAW line"
+```
+
+The same arrangement can be requested explicitly with `chdb+clickhouse://…` (or `--cache chdb`). It also memoizes the server's answers, so re-running a query while iterating on the plot does not hit the server again until the cache entry expires.
+
+ClickHouse `DateTime` and `DateTime64` values are shown in UTC. `Enum`, `UUID`, `IPv4`/`IPv6`, `FixedString` and 128/256-bit integer columns arrive as strings, `Decimal` columns as floating-point numbers, and arrays, tuples and maps as their text form.
+
+### chDB {#chdb}
+
+[chDB](https://clickhouse.com/chdb) is ClickHouse as an in-process library. ggsql uses it in two roles: as a database of its own, and as the in-memory cache in front of a ClickHouse server. Either way it needs `libchdb` on the machine; install it with
+
+```bash
+curl -sL https://lib.chdb.io | bash
+```
+
+or point the `GGSQL_CHDB_LIBRARY` environment variable at a `libchdb.so` (or `.dylib`) you downloaded yourself. Nothing else changes: the same `ggsql` binary works with or without the library, and only `chdb://` connections need it.
+
+```
+chdb://                    in-memory engine (also chdb://memory)
+chdb:///path/to/directory  state persists under the directory
+chdb://…?key=value         extra engine arguments, passed as --key=value
+```
+
+Everything ClickHouse can read, chDB can read too, so a chDB connection is a quick way to plot local files:
+
+```bash
+$ ggsql exec --reader chdb://memory \
+  "SELECT * FROM 'trips.parquet' VISUALISE fare AS x DRAW histogram"
+```
+
+chDB keeps a single connection per process, so all `chdb://` connections in one process share one engine and one path.
+
 ## Output format
 
 `ggsql exec` and `ggsql run` render with the writer named by `--writer` (short `-w`), defaulting to `--writer vegalite` (the Vega-Lite JSON above). A build that includes the optional `png` writer can also render straight to a PNG image with `--writer png`, which needs a GPU adapter available where it runs.

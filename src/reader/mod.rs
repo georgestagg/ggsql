@@ -94,6 +94,13 @@ pub trait SqlDialect {
         }
     }
 
+    /// Null-safe equality of two expressions: true when both are equal or
+    /// both NULL. Override for backends that restrict `IS NOT DISTINCT FROM`
+    /// (ClickHouse only accepts it in `JOIN ON`).
+    fn sql_null_safe_equals(&self, left: &str, right: &str) -> String {
+        format!("{left} IS NOT DISTINCT FROM {right}")
+    }
+
     /// Scalar MAX across any number of SQL expressions.
     fn sql_greatest(&self, exprs: &[&str]) -> String {
         let mut result = exprs[0].to_string();
@@ -356,6 +363,71 @@ pub trait SqlDialect {
             format!("CREATE TEMP TABLE {} AS {}", qname, body),
         ]
     }
+
+    // -------------------------------------------------------------------------
+    // Caching-layer memo table
+    //
+    // `CachingReader` keeps one row per memoized read in a table on the cache
+    // backend. Backends without `INSERT OR REPLACE` / `UPDATE` / `DELETE FROM`
+    // (ClickHouse) override these to spell the same operations natively.
+    // -------------------------------------------------------------------------
+
+    /// DDL creating the memo table `table` if it does not exist. Columns:
+    /// `cache_key` (text, unique), `sql`, `table_name` (text),
+    /// `fetched_at_epoch_ms`, `last_accessed_epoch_ms`, `byte_estimate`,
+    /// `row_count` (64-bit integers).
+    fn cache_meta_table_sql(&self, table: &str) -> String {
+        format!(
+            "CREATE TABLE IF NOT EXISTS {} (\
+             cache_key VARCHAR PRIMARY KEY, sql VARCHAR NOT NULL, table_name VARCHAR NOT NULL, \
+             fetched_at_epoch_ms BIGINT NOT NULL, last_accessed_epoch_ms BIGINT NOT NULL, \
+             byte_estimate BIGINT NOT NULL, row_count BIGINT NOT NULL)",
+            naming::quote_ident(table)
+        )
+    }
+
+    /// Statements that insert the memo row for `key`, replacing any existing
+    /// one. Both timestamps are set to `now_ms`.
+    #[allow(clippy::too_many_arguments)]
+    fn cache_meta_upsert_sql(
+        &self,
+        table: &str,
+        key: &str,
+        sql: &str,
+        table_name: &str,
+        now_ms: i64,
+        byte_estimate: i64,
+        row_count: i64,
+    ) -> Vec<String> {
+        vec![format!(
+            "INSERT OR REPLACE INTO {} \
+             (cache_key, sql, table_name, fetched_at_epoch_ms, last_accessed_epoch_ms, \
+              byte_estimate, row_count) \
+             VALUES ({}, {}, {}, {now_ms}, {now_ms}, {byte_estimate}, {row_count})",
+            naming::quote_ident(table),
+            naming::quote_literal(key),
+            naming::quote_literal(sql),
+            naming::quote_literal(table_name),
+        )]
+    }
+
+    /// Statement advancing `last_accessed_epoch_ms` of the memo row for `key`.
+    fn cache_meta_touch_sql(&self, table: &str, key: &str, now_ms: i64) -> String {
+        format!(
+            "UPDATE {} SET last_accessed_epoch_ms = {now_ms} WHERE cache_key = {}",
+            naming::quote_ident(table),
+            naming::quote_literal(key),
+        )
+    }
+
+    /// Statement deleting the memo row for `key`.
+    fn cache_meta_delete_sql(&self, table: &str, key: &str) -> String {
+        format!(
+            "DELETE FROM {} WHERE cache_key = {}",
+            naming::quote_ident(table),
+            naming::quote_literal(key),
+        )
+    }
 }
 
 /// Wrap a body SQL in a CTE with a column alias list when aliases are present.
@@ -429,7 +501,10 @@ pub mod odbc;
 #[cfg(feature = "adbc")]
 pub mod adbc;
 
-#[cfg(any(feature = "duckdb", feature = "sqlite"))]
+#[cfg(any(feature = "clickhouse", feature = "chdb"))]
+pub mod clickhouse;
+
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
 pub mod cache;
 
 #[cfg(all(test, feature = "duckdb", feature = "sqlite"))]
@@ -451,7 +526,13 @@ pub use odbc::OdbcReader;
 #[cfg(feature = "adbc")]
 pub use adbc::AdbcReader;
 
-#[cfg(any(feature = "duckdb", feature = "sqlite"))]
+#[cfg(feature = "clickhouse")]
+pub use clickhouse::ClickHouseReader;
+
+#[cfg(feature = "chdb")]
+pub use clickhouse::ChdbReader;
+
+#[cfg(any(feature = "duckdb", feature = "sqlite", feature = "chdb"))]
 pub use cache::CachingReader;
 
 // ============================================================================

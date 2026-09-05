@@ -59,10 +59,12 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = ["all-readers"]
-all-readers = ["sqlite", "odbc", "duckdb"]
+all-readers = ["sqlite", "odbc", "duckdb", "clickhouse", "chdb"]
 odbc = ["ggsql/odbc"]
 sqlite = ["ggsql/sqlite"]
 duckdb = ["ggsql/duckdb"]
+clickhouse = ["ggsql/clickhouse"]
+chdb = ["ggsql/chdb"]
 
 [dev-dependencies]
 tempfile = "3.8"
