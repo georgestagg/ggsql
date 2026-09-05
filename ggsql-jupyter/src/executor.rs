@@ -8,24 +8,62 @@ use anyhow::Result;
 use ggsql::{
     reader::{
         connection::{extract_odbc_value, parse_connection_string},
-        DuckDBReader, Reader,
+        DuckDBReader, Reader, Spec,
     },
     validate::validate,
-    writer::{VegaLiteWriter, Writer},
     DataFrame,
 };
 
+/// A resolved plot has to reach a render thread, so the design rests on this.
+const _: () = {
+    fn assert_send<T: Send>() {}
+    let _ = assert_send::<Spec>;
+};
+
 /// Result of executing a ggsql query
-#[derive(Debug)]
 pub enum ExecutionResult {
     /// Pure SQL query with no visualization
     DataFrame(DataFrame),
-    /// Query with visualization specification
-    Visualization {
-        spec: String, // Vega-Lite JSON
-    },
+    /// A query carrying a `VISUALISE` clause, as the resolved plot rather than
+    /// as rendered output.
+    ///
+    /// **Deliberately not pre-rendered.** Which format this becomes depends on
+    /// where the output is going and what the frontend asked for — and, once a
+    /// plot comm is open, is asked again on every resize. Rendering here would
+    /// mean guessing a size and a format at execution time and being unable to
+    /// revise either.
+    ///
+    /// Boxed because a `Spec` carries the post-stat DataFrames and dwarfs the
+    /// other variants.
+    Visualization(Box<Spec>),
     /// Connection changed via meta-command
     ConnectionChanged { uri: String, display_name: String },
+}
+
+// `Spec` is neither `Debug` nor `Clone`, so this summarises rather than
+// deriving. What a log wants from a result is its shape and size anyway.
+impl std::fmt::Debug for ExecutionResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataFrame(df) => f
+                .debug_struct("DataFrame")
+                .field("rows", &df.height())
+                .field("columns", &df.width())
+                .finish(),
+            Self::Visualization(spec) => {
+                let metadata = spec.metadata();
+                f.debug_struct("Visualization")
+                    .field("rows", &metadata.rows)
+                    .field("layers", &metadata.layer_count)
+                    .finish()
+            }
+            Self::ConnectionChanged { uri, display_name } => f
+                .debug_struct("ConnectionChanged")
+                .field("uri", uri)
+                .field("display_name", display_name)
+                .finish(),
+        }
+    }
 }
 
 /// Create a reader from a connection URI string.
@@ -148,7 +186,6 @@ pub fn parse_meta_command(code: &str) -> Option<String> {
 /// Query executor maintaining persistent database connection
 pub struct QueryExecutor {
     reader: Box<dyn Reader + Send>,
-    writer: VegaLiteWriter,
     reader_uri: String,
 }
 
@@ -157,11 +194,9 @@ impl QueryExecutor {
     pub fn new_with_uri(uri: &str) -> Result<Self> {
         tracing::info!("Initializing query executor with reader: {}", uri);
         let reader = create_reader(uri)?;
-        let writer = VegaLiteWriter::new();
 
         Ok(Self {
             reader,
-            writer,
             reader_uri: uri.to_string(),
         })
     }
@@ -231,13 +266,9 @@ impl QueryExecutor {
             spec.metadata().layer_count
         );
 
-        // 4. Render to output format
-        let vega_json = self.writer.render(&spec)?;
-
-        tracing::debug!("Generated Vega-Lite spec: {} chars", vega_json.len());
-
-        // 5. Return result
-        Ok(ExecutionResult::Visualization { spec: vega_json })
+        // 4. Hand back the resolved plot. Choosing a format is the display
+        //    layer's job, because only it knows where the output is going.
+        Ok(ExecutionResult::Visualization(Box::new(spec)))
     }
 }
 
@@ -251,7 +282,7 @@ mod tests {
         let code = "SELECT 1 as x, 2 as y VISUALISE x, y DRAW point";
         let result = executor.execute(code).unwrap();
 
-        assert!(matches!(result, ExecutionResult::Visualization { .. }));
+        assert!(matches!(result, ExecutionResult::Visualization(_)));
     }
 
     #[test]

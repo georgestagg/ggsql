@@ -343,7 +343,7 @@ impl KernelServer {
                 // Per Jupyter spec: execute_result includes execution_count
                 // Only send if there's something to display (DDL returns None)
                 if !silent && !is_connection_changed {
-                    if let Some(display_data) = format_display_data(exec_result, &hints) {
+                    if let Some(display_data) = format_display_data(exec_result, &hints)? {
                         // Build message content, including output_location if present
                         let mut content = json!({
                             "execution_count": self.execution_count,

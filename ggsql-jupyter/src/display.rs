@@ -5,7 +5,10 @@
 
 use crate::executor::ExecutionResult;
 use crate::message::MessageHeader;
+use anyhow::Result;
 use clap::ValueEnum;
+use ggsql::reader::Spec;
+use ggsql::writer::{VegaLiteWriter, Writer};
 use ggsql::DataFrame;
 use serde_json::{json, Value};
 
@@ -132,19 +135,22 @@ impl RenderHints {
 ///   "transient": { ... }
 /// }
 /// ```
-pub fn format_display_data(result: ExecutionResult, hints: &RenderHints) -> Option<Value> {
+pub fn format_display_data(result: ExecutionResult, hints: &RenderHints) -> Result<Option<Value>> {
     match result {
-        ExecutionResult::Visualization { spec } => Some(format_vegalite(spec, hints)),
+        // Rendering can now fail, because it happens here rather than at
+        // execution time — which is the point: the format is chosen where the
+        // destination is known.
+        ExecutionResult::Visualization(spec) => Ok(Some(format_vegalite(&spec, hints)?)),
         ExecutionResult::DataFrame(df) => {
             // DDL statements return DataFrames with 0 columns - don't display anything
             if df.width() == 0 {
-                None
+                Ok(None)
             } else {
-                Some(format_dataframe(df))
+                Ok(Some(format_dataframe(df)))
             }
         }
         ExecutionResult::ConnectionChanged { display_name, .. } => {
-            Some(format_connection_changed(&display_name))
+            Ok(Some(format_connection_changed(&display_name)))
         }
     }
 }
@@ -161,10 +167,11 @@ fn format_connection_changed(display_name: &str) -> Value {
     })
 }
 
-/// Format Vega-Lite visualization as display_data
-fn format_vegalite(spec: String, hints: &RenderHints) -> Value {
-    let html = vegalite_html(&spec, hints);
-    json!({
+/// Render a resolved plot as Vega-Lite and wrap it as display_data.
+fn format_vegalite(spec: &Spec, hints: &RenderHints) -> Result<Value> {
+    let json = VegaLiteWriter::new().render(spec)?;
+    let html = vegalite_html(&json, hints);
+    Ok(json!({
         "data": {
             "text/html": html,
             "text/plain": "Vega-Lite visualization".to_string()
@@ -172,7 +179,7 @@ fn format_vegalite(spec: String, hints: &RenderHints) -> Value {
         "metadata": {},
         "transient": {},
         "output_location": "plot"
-    })
+    }))
 }
 
 /// Generate the HTML wrapper that embeds a Vega-Lite spec via vega-embed.
@@ -465,15 +472,31 @@ fn escape_html(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A resolved plot, from a real query — the display layer renders it now,
+    /// so a hand-written Vega-Lite string is no longer a stand-in for one.
+    fn a_spec() -> Spec {
+        use ggsql::reader::{DuckDBReader, Reader};
+        DuckDBReader::from_connection_string("duckdb://memory")
+            .unwrap()
+            .execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+            .unwrap()
+    }
+
     #[test]
     fn test_vegalite_format() {
-        let spec = r#"{"mark": "point"}"#.to_string();
-        let result = ExecutionResult::Visualization { spec };
+        let result = ExecutionResult::Visualization(Box::new(a_spec()));
         let display = format_display_data(result, &RenderHints::default())
+            .expect("rendering should succeed")
             .expect("Visualization should return Some");
 
         assert!(display["data"]["text/html"].is_string());
         assert!(display["data"]["text/plain"].is_string());
+        // Still routed to the Plots pane, and still a vega-embed payload —
+        // the wire format is unchanged by moving the render here.
+        assert_eq!(display["output_location"], "plot");
+        let html = display["data"]["text/html"].as_str().unwrap();
+        assert!(html.contains("vega-embed"), "{html:.200}");
+        assert!(html.contains("\"mark\""), "the spec should be embedded");
     }
 
     #[test]
@@ -481,7 +504,7 @@ mod tests {
         // DDL statements return DataFrames with 0 columns
         let df = DataFrame::empty();
         let result = ExecutionResult::DataFrame(df);
-        let display = format_display_data(result, &RenderHints::default());
+        let display = format_display_data(result, &RenderHints::default()).unwrap();
 
         assert!(
             display.is_none(),
@@ -498,7 +521,7 @@ mod tests {
         let empty: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
         let df = DataFrame::new(vec![("x", empty)]).unwrap();
         let result = ExecutionResult::DataFrame(df);
-        let display = format_display_data(result, &RenderHints::default());
+        let display = format_display_data(result, &RenderHints::default()).unwrap();
 
         assert!(
             display.is_some(),
