@@ -18,7 +18,7 @@
   cache automatically. `DateTime`, `Enum`, `UUID`, IP address, `FixedString`,
   `Decimal` and wide-integer columns are converted server-side to types the plot
   pipeline understands. The Jupyter kernel and Positron connections pane
-  recognise both schemes.
+  recognise both schemes. ClickHouse 26.8 or newer is required.
 - New caching layer that wraps any `Reader` with an in-memory, writeable cache
   backend (currently duckdb or sqlite), making write-constrained databases
   usable and avoiding repeated remote reads during interactive iteration.

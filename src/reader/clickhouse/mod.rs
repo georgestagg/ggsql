@@ -11,6 +11,9 @@
 //!   the in-memory [`CacheBackend`] behind `chdb+<primary>://` connection
 //!   strings, so a ClickHouse setup never needs another database engine.
 //!
+//! ClickHouse 26.8 or newer is assumed (correlated subqueries, `IS NOT
+//! DISTINCT FROM` in any clause); older servers are not supported.
+//!
 //! # Types
 //!
 //! ClickHouse's Arrow output cannot express some of its own types: `DateTime`
@@ -143,12 +146,6 @@ impl SqlDialect for ClickHouseDialect {
         format!("least({})", float_args(exprs))
     }
 
-    /// Older ClickHouse versions only accept `IS NOT DISTINCT FROM` inside
-    /// `JOIN ON`; this spelling works in any clause on every version.
-    fn sql_null_safe_equals(&self, left: &str, right: &str) -> String {
-        format!("(({left} = {right}) OR ({left} IS NULL AND {right} IS NULL))")
-    }
-
     fn sql_select_replace(
         &self,
         expr: &str,
@@ -173,8 +170,7 @@ impl SqlDialect for ClickHouseDialect {
 
     /// Every caller embeds this in a `GROUP BY {groups}` query over `from`, so
     /// the native aggregate is equivalent to the correlated scalar subquery
-    /// other dialects produce, and it also runs on ClickHouse versions without
-    /// correlated-subquery support.
+    /// other dialects produce, and far cheaper.
     fn sql_percentile(
         &self,
         column: &str,
@@ -901,10 +897,6 @@ mod tests {
         assert_eq!(
             ClickHouseDialect.sql_percentile("v", 0.5, "ignored", &["g".to_string()]),
             "quantileExactInclusive(0.5)(\"v\")"
-        );
-        assert_eq!(
-            ClickHouseDialect.sql_null_safe_equals("a.k", "b.k"),
-            "((a.k = b.k) OR (a.k IS NULL AND b.k IS NULL))"
         );
         assert_eq!(ClickHouseDialect.sql_date_literal(-1), "toDate32(-1)");
         assert_eq!(

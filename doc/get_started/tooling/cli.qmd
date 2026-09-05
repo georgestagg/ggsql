@@ -67,7 +67,7 @@ col_a,  col_b, col_c
 
 ### ClickHouse
 
-ggsql connects to [ClickHouse](https://clickhouse.com) over its HTTP interface, so no driver needs to be installed. The connection string is
+ggsql connects to [ClickHouse](https://clickhouse.com) 26.8 or newer over its HTTP interface, so no driver needs to be installed. The connection string is
 
 ```
 clickhouse://[user[:password]@]host[:port][/database][?param=value&...]

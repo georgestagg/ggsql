@@ -94,13 +94,6 @@ pub trait SqlDialect {
         }
     }
 
-    /// Null-safe equality of two expressions: true when both are equal or
-    /// both NULL. Override for backends that restrict `IS NOT DISTINCT FROM`
-    /// (ClickHouse only accepts it in `JOIN ON`).
-    fn sql_null_safe_equals(&self, left: &str, right: &str) -> String {
-        format!("{left} IS NOT DISTINCT FROM {right}")
-    }
-
     /// Scalar MAX across any number of SQL expressions.
     fn sql_greatest(&self, exprs: &[&str]) -> String {
         let mut result = exprs[0].to_string();
