@@ -76,9 +76,11 @@ The pipeline that takes a parsed `Plot` plus a `Reader` and produces a fully-res
   | `svg` / `pdf` | `SvgWriter`, `PdfWriter` | vector text / one PDF page | **none** |
   | `hep` | `HepWriter` | a `.hep` plot document — no picture | **none** |
 
-  The last three go through the same composition and the same `render` call (which takes `&mut dyn SceneBuilder`), so they need no adapter, pull in no wgpu, and **compile on the MSRV 1.86 toolchain** — `cargo +1.86 check --features svg,pdf,hep --ignore-rust-version`, where the flag is needed only because `parley` *declares* 1.88 while compiling fine on 1.86. Only the raster writers are genuinely 1.88+.
+  Plus `PlotViewer` behind the `window` feature — not a writer, since it returns no output, blocks, and must run on the main thread. It shows the same composition in a native window, re-laying-out on resize.
 
-Two **internal** features carry the split, enabled by the writer features rather than named directly: `graphics` is the shared composition layer, and `raster = graphics + hephaestus/vello` adds the GPU rasteriser. Only `raster` pulls in wgpu, vello and pollster, which is what lets a vector-only build skip them — `cargo tree --features graphics` shows none of the three, `--features png` shows 18. `graphics` is also the single module gate for `writer/hephaestus/`, so adding a format needs no change there.
+  The three GPU-free writers go through the same composition and the same `render` call (which takes `&mut dyn SceneBuilder`), so they need no adapter, pull in no wgpu, and **compile on the MSRV 1.86 toolchain** — `cargo +1.86 check --features svg,pdf,hep --ignore-rust-version`, where the flag is needed only because `parley` *declares* 1.88 while compiling fine on 1.86. Only the raster writers are genuinely 1.88+.
+
+Three **internal** features carry the split, enabled by the writer features rather than named directly: `graphics` is the shared composition layer, and `raster = graphics + hephaestus/vello-hybrid` adds the GPU rasteriser. Only `raster` pulls in wgpu, vello_hybrid and pollster, which is what lets a vector-only build skip them — `cargo tree --features graphics` shows none of the three, `--features png` shows 19. `raster-writer` then narrows `raster` once more, to "some writer actually reads pixels back" — the viewer needs the rasteriser without ever doing that. `graphics` is the single module gate for `writer/hephaestus/`, so adding a format needs no change there.
 
 ### `plot/`
 
@@ -112,7 +114,7 @@ Defined in `Cargo.toml`:
 | `spatial` | ✓ | Spatial/geometry support (geozero for WKT↔GeoJSON) |
 | `vegalite` | ✓ | Vega-Lite writer |
 | `graphics` | — | *Internal.* The shared plot-composition layer; no GPU |
-| `raster` | — | *Internal.* `graphics` + the GPU rasteriser (wgpu/vello) |
+| `raster` | — | *Internal.* `graphics` + the GPU rasteriser (wgpu/vello-hybrid) |
 | `png` | — | PNG writer (`raster`; excluded from the MSRV build) |
 | `jpeg` | — | JPEG writer (`raster`) |
 | `tiff` | — | TIFF writer (`raster`) |
@@ -121,6 +123,7 @@ Defined in `Cargo.toml`:
 | `pdf` | — | PDF writer (`graphics`; no GPU, MSRV-clean) |
 | `hep` | — | `.hep` plot-document writer (`graphics`; no GPU, MSRV-clean) |
 | `hep-read` | — | **Test-only.** Reading a `.hep` back, for the round-trip test |
+| `window` | — | `PlotViewer` — a native plot window (`raster`; not a writer) |
 | `builtin-data` | ✓ | Bundled penguins/airquality datasets |
 | `all-readers` | — | `duckdb` + `sqlite` + `odbc` |
 | `all-writers` | — | every writer above except the test-only `hep-read` |

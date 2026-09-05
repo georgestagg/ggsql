@@ -179,6 +179,7 @@ Layers draw in `spec.layers` order, which is DRAW order, which is z-order.
 | [`png.rs`](png.rs), [`jpeg.rs`](jpeg.rs), [`tiff.rs`](tiff.rs), [`webp.rs`](webp.rs) | One raster writer each: its rustdoc option table, `from_options`, and one encoder call. |
 | [`svg.rs`](svg.rs), [`pdf.rs`](pdf.rs) | One vector writer each, plus a `describe()` translating what the format could not express into ggsql's vocabulary. |
 | [`hep.rs`](hep.rs) | The plot-document writer. Serialises the composition; builds no scene at all. |
+| [`window.rs`](window.rs) | `PlotViewer` — **not a writer.** Shows the composition in a native window and blocks until it closes. |
 | [`wiring.rs`](wiring.rs) | The shared, geom-generic machinery: `Ctx`, `GeomSpec` + its parts, `build_and_add`, `wire_positions`, `wire_material`, `MaterialSource`/`resolve_material`, `BandAxes`, `side`/band helpers, `material_legend`, label resolution. |
 | [`scales.rs`](scales.rs) | ggsql `Scale` → hephaestus `Scale`. `RangeKind`, transform + palette + break mapping, temporal scales, free-panel scales, `binned_bins`/`bin_at_centre`. |
 | [`channels.rs`](channels.rs) | DataFrame column → typed channel data (`ChannelData`, `column_to_*`), group keys, WKB/WKT geometry decoding. |
@@ -485,6 +486,33 @@ suppressing the colorbar frame hephaestus otherwise inherits from its default
 `RectElement`. Anything the two writers must agree on that is neither a scale nor
 a channel belongs there.
 
+## The viewer is not a writer
+
+[`window.rs`](window.rs) holds `PlotViewer`, which produces no output at all. It
+is not a `Writer` impl on purpose: `Output = ()` would put "blocks, main thread
+only, native only" into that trait's contract for one implementor's sake.
+`from_options` plus `show(&Spec)` gives the same option ergonomics without
+claiming it writes anything.
+
+It lives in this crate rather than in `ggsql-cli` because the CLI uses only
+public `ggsql::*` API and has no renderer dependency — see
+[`/ggsql-cli/CLAUDE.md`](../../../ggsql-cli/CLAUDE.md). So the *behaviour* goes
+public as a type instead of `build_composition` going public.
+
+Two things follow from what a window is:
+
+- **Resize needs no code.** `Frame::parts()` reports the surface's own size and
+  dpi each frame, and the composition re-solves its layout for them — so a
+  resize is a re-layout, not a rescale. That is the same property the `hep`
+  format exists to preserve.
+- **`units` and `dpi` are rejected, with a reason.** A window is sized in
+  logical pixels and its resolution belongs to the display (`frame.dpi()` wins
+  every draw), so accepting either would be accepting a setting that is then
+  ignored — exactly the silent failure `reject_unknown` exists to prevent. The
+  error says so rather than reporting them as typos. Option parsing reuses
+  `canvas::{whole_pixels, parse_background}`, which is why those are free
+  functions rather than `Canvas` methods.
+
 ## Adding a geom
 
 1. Add a module under [`geom/`](geom/) returning a `GeomSpec`, and dispatch it in
@@ -608,10 +636,21 @@ so one run inventories every gap at once. Implementation notes:
 
 ## Operational constraints
 
-- **A GPU adapter is required by the four raster writers**, at render time.
-  Vello/wgpu is hephaestus's only rasterising backend. CI installs Mesa's
-  lavapipe; headless containers need something equivalent. The vector and
-  document writers need neither an adapter nor wgpu.
+- **A GPU adapter is required by the four raster writers**, at render time. CI
+  installs Mesa's lavapipe; headless containers need something equivalent. The
+  vector and document writers need neither an adapter nor wgpu.
+- **The backend is Vello Hybrid, not vello classic**, and the choice is named
+  in exactly one place ([`raster.rs`](raster.rs)) so it stays swappable. Hybrid
+  computes coverage on the CPU and gives the GPU a plain render pipeline, which
+  buys two things: its GPU buffers are sized to the scene's actual content
+  instead of fixed caps, so a dense plot has **no draw-count ceiling**; and it
+  can paint binary coverage, so a hit test reports exactly one id per pixel
+  rather than a blend of two — vello classic antialiases its pick pass and can
+  report an id that was never drawn. The second matters only once interaction
+  lands, but it is the reason not to defer the choice. Output differs from
+  vello classic by antialiasing alone (~2% of pixels on a scatter, max channel
+  delta under 70, geometry identical). `hephaestus/vello-hybrid` transitively
+  enables `hephaestus/png`, so a webp-only build still compiles the PNG codec.
 - **fontconfig is a build-time dependency on Linux**, for **every**
   hephaestus-backed feature and not just the raster ones: text layout goes
   through parley/fontique, which links the system fontconfig to enumerate fonts
@@ -622,7 +661,8 @@ so one run inventories every gap at once. Implementation notes:
   `hep` need no adapter and no wgpu, so they are the fallback for a machine
   that has none — and the reason CI has hard assertions at all.
 - **MSRV split, and it is narrower than it looks.** ggsql's MSRV is CRAN-locked
-  at 1.86, and only the builds that pull `vello` are genuinely 1.88+. The vector
+  at 1.86, and only the builds that pull the GPU rasteriser are genuinely
+  1.88+. The vector
   and document writers **compile on 1.86** — what refuses is cargo's *floor
   check*, because `parley` declares `rust-version = 1.88` while compiling fine
   on 1.86, and `--ignore-rust-version` bypasses a declaration check:
@@ -635,7 +675,8 @@ so one run inventories every gap at once. Implementation notes:
   remain viable for the R/CRAN target; `png`/`jpeg`/`tiff`/`webp` do not, and
   CI runs their steps with `cargo +stable`.
 - **The dependency is the published `0.4.0` crate** (`src/Cargo.toml`), pinned
-  with `default-features = false` so `vello` arrives only with `raster`. So
+  with `default-features = false` so the GPU rasteriser arrives only with
+  `raster`. So
   nothing here blocks publishing ggsql. hephaestus's own semver contract extends
   to the `kurbo`, `peniko` and `wgpu` types in its public API, so a bump in any
   of those is a breaking change to this writer even when hephaestus's own API

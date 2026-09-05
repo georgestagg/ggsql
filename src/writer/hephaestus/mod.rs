@@ -36,7 +36,7 @@ mod compose;
 mod facet;
 mod geom;
 mod projection;
-#[cfg(feature = "raster")]
+#[cfg(feature = "raster-writer")]
 mod raster;
 mod scales;
 #[cfg(any(feature = "svg", feature = "pdf"))]
@@ -57,13 +57,16 @@ mod svg;
 mod tiff;
 #[cfg(feature = "webp")]
 mod webp;
+#[cfg(feature = "window")]
+mod window;
 
 pub use hephaestus::color::{rgba, Color};
 
 pub use canvas::Canvas;
 #[cfg(feature = "hep")]
 use canvas::CANVAS_HINT_OPTIONS;
-#[cfg(feature = "raster")]
+
+#[cfg(feature = "raster-writer")]
 pub use raster::RasterRenderer;
 
 #[cfg(feature = "hep")]
@@ -80,6 +83,8 @@ pub use svg::SvgWriter;
 pub use tiff::{TiffCompression, TiffWriter};
 #[cfg(feature = "webp")]
 pub use webp::WebpWriter;
+#[cfg(feature = "window")]
+pub use window::PlotViewer;
 
 // Re-exported so a caller can name a writer's own setting without depending on
 // the renderer crate. Both are plain enums whose variants are the format's own

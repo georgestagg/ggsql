@@ -154,7 +154,9 @@ impl super::canvas::Canvased for PngWriter {
 #[cfg(test)]
 mod option_tests {
     use super::*;
-    use crate::writer::hephaestus::canvas::assert_canvas_semantics;
+    use crate::writer::hephaestus::canvas::{
+        assert_canvas_semantics, assert_transparent_background,
+    };
 
     fn writer(pairs: &[&str]) -> Result<PngWriter> {
         PngWriter::from_options(&WriterOptions::parse(pairs)?)
@@ -163,6 +165,7 @@ mod option_tests {
     #[test]
     fn canvas_options_behave_as_they_do_for_every_writer() {
         assert_canvas_semantics::<PngWriter>();
+        assert_transparent_background::<PngWriter>();
     }
 
     #[test]

@@ -65,6 +65,35 @@ pub struct RenderArgs {
     pub verbose: bool,
 }
 
+/// The flags `view` takes: where the data comes from and how the window looks.
+///
+/// Deliberately not [`RenderArgs`]: there is no `--writer` to choose and no
+/// `--output` to write, and `-D` carries the viewer's own settings rather than
+/// a writer's.
+#[derive(Args)]
+pub struct ViewArgs {
+    /// Data source connection string (duckdb://, sqlite://, odbc://)
+    #[arg(short, long, default_value = "duckdb://memory")]
+    pub reader: String,
+
+    /// Viewer settings, as `key=value` (repeatable)
+    #[arg(
+        short = 'D',
+        long = "viewer-option",
+        visible_alias = "viewer-options",
+        value_name = "KEY=VALUE[;...]",
+        long_help = "Settings for the viewer window, as `key=value`. Repeatable, and one flag \
+                     may carry several settings separated by `;` (quote it, as most shells read \
+                     `;` themselves): `-D 'width=1280;title=My plot'`.\n\nSettings:\n  \
+                     width, height, background, title"
+    )]
+    pub viewer_options: Vec<String>,
+
+    /// Show verbose output (execution details, statistics)
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
 impl RenderArgs {
     /// Resolve `--writer` and its settings, exiting on an unknown name or a
     /// setting that is not `key=value`. Both are the user's mistake, and
@@ -108,6 +137,20 @@ pub enum Commands {
 
         #[command(flatten)]
         render: RenderArgs,
+    },
+
+    /// Show a ggsql query's plot in a window
+    ///
+    /// Blocks until the window is closed. Resizing the window re-lays-out the
+    /// plot rather than stretching it.
+    ///
+    /// Requires the `window` feature and a working GPU adapter.
+    View {
+        /// The ggsql query to show
+        query: String,
+
+        #[command(flatten)]
+        view: ViewArgs,
     },
 
     /// Parse a query and show the AST (for debugging)
@@ -195,6 +238,13 @@ fn main() -> anyhow::Result<()> {
             }
             let writer = render.writer();
             cmd_run(file, &render, &writer);
+        }
+
+        Commands::View { query, view } => {
+            if view.verbose {
+                eprintln!("Showing query: {}", query);
+            }
+            cmd_view(query, &view);
         }
 
         Commands::Parse { query, format } => {
@@ -389,6 +439,64 @@ fn render_spec(spec: Spec, args: &RenderArgs, writer: &WriterSpec) {
             }
         },
     };
+}
+
+/// Show a query's plot in a window, blocking until it closes.
+///
+/// The subcommand exists whether or not the feature does: one that vanishes
+/// between builds is worse than one that says what would bring it back.
+fn cmd_view(query: String, args: &ViewArgs) {
+    #[cfg(feature = "window")]
+    {
+        use ggsql::writer::PlotViewer;
+
+        let options = WriterOptions::parse(args.viewer_options.clone()).unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+        let viewer = PlotViewer::from_options(&options).unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+
+        let reader = open_reader(&args.reader).unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+
+        let validated = validate(&query).unwrap_or_else(|e| {
+            eprintln!("Failed to validate query: {}", e);
+            std::process::exit(1);
+        });
+        if !validated.has_visual() {
+            eprintln!("This query has no VISUALISE clause, so there is no plot to show.");
+            std::process::exit(1);
+        }
+
+        let spec = reader.execute(&query).unwrap_or_else(|e| {
+            eprintln!("Failed to execute query: {}", e);
+            std::process::exit(1);
+        });
+
+        if args.verbose {
+            let metadata = spec.metadata();
+            eprintln!("  Rows: {}", metadata.rows);
+            eprintln!("  Layers: {}", metadata.layer_count);
+            eprintln!("Close the window to exit.");
+        }
+
+        // Blocks on the main thread until the window closes.
+        if let Err(e) = viewer.show(&spec) {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
+    #[cfg(not(feature = "window"))]
+    {
+        let _ = (query, args);
+        eprintln!("The plot viewer is not compiled in. Rebuild with --features window");
+        std::process::exit(1);
+    }
 }
 
 fn cmd_parse(query: String, format: String) {

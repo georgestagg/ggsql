@@ -27,11 +27,14 @@ The binary name is `ggsql` (not `ggsql-cli`) — that's what release artifacts a
 | --- | --- |
 | `exec` | Run a ggsql query string (default reader `duckdb://memory`, writer `vegalite`) |
 | `run` | Like `exec`, but reads the query from a file |
+| `view` | Show a query's plot in a native window; blocks until it closes (`window` feature) |
 | `parse` | Print the parsed AST (formats: `pretty`, `debug`, `json`) — debugging aid |
 | `validate` | Syntax + semantic check without executing SQL |
 | `docs` | Render embedded ggsql syntax docs (TTY → ANSI via termimad, pipe → markdown, `--format json` → structured) |
 | `skill` | Render the AI-assistant skill from `/doc/vendor/SKILL.md` |
 | `agent-info` | Alias for `skill` |
+
+The subcommand list does not change with features: `view` is always defined, and every writer is always a `--writer` name. What changes is whether it can do anything, and it says so.
 
 Only public `ggsql::*` API is used (`reader`, `writer`, `validate`, `parser`, `VERSION`) — this crate has no awareness of internal modules.
 
@@ -45,7 +48,15 @@ Which keys a writer accepts is the writer's business, and an unknown one is its 
 
 Render functions return `Result<(Output, Vec<String>), String>`: the output plus anything the writer had to degrade to produce it. They report failure rather than exiting, so `render_spec` owns how a problem is presented. **Warnings go to stderr unconditionally, not behind `-v`** — something the writer could not express is a defect in the file the user is about to ship, and stderr keeps it out of a piped artifact.
 
-`open_reader(uri) -> Result<Box<dyn Reader>, String>` is the matching single place for connection strings. `ggsql::reader::Reader` is object-safe on purpose, so every subcommand that needs data shares one function that knows which schemes exist and which of them this build has.
+`open_reader(uri) -> Result<Box<dyn Reader>, String>` is the matching single place for connection strings. `ggsql::reader::Reader` is object-safe on purpose, so every subcommand that needs data shares one function that knows which schemes exist and which of them this build has — `exec`, `run` and `view` all go through it.
+
+### `view`, and why the window code is not here
+
+`view` flattens its own `ViewArgs` rather than `RenderArgs`: there is no `--writer` to pick and no `--output` to write, and its `-D` (`--viewer-option`) carries the viewer's settings rather than a writer's.
+
+**The window itself lives in the library, as `ggsql::writer::PlotViewer`** — and that is the decision most likely to be re-litigated, so: *only public `ggsql::*` API is used; this crate has no awareness of internal modules.* For the CLI to call the renderer's `window::run` itself it would have to take a direct hephaestus dependency, name `PlotComposition` and `WindowConfig` in its own source, and pin hephaestus in a second place — breaking that invariant three ways. So the *behaviour* goes public as a type instead, and `cmd_view` stays thin: parse options, open the reader, execute, call `show`. `show` blocks on the main thread until the window closes.
+
+**The subcommand is defined unconditionally.** Without the `window` feature it prints what would bring it back. A subcommand that vanishes between builds is worse than one that explains itself — the same reasoning as `WriterInfo::compiled`.
 
 ## Build & install
 

@@ -37,6 +37,7 @@ pub const CANVAS_OPTIONS: &[&str] = &["width", "height", "units", "dpi", "backgr
 /// A writer whose canvas is only a hint needs to tell "no size was asked for"
 /// apart from "a size was asked for that happens to equal the default", and
 /// these are the keys that decide it.
+#[cfg(feature = "hep")]
 pub const CANVAS_HINT_OPTIONS: &[&str] = &["width", "height", "units", "dpi"];
 
 /// Units a `width` / `height` option may be given in.
@@ -113,17 +114,7 @@ impl Canvas {
         let mut canvas = Self::new(width, height, dpi);
         canvas.physical = units != "px";
         if let Some(raw) = options.get("background") {
-            // `none` is a familiar spelling of a transparent canvas that CSS
-            // itself doesn't accept as a color.
-            let color = match raw.trim().to_lowercase().as_str() {
-                "none" => rgba(0.0, 0.0, 0.0, 0.0),
-                _ => parse_color(raw).ok_or_else(|| {
-                    GgsqlError::WriterError(format!(
-                        "writer option 'background' expects a CSS color, got '{raw}'"
-                    ))
-                })?,
-            };
-            canvas = canvas.background(color);
+            canvas = canvas.background(parse_background(raw)?);
         }
         Ok(canvas)
     }
@@ -165,6 +156,28 @@ impl Default for Canvas {
     }
 }
 
+/// Read a `background` option's value as a color.
+///
+/// A free function rather than a `Canvas` method because the plot viewer takes
+/// a background without taking a canvas — a window's size is logical pixels and
+/// its resolution belongs to the display.
+///
+/// # Errors
+///
+/// Returns `GgsqlError::WriterError` if the value is not a color.
+pub(super) fn parse_background(raw: &str) -> Result<Color> {
+    // `none` is a familiar spelling of a transparent canvas that CSS itself
+    // doesn't accept as a color.
+    match raw.trim().to_lowercase().as_str() {
+        "none" => Ok(rgba(0.0, 0.0, 0.0, 0.0)),
+        _ => parse_color(raw).ok_or_else(|| {
+            GgsqlError::WriterError(format!(
+                "writer option 'background' expects a CSS color, got '{raw}'"
+            ))
+        }),
+    }
+}
+
 /// Convert a canvas dimension given in `units` to whole pixels at `dpi`.
 ///
 /// A physical unit goes through inches, so the same figure grows with DPI; `px`
@@ -181,7 +194,7 @@ fn to_pixels(value: f64, units: &str, dpi: f64, key: &str) -> Result<u32> {
 }
 
 /// Round a pixel count and reject one outside the renderable range.
-fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
+pub(super) fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
     let rounded = pixels.round();
     if !(1.0..=MAX_DIMENSION).contains(&rounded) {
         return Err(GgsqlError::WriterError(format!(
@@ -195,7 +208,18 @@ fn whole_pixels(pixels: f64, key: &str) -> Result<u32> {
 ///
 /// Implemented by every renderer-backed writer so the shared option behaviour
 /// can be asserted generically instead of once per format.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "png",
+        feature = "jpeg",
+        feature = "tiff",
+        feature = "webp",
+        feature = "svg",
+        feature = "pdf",
+        feature = "hep"
+    )
+))]
 pub(super) trait Canvased {
     fn canvas(&self) -> &Canvas;
 }
@@ -210,7 +234,18 @@ pub(super) trait Canvased {
 ///
 /// Transparency is not covered here: a format without an alpha channel refuses
 /// it. See [`assert_transparent_background`] for the writers that accept it.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "png",
+        feature = "jpeg",
+        feature = "tiff",
+        feature = "webp",
+        feature = "svg",
+        feature = "pdf",
+        feature = "hep"
+    )
+))]
 pub(super) fn assert_canvas_semantics<W: crate::writer::Writer + Canvased + std::fmt::Debug>() {
     let build = |pairs: &[&str]| -> Result<W> { W::from_options(&WriterOptions::parse(pairs)?) };
     let dims = |pairs: &[&str]| -> (u32, u32, f64) {
@@ -283,7 +318,20 @@ pub(super) fn assert_canvas_semantics<W: crate::writer::Writer + Canvased + std:
 ///
 /// Separate from [`assert_canvas_semantics`] because a format with no alpha
 /// channel refuses one instead — see `JpegWriter`.
-#[cfg(test)]
+// Every writer but `jpeg`, which is the one that refuses a transparent canvas
+// rather than accepting one — so it is also the one config where nothing here
+// has a caller.
+#[cfg(all(
+    test,
+    any(
+        feature = "png",
+        feature = "tiff",
+        feature = "webp",
+        feature = "svg",
+        feature = "pdf",
+        feature = "hep"
+    )
+))]
 pub(super) fn assert_transparent_background<W: crate::writer::Writer + Canvased>() {
     for spelling in ["background=transparent", "background=none"] {
         let options = WriterOptions::parse([spelling]).unwrap();

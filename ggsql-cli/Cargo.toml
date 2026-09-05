@@ -69,6 +69,10 @@ webp = ["ggsql/webp", "any-writer"]
 svg = ["ggsql/svg", "any-writer"]
 pdf = ["ggsql/pdf", "any-writer"]
 hep = ["ggsql/hep", "any-writer"]
+
+# The plot viewer. Not a writer, so deliberately not in `all-writers`: it
+# blocks, it is native-only, and it produces no output.
+window = ["ggsql/window"]
 builtin-data = ["ggsql/builtin-data"]
 all-readers = ["duckdb", "sqlite", "odbc"]
 all-writers = ["vegalite", "png", "jpeg", "tiff", "webp", "svg", "pdf", "hep"]

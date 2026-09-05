@@ -3,10 +3,15 @@
 //! The one module that names a GPU renderer, and the only part of the writer
 //! that needs an adapter at all: the vector and document writers build a scene
 //! or a byte string from the same `PlotComposition` and never come through here.
+//!
+//! The backend is Vello Hybrid — coverage computed on the CPU, a plain render
+//! pipeline on the GPU — chosen over vello classic because its buffers are
+//! sized to the scene rather than capped, so a dense plot has no draw-count
+//! ceiling. Which backend that is stays inside this file.
 
 use std::collections::HashMap;
 
-use hephaestus::backend::vello::VelloRenderer;
+use hephaestus::backend::hybrid::HybridRenderer;
 use hephaestus::plot::PlotComposition;
 use hephaestus::{Renderer, SceneBuilder};
 
@@ -16,12 +21,17 @@ use crate::{DataFrame, GgsqlError, Plot, Result};
 
 /// A GPU renderer held across renders.
 ///
-/// Constructing one creates a wgpu device and compiles the rasteriser's
-/// shaders, which is far too expensive to repeat per figure. A host rendering
+/// Constructing one creates a wgpu device and builds the rasteriser's
+/// pipelines, which is far too expensive to repeat per figure. A host rendering
 /// more than one plot — a kernel serving a plot pane, a batch job — should keep
 /// one of these and hand it to `render_with`; a one-shot caller can ignore it
-/// and let the writer make its own.
-pub struct RasterRenderer(VelloRenderer);
+/// and let the writer make its own. It is `Send` but not `Sync`, so it moves to
+/// a render thread rather than being shared between them.
+///
+/// Sizing is handled internally: the renderer rebuilds whatever is bound to the
+/// frame dimensions when they change, so one of these serves a sequence of
+/// differently-sized renders.
+pub struct RasterRenderer(HybridRenderer);
 
 impl RasterRenderer {
     /// Initialise the renderer, which requires a working GPU adapter.
@@ -33,7 +43,9 @@ impl RasterRenderer {
     /// telling apart by a caller that falls back to a different output format,
     /// so the message names which happened.
     pub fn new() -> Result<Self> {
-        VelloRenderer::new().map(Self).map_err(|e| {
+        // Not `with_picking`: indexing costs CPU per draw call and nothing here
+        // hit-tests. A host that wants picking wants a live scene, not a file.
+        HybridRenderer::new().map(Self).map_err(|e| {
             GgsqlError::WriterError(format!("could not initialise the GPU renderer: {e}"))
         })
     }

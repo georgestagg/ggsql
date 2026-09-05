@@ -29,6 +29,13 @@
   wide. `hep` produces no picture at all: it captures the resolved plot —
   scales, breaks, labels, theme, geometry and data — so a host can render it
   itself at any size and re-render on resize without re-running the query.
+- New `ggsql view` subcommand shows a query's plot in a native window, blocking
+  until it is closed: `ggsql view "SELECT … VISUALISE …"`. Resizing the window
+  re-lays-out the plot rather than stretching it. `-D` (`--viewer-option`) takes
+  `width`, `height`, `background` and `title`; `units` and `dpi` are refused,
+  since a window is sized in logical pixels and its resolution belongs to the
+  display. Behind a new off-by-default `window` feature, and needs a GPU
+  adapter. The subcommand exists either way and says what would enable it.
 - Writers can be configured from key–value options: `Writer::from_options` takes
   a `WriterOptions` set, and the CLI collects them from a repeatable
   `--writer-option key=value` flag on `exec` and `run` (short `-D`, also

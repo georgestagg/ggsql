@@ -49,12 +49,31 @@ pub use vegalite::VegaLiteWriter;
 // Gated on `graphics` — the shared composition layer — rather than on any one
 // format, so adding a writer needs no change here beyond its own re-export.
 #[cfg(feature = "graphics")]
+// `graphics` and `raster-writer` are internal features, turned on by the writer
+// features rather than named directly. Selecting one alone is a legitimate
+// build — it is how `cargo tree --features graphics` proves the vector path
+// pulls in no wgpu — but it leaves the whole composition layer with nothing
+// consuming it, so every item in here is then genuinely unused. Silence that
+// case only; any build with an actual writer still reports real dead code.
+#[cfg_attr(
+    not(any(
+        feature = "png",
+        feature = "jpeg",
+        feature = "tiff",
+        feature = "webp",
+        feature = "svg",
+        feature = "pdf",
+        feature = "hep",
+        feature = "window"
+    )),
+    allow(dead_code)
+)]
 mod hephaestus;
 
 #[cfg(feature = "graphics")]
 pub use hephaestus::{rgba, Canvas, Color};
 
-#[cfg(feature = "raster")]
+#[cfg(feature = "raster-writer")]
 pub use hephaestus::RasterRenderer;
 
 #[cfg(feature = "jpeg")]
@@ -68,6 +87,11 @@ pub use hephaestus::HepWriter;
 pub use hephaestus::PdfWriter;
 #[cfg(feature = "svg")]
 pub use hephaestus::SvgWriter;
+
+// Not a writer — it produces no output — but it needs the same composition, so
+// it lives beside them. See its own docs for why it is not a `Writer` impl.
+#[cfg(feature = "window")]
+pub use hephaestus::PlotViewer;
 #[cfg(feature = "png")]
 pub use hephaestus::{PngCompression, PngWriter};
 #[cfg(feature = "tiff")]
