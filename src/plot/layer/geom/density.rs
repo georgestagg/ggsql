@@ -460,7 +460,10 @@ fn build_grid_cte(
                 .collect();
             let grid_groups_select: Vec<String> = groups
                 .iter()
-                .map(|g| format!("full_grid.{}", naming::quote_ident(g)))
+                .map(|g| {
+                    let q = naming::quote_ident(g);
+                    format!("full_grid.{q} AS {q}")
+                })
                 .collect();
 
             format!(
@@ -553,6 +556,15 @@ fn compute_density(
         .iter()
         .map(|g| format!("grid.{}", naming::quote_ident(g)))
         .collect();
+    // Projected with an explicit alias: some engines (ClickHouse) otherwise
+    // name an unaliased `grid.col` projection `grid.col`.
+    let grid_groups_select: Vec<String> = group_by
+        .iter()
+        .map(|g| {
+            let q = naming::quote_ident(g);
+            format!("grid.{q} AS {q}")
+        })
+        .collect();
     let aggregation = format!(
         "GROUP BY grid.x{grid_group_by}
         ORDER BY grid.x{grid_group_by}",
@@ -597,7 +609,7 @@ fn compute_density(
         intensity_column = intensity_column,
         density_column = density_column,
         aggregation = aggregation,
-        grid_groups = with_trailing_comma(&grid_groups.join(", "))
+        grid_groups = with_trailing_comma(&grid_groups_select.join(", "))
     )
 }
 
@@ -740,7 +752,7 @@ mod tests {
         FROM (
           SELECT
             grid.x AS "__ggsql_stat_x",
-            grid."region", grid."category",
+            grid."region" AS "region", grid."category" AS "category",
             SUM(data.weight * ((EXP(-0.5 * (grid.x - data.val) * (grid.x - data.val) / (bandwidth.bw * bandwidth.bw))) * 0.3989422804014327)) / MIN(bandwidth.bw) AS "__ggsql_stat_intensity",
             SUM(data.weight) AS "__norm"
           FROM data

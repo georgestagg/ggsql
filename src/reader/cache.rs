@@ -205,13 +205,10 @@ impl CachingReader {
         if self.meta_ready.get() {
             return Ok(());
         }
-        let sql = format!(
-            "CREATE TABLE IF NOT EXISTS {} (\
-             cache_key VARCHAR PRIMARY KEY, sql VARCHAR NOT NULL, table_name VARCHAR NOT NULL, \
-             fetched_at_epoch_ms BIGINT NOT NULL, last_accessed_epoch_ms BIGINT NOT NULL, \
-             byte_estimate BIGINT NOT NULL, row_count BIGINT NOT NULL)",
-            naming::quote_ident(naming::CACHE_META_TABLE)
-        );
+        let sql = self
+            .cache
+            .dialect()
+            .cache_meta_table_sql(naming::CACHE_META_TABLE);
         self.cache.execute_sql(&sql)?;
         self.meta_ready.set(true);
         Ok(())
@@ -245,33 +242,27 @@ impl CachingReader {
         byte_estimate: i64,
         row_count: i64,
     ) -> Result<()> {
-        let now = now_ms();
-        let stmt = format!(
-            "INSERT OR REPLACE INTO {} \
-             (cache_key, sql, table_name, fetched_at_epoch_ms, last_accessed_epoch_ms, \
-              byte_estimate, row_count) \
-             VALUES ({}, {}, {}, {}, {}, {}, {})",
-            naming::quote_ident(naming::CACHE_META_TABLE),
-            naming::quote_literal(key),
-            naming::quote_literal(sql),
-            naming::quote_literal(table),
-            now,
-            now,
+        let stmts = self.cache.dialect().cache_meta_upsert_sql(
+            naming::CACHE_META_TABLE,
+            key,
+            sql,
+            table,
+            now_ms(),
             byte_estimate,
             row_count,
         );
-        self.cache.execute_sql(&stmt)?;
+        for stmt in stmts {
+            self.cache.execute_sql(&stmt)?;
+        }
         Ok(())
     }
 
     /// Advance the last-accessed timestamp for `key` (LRU bookkeeping).
     fn touch(&self, key: &str) -> Result<()> {
-        let stmt = format!(
-            "UPDATE {} SET last_accessed_epoch_ms = {} WHERE cache_key = {}",
-            naming::quote_ident(naming::CACHE_META_TABLE),
-            now_ms(),
-            naming::quote_literal(key),
-        );
+        let stmt =
+            self.cache
+                .dialect()
+                .cache_meta_touch_sql(naming::CACHE_META_TABLE, key, now_ms());
         self.cache.execute_sql(&stmt)?;
         Ok(())
     }
@@ -279,11 +270,10 @@ impl CachingReader {
     /// Drop a single memo entry: unregister the table, then delete its meta row.
     fn drop_entry(&self, key: &str, table: &str) -> Result<()> {
         self.cache.unregister(table)?;
-        let del = format!(
-            "DELETE FROM {} WHERE cache_key = {}",
-            naming::quote_ident(naming::CACHE_META_TABLE),
-            naming::quote_literal(key),
-        );
+        let del = self
+            .cache
+            .dialect()
+            .cache_meta_delete_sql(naming::CACHE_META_TABLE, key);
         self.cache.execute_sql(&del)?;
         Ok(())
     }

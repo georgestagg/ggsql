@@ -24,6 +24,8 @@ export function createConnectionDrivers(
     return [
         createDuckDBDriver(positronApi),
         createSQLiteDriver(positronApi),
+        createClickHouseDriver(positronApi),
+        createChdbDriver(positronApi),
         createSnowflakeDefaultDriver(positronApi),
         createSnowflakePasswordDriver(positronApi),
         createSnowflakeSSODriver(positronApi),
@@ -408,6 +410,105 @@ function createSnowflakePATDriver(
             });
         },
         connect: snowflakeConnect(positronApi),
+    };
+}
+
+// ============================================================================
+// ClickHouse
+// ============================================================================
+
+/**
+ * ClickHouse connection driver (HTTP interface).
+ *
+ * Inputs: host (required), port, database, user, password, TLS. Produces
+ * `clickhouse://` or `clickhouses://`. The password is omitted from the
+ * generated code when left blank so it can come from `CLICKHOUSE_PASSWORD`.
+ */
+function createClickHouseDriver(
+    positronApi: PositronApi
+): positron.ConnectionsDriver {
+    return {
+        driverId: 'ggsql-clickhouse',
+        metadata: {
+            languageId: 'ggsql',
+            name: 'ClickHouse',
+            inputs: [
+                { id: 'host', label: 'Host', type: 'string', value: 'localhost' },
+                { id: 'port', label: 'Port', type: 'number', value: '8123' },
+                { id: 'database', label: 'Database', type: 'string', value: '' },
+                { id: 'user', label: 'User', type: 'string', value: 'default' },
+                { id: 'password', label: 'Password', type: 'string', value: '' },
+                {
+                    id: 'secure',
+                    label: 'Use TLS (clickhouses://)',
+                    type: 'option',
+                    options: [
+                        { identifier: 'no', title: 'No' },
+                        { identifier: 'yes', title: 'Yes' },
+                    ],
+                    value: 'no',
+                },
+            ],
+        } as ConnectionsDriverMetadata,
+        generateCode: (inputs) => {
+            const get = (id: string) =>
+                inputs.find((i) => i.id === id)?.value?.trim() || '';
+            const scheme = get('secure') === 'yes' ? 'clickhouses' : 'clickhouse';
+            const user = get('user');
+            const password = get('password');
+            const auth = user
+                ? encodeURIComponent(user) +
+                  (password ? `:${encodeURIComponent(password)}` : '') +
+                  '@'
+                : '';
+            const host = get('host') || 'localhost';
+            const port = get('port') ? `:${get('port')}` : '';
+            const database = get('database') ? `/${encodeURIComponent(get('database'))}` : '';
+            return `-- @connect: ${scheme}://${auth}${host}${port}${database}`;
+        },
+        connect: async (code: string) => {
+            await positronApi.runtime.executeCode('ggsql', code, false);
+        },
+    };
+}
+
+// ============================================================================
+// chDB (embedded ClickHouse)
+// ============================================================================
+
+/**
+ * chDB connection driver.
+ *
+ * Inputs: data directory (optional; blank = in-memory engine).
+ */
+function createChdbDriver(
+    positronApi: PositronApi
+): positron.ConnectionsDriver {
+    return {
+        driverId: 'ggsql-chdb',
+        metadata: {
+            languageId: 'ggsql',
+            name: 'chDB',
+            description: 'Embedded ClickHouse (libchdb)',
+            inputs: [
+                {
+                    id: 'path',
+                    label: 'Data directory (blank for in-memory)',
+                    type: 'string',
+                    value: '',
+                },
+            ],
+        } as ConnectionsDriverMetadata,
+        generateCode: (inputs) => {
+            const path = inputs.find((i) => i.id === 'path')?.value?.trim();
+            if (!path) {
+                return '-- @connect: chdb://memory';
+            }
+            return `-- @connect: chdb://${path}`;
+        },
+        connect: async (code: string) => {
+            await positronApi.runtime.executeCode('ggsql', code, false);
+        },
     };
 }
 

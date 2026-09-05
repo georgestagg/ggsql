@@ -52,7 +52,31 @@ pub fn display_name_for_uri(uri: &str) -> String {
         }
         return "ODBC".to_string();
     }
+    if uri.starts_with("clickhouse://") || uri.starts_with("clickhouses://") {
+        return format!("ClickHouse ({})", clickhouse_host(uri));
+    }
+    if let Some(rest) = uri.strip_prefix("chdb://") {
+        let path = rest.split('?').next().unwrap_or(rest);
+        if path.is_empty() || path == "memory" || path == ":memory:" {
+            return "chDB (memory)".to_string();
+        }
+        return format!("chDB ({path})");
+    }
     uri.to_string()
+}
+
+/// The `host[:port]` part of a `clickhouse://` / `clickhouses://` URI, without
+/// credentials, database or parameters.
+fn clickhouse_host(uri: &str) -> String {
+    let rest = uri.split_once("://").map(|(_, r)| r).unwrap_or(uri);
+    let rest = rest.split('?').next().unwrap_or(rest);
+    let rest = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
+    let host = rest.split('/').next().unwrap_or(rest);
+    if host.is_empty() {
+        "localhost".to_string()
+    } else {
+        host.to_string()
+    }
 }
 
 /// Detect the database type name from a connection URI (e.g. "DuckDB", "Snowflake").
@@ -62,6 +86,12 @@ pub fn type_name_for_uri(uri: &str) -> String {
     }
     if uri.starts_with("sqlite://") {
         return "SQLite".to_string();
+    }
+    if uri.starts_with("clickhouse://") || uri.starts_with("clickhouses://") {
+        return "ClickHouse".to_string();
+    }
+    if uri.starts_with("chdb://") {
+        return "chDB".to_string();
     }
     if let Some(odbc) = uri.strip_prefix("odbc://") {
         if let Some(driver) = extract_odbc_value(odbc, "driver") {

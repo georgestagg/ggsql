@@ -41,18 +41,20 @@ termimad = "0.31"
 
 [build-dependencies]
 regex.workspace = true
-ureq = "3"
+ureq.workspace = true
 
 [features]
-default = ["duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc"]
+default = ["duckdb", "sqlite", "clickhouse", "chdb", "vegalite", "parquet", "builtin-data", "odbc"]
 duckdb = ["ggsql/duckdb"]
 parquet = ["ggsql/parquet"]
 sqlite = ["ggsql/sqlite"]
 odbc = ["ggsql/odbc"]
+clickhouse = ["ggsql/clickhouse"]
+chdb = ["ggsql/chdb"]
 vegalite = ["ggsql/vegalite"]
 png = ["ggsql/png"]
 builtin-data = ["ggsql/builtin-data"]
-all-readers = ["duckdb", "sqlite", "odbc"]
+all-readers = ["duckdb", "sqlite", "odbc", "clickhouse", "chdb"]
 
 # cargo-packager configuration for cross-platform installers
 [package.metadata.packager]
