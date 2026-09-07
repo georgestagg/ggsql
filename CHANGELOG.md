@@ -58,8 +58,8 @@
   inches at `QUARTO_FIG_DPI`, so `fig-width: 6` means six inches and a PDF
   document gets a vector figure.
 - Kernel plots render as SVG wherever raster output is unavailable — no GPU
-  adapter, or a build without the new non-default `raster-plots` feature — so a
-  GPU is needed for raster output, not to see a plot.
+  adapter, or a build with the new `raster-plots` feature turned off — so a GPU
+  is needed for raster output, not to see a plot.
 - `--output`'s extension picks the writer when `--writer` is omitted: `svg`,
   `pdf`, `hep`, `png`, `jpg`/`jpeg`, `tif`/`tiff`, `webp` and `json`/`vl.json`
   each name their own. An explicit `--writer` still wins, warning on stderr if

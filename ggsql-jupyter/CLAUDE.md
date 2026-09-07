@@ -8,7 +8,7 @@ End-user installation and usage live in [`README.md`](README.md). End-user noteb
 
 ```
 ggsql-jupyter/
-├── Cargo.toml          Rust binary + library, depends on ggsql with duckdb + svg/pdf (+ raster-plots)
+├── Cargo.toml          Rust binary + library, depends on ggsql with duckdb + svg/pdf + raster-plots
 ├── pyproject.toml      maturin config (bindings = "bin") for the PyPI wheel
 ├── README.md           User-facing install + usage
 ├── src/
@@ -73,11 +73,13 @@ Three things have to agree — where the output is going, what this build and ma
 
 | `SessionKind` | Result |
 | --- | --- |
-| `PositronConsole` | A `positron.plot` comm, with **no `execute_result`** — or a static SVG bundle when there is no GPU adapter |
+| `PositronConsole` | A `positron.plot` comm, with **no `execute_result`** — whatever this build can render |
 | `PositronNotebook` | A static image bundle in the cell |
 | `Standalone` | What `QUARTO_FIG_FORMAT` asked for, else a static image |
 
-**SVG is the fallback wherever raster output is unavailable** — no GPU adapter, or a build without `raster-plots`. That is why `ggsql/svg` and `ggsql/pdf` are *non-optional* dependencies while the raster formats are behind a feature: the path that always works must always be compiled in, and never the one you have to opt into. It costs nothing to hold that line, since the vector writers pull in no wgpu.
+**SVG is the fallback wherever raster output is unavailable** — no GPU adapter, or a build with `raster-plots` off. That is why `ggsql/svg` and `ggsql/pdf` are *non-optional* dependencies: the path that always works must always be compiled in, and it costs nothing to hold that line since the vector writers pull in no wgpu.
+
+`raster-plots` itself **is** default, because the Plots pane asks for `png` and every shipped build enables it — a plain `cargo build` quietly producing SVG-only plots differed from the released kernel in the way hardest to notice from the outside. `--no-default-features --features all-readers` builds without wgpu. The fallback is a change of *format*, never of delivery: `Format::available` substitutes SVG for a raster request and `mime_type` reports what was produced, so a console keeps its comm either way.
 
 ### The render thread
 
@@ -107,7 +109,7 @@ A console session gets one `positron.plot` comm per plot, modelled on `positron.
 
 Five things about it are load-bearing:
 
-- **The comm alone creates the pane entry, so the kernel emits no `execute_result` alongside it.** An output message as well — whether an `image/png` bundle or `output_location: "plot"` — puts a second copy of the plot in the pane.
+- **The comm alone creates the pane entry, so the kernel emits no `execute_result` alongside it.** Positron's `createActivityItemOutput` inlines *any* output whose data carries an `image/*` mime, consulting neither `output_location` nor the output kind, so a bundle sent as well would appear in the console *and* leave a second, fixed-size entry in the pane. It is also why a console with no raster writer keeps the comm and answers its renders in SVG instead of falling back to a bundle: there is no way to put a picture in the pane alone without one.
 - **`comm_open` must follow `execute_input`** and be parented to the `execute_request`. Positron populates `_recentExecutions` from `execute_input`, and that is where the plot's `code` metadata comes from.
 - **`render` is answered asynchronously; `get_metadata` is not.** A render goes to the thread and its reply comes back through the `select!` outcome arm, so the message loop stays free. `get_metadata` is answered from `plot_comms` because it gets Positron's default 5 s timeout where `render` gets 30 s — it must never queue behind a render.
 - **`get_intrinsic_size` returns `null`.** ggsql has no figure-size syntax, so there is no intrinsic size, and `null` stops Positron offering an "Intrinsic" option that would be a lie. Sizing then follows whichever policy the Plots pane has selected — **`Auto` by default, which caps the aspect ratio at the golden ratio**, so a pane wider than 1.618:1 asks for less width than it has. The pane applies its policy *before* the kernel hears anything (`PlotSizingPolicyAuto.getPlotSize` feeds `setPlotsRenderSettings`, which arrives as `did_change_plots_render_settings`), so that shape is Positron's and not ours. `Fill` uses the whole viewport.

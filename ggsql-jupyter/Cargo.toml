@@ -66,16 +66,19 @@ uuid = { version = "1.0", features = ["v4"] }
 base64 = { workspace = true }
 
 [features]
-default = ["all-readers"]
+default = ["all-readers", "raster-plots"]
 all-readers = ["sqlite", "odbc", "duckdb"]
 odbc = ["ggsql/odbc"]
 sqlite = ["ggsql/sqlite"]
 duckdb = ["ggsql/duckdb"]
 
-# The raster plot formats, which need a GPU adapter at render time and the wgpu
-# stack at build time. Non-default on purpose: the SVG fallback is what a build
-# without them uses, so the path that always works is never the one that has to
-# be opted into.
+# The raster plot formats, which need the wgpu stack at build time and a GPU
+# adapter at render time. **Default**, because Positron's Plots pane asks for
+# `png` and every shipped build enables it: a plain `cargo build` that quietly
+# produced SVG-only plots differed from the released kernel in exactly the way
+# that is hardest to notice from the outside. For a build without wgpu, use
+# `--no-default-features --features all-readers`; plots then render as SVG,
+# which needs no adapter.
 raster-plots = ["ggsql/png", "ggsql/jpeg", "ggsql/tiff"]
 
 [dev-dependencies]

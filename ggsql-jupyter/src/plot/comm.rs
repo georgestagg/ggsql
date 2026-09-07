@@ -122,6 +122,17 @@ impl RenderParams {
     /// an invalid URI. This is the opposite of a static display bundle, where
     /// `image/svg+xml` travels as text — two transports, two conventions. The
     /// reference Python backend encodes unconditionally for the same reason.
+    /// The same request, in a format this build and machine can produce.
+    ///
+    /// The pane always asks for `png`. A build with no raster writer answers
+    /// in SVG rather than failing the render and leaving the pane empty; the
+    /// reply's `mime_type` says so, which is what keeps the substitution
+    /// honest. See [`Format::available`](crate::plot::Format::available).
+    pub fn available(mut self, backend_raster: bool) -> Self {
+        self.request.format = self.request.format.available(backend_raster);
+        self
+    }
+
     pub fn encode(bytes: &[u8]) -> String {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;

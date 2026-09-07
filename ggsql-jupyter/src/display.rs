@@ -372,12 +372,21 @@ mod tests {
     }
 
     #[test]
-    fn test_console_without_an_adapter_falls_back_to_a_picture() {
-        // This test's backend has no GPU, so the console cannot open a comm
-        // Positron would ask `png` of — it gets a static SVG instead.
-        let display = render(&positron_console());
-        assert!(display["data"]["image/svg+xml"].is_string());
-        assert!(display.get("output_location").is_none());
+    fn test_a_console_gets_a_comm_even_without_an_adapter() {
+        // This test's backend has no GPU, and the console still opens a comm:
+        // a static bundle would be inlined in the console by Positron on the
+        // strength of its `image/*` mime alone, whatever else it carried. The
+        // comm renders SVG instead of `png` and says so in `mime_type`.
+        let formatted = format_display_data(
+            ExecutionResult::Visualization(Box::new(a_spec())),
+            &positron_console(),
+            &backend(),
+        )
+        .expect("rendering should succeed");
+        assert!(
+            matches!(formatted, Formatted::PlotComm(_)),
+            "a console session must not produce an inline bundle"
+        );
     }
 
     #[test]

@@ -978,6 +978,9 @@ impl KernelServer {
             "did_change_plots_render_settings" => {
                 match RenderParams::from_rpc(&params["settings"]) {
                     Ok(settings) => {
+                        // The pane asks for `png`; a build with no raster
+                        // writer stores the SVG it can actually pre-render.
+                        let settings = settings.available(self.plots.raster());
                         tracing::debug!(
                             "plots pane render settings: {}x{} @ {}x",
                             settings.request.canvas.width,
@@ -1056,7 +1059,7 @@ impl KernelServer {
         match method {
             "render" => {
                 let params = match RenderParams::from_rpc(&parent.content["data"]["params"]) {
-                    Ok(params) => params,
+                    Ok(params) => params.available(self.plots.raster()),
                     Err(e) => {
                         return self
                             .reply_plot_error(&e, rpc_id, comm_id, parent, identities)

@@ -140,8 +140,13 @@ impl PlotBackend {
 
         if raster {
             tracing::info!("GPU adapter available; raster plot formats enabled");
-        } else {
+        } else if cfg!(feature = "raster-plots") {
             tracing::info!("no GPU adapter; plots will render as SVG");
+        } else {
+            // Distinct from the line above on purpose: this machine may well
+            // have an adapter, and reporting one missing sends anyone
+            // debugging a fixed-size plot after the wrong thing entirely.
+            tracing::info!("built without the raster-plots feature; plots will render as SVG");
         }
 
         Self { jobs, raster }

@@ -52,6 +52,23 @@ impl Format {
     pub fn needs_raster(self) -> bool {
         matches!(self, Self::Png | Self::Jpeg | Self::Tiff)
     }
+
+    /// The nearest format this build and this machine can actually produce.
+    ///
+    /// The Plots pane hard-codes `png` in its render settings, so without a
+    /// raster writer that request cannot be met. Failing it would leave the
+    /// pane empty, so it degrades to SVG, which needs no adapter and carries
+    /// the same resolved scales, breaks and labels. Nothing is hidden by
+    /// doing so: the reply's `mime_type` names the format actually produced,
+    /// and Positron builds both its data URI and its save-dialog extension
+    /// from that.
+    pub fn available(self, backend_raster: bool) -> Self {
+        if self.needs_raster() && !backend_raster {
+            Self::Svg
+        } else {
+            self
+        }
+    }
 }
 
 /// What a comm render needs to send its answer back where it came from.
@@ -97,11 +114,15 @@ pub enum Delivery {
 ///
 /// The rules, in the order they apply:
 ///
-/// 1. **A Positron console session opens a plot comm** — but only if raster
-///    output is possible. Positron asks the comm for `png`, and answering a
-///    `png` request with SVG bytes would have it write SVG into a file named
-///    `.png`; so with no adapter the console takes the static SVG path
-///    instead, and gets a picture rather than a broken one.
+/// 1. **A Positron console session opens a plot comm**, whatever this build
+///    can render. A console has no cell to put a picture in, and Positron
+///    inlines *any* output carrying an `image/*` mime — its
+///    `createActivityItemOutput` keys on the mime alone and consults neither
+///    `output_location` nor the output kind — so a static bundle would land in
+///    the console *and* leave a fixed-size pane entry that no longer tracks
+///    the pane. The comm is the only delivery that reaches the pane and
+///    nothing else. Where raster is unavailable its renders answer in SVG;
+///    see [`Format::available`].
 /// 2. **Quarto is obeyed.** If `QUARTO_FIG_FORMAT` and friends are set, the
 ///    document has told us exactly what figure it wants, including its size
 ///    in inches. Only for a standalone session — Quarto never drives a
@@ -113,39 +134,22 @@ pub enum Delivery {
 ///    and labels the raster path would.
 pub fn choose(kind: SessionKind, backend_raster: bool, canvas: Canvas) -> Delivery {
     if kind == SessionKind::PositronConsole {
-        if backend_raster {
-            return Delivery::Comm;
-        }
-        // No adapter: fall through to a static SVG bundle rather than open a
-        // comm we cannot serve a `png` request on.
-        return Delivery::Static(RenderRequest {
-            format: Format::Svg,
-            canvas,
-        });
+        return Delivery::Comm;
     }
 
     if kind == SessionKind::Standalone {
         if let Some(figure) = quarto::from_env() {
             // A document asking for a raster figure on a machine with no
             // adapter still gets a figure, just a vector one.
-            let format = if figure.format.needs_raster() && !backend_raster {
-                Format::Svg
-            } else {
-                figure.format
-            };
             return Delivery::Static(RenderRequest {
-                format,
+                format: figure.format.available(backend_raster),
                 canvas: figure.canvas,
             });
         }
     }
 
     Delivery::Static(RenderRequest {
-        format: if backend_raster {
-            Format::Png
-        } else {
-            Format::Svg
-        },
+        format: Format::Png.available(backend_raster),
         canvas,
     })
 }
@@ -161,22 +165,31 @@ mod tests {
     };
 
     #[test]
-    fn a_console_session_opens_a_plot_comm() {
-        assert_eq!(
-            choose(SessionKind::PositronConsole, true, CANVAS),
-            Delivery::Comm
-        );
+    fn a_console_session_always_opens_a_plot_comm() {
+        // Whatever this build can render: Positron inlines any output carrying
+        // an `image/*` mime, so a static bundle in a console arrives twice —
+        // inline *and* as a pane entry that no longer resizes. The comm is the
+        // only delivery that reaches the pane alone, and it answers in SVG
+        // where raster is unavailable.
+        for backend_raster in [true, false] {
+            assert_eq!(
+                choose(SessionKind::PositronConsole, backend_raster, CANVAS),
+                Delivery::Comm,
+                "backend_raster={backend_raster}"
+            );
+        }
     }
 
     #[test]
-    fn a_console_without_an_adapter_gets_a_picture_rather_than_a_comm() {
-        // Positron asks a comm for `png`. Answering that with SVG bytes would
-        // display fine and then save SVG into a `.png`, so with no adapter the
-        // console takes the static path instead.
-        let Delivery::Static(request) = choose(SessionKind::PositronConsole, false, CANVAS) else {
-            panic!("expected a static bundle");
-        };
-        assert_eq!(request.format, Format::Svg);
+    fn a_format_degrades_only_when_it_needs_a_writer_this_build_lacks() {
+        for format in [Format::Png, Format::Jpeg, Format::Tiff] {
+            assert_eq!(format.available(false), Format::Svg, "{format:?}");
+            assert_eq!(format.available(true), format, "{format:?}");
+        }
+        // The vector formats need no adapter, so they are never substituted.
+        for format in [Format::Svg, Format::Pdf] {
+            assert_eq!(format.available(false), format, "{format:?}");
+        }
     }
 
     #[test]
