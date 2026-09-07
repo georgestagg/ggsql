@@ -23,7 +23,7 @@ path = "src/lib.rs"
 # `svg` and `pdf` are not optional: SVG is the fallback whenever raster output
 # is unavailable, so the path that always works must always be compiled in.
 # They cost no GPU stack and no wgpu, which is what makes that affordable.
-ggsql = { workspace = true, features = ["duckdb", "vegalite", "svg", "pdf"] }
+ggsql = { workspace = true, features = ["duckdb", "svg", "pdf"] }
 
 # Arrow for DataFrame array types
 arrow = { workspace = true }

@@ -91,21 +91,6 @@ pub enum Delivery {
     /// creates the pane entry, so an output message as well would show the
     /// plot twice.
     Comm,
-    /// The old Vega-Lite HTML payload, routed to Positron's Plots pane.
-    ///
-    /// No longer chosen, and kept only as an escape hatch: setting
-    /// `GGSQL_PLOT_VEGALITE=1` puts a console session back on it. That exists
-    /// so a problem with the comm in a real Positron build can be confirmed
-    /// against the previous behaviour without rebuilding, and it goes away
-    /// with the Vega-Lite plot path itself.
-    VegaLite,
-}
-
-/// Whether the temporary Vega-Lite escape hatch is set.
-fn vegalite_override() -> bool {
-    std::env::var("GGSQL_PLOT_VEGALITE")
-        .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
 }
 
 /// Decide what to do with a plot.
@@ -128,9 +113,6 @@ fn vegalite_override() -> bool {
 ///    and labels the raster path would.
 pub fn choose(kind: SessionKind, backend_raster: bool, canvas: Canvas) -> Delivery {
     if kind == SessionKind::PositronConsole {
-        if vegalite_override() {
-            return Delivery::VegaLite;
-        }
         if backend_raster {
             return Delivery::Comm;
         }

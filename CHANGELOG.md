@@ -6,7 +6,8 @@
   off-by-default `png` feature (`--writer png` in the CLI). `LABEL caption`
   and the new `minor_breaks` setting have no Vega-Lite equivalent and render
   only here. Requires a working GPU adapter — hardware or software, e.g.
-  lavapipe — at render time.
+  lavapipe — at render time, and each dimension is capped at what that GPU
+  grants, up to 16384 px; `svg` and `pdf` have no such ceiling.
 - Six more output formats, each with its own writer and its own off-by-default
   feature: `jpeg`, `tiff`, `webp`, `svg`, `pdf`, and `hep`. Every one takes the
   same canvas settings as `png` (`width`, `height`, `units`, `dpi`,

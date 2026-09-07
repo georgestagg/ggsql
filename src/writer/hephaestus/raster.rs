@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use hephaestus::backend::hybrid::HybridRenderer;
+use hephaestus::backend::MAX_TEXTURE_DIMENSION;
 use hephaestus::plot::PlotComposition;
 use hephaestus::{Renderer, SceneBuilder};
 
@@ -51,29 +52,31 @@ impl RasterRenderer {
     }
 }
 
-/// Largest canvas dimension the rasteriser can produce, in pixels.
+/// Largest canvas dimension a rasterising build can be asked for, in pixels.
 ///
-/// Not a hardware limit: it is the default `max_texture_size` that
-/// `vello_hybrid` builds its intermediate target with, which the renderer does
-/// not currently override. Asking for more fails the whole render, so this is
-/// checked up front to produce an error that says something useful — and names
-/// the vector writers, which have no such ceiling.
-pub const MAX_RASTER_DIMENSION: u32 = 4096;
+/// The true ceiling belongs to the GPU: it is the device's own
+/// `max_texture_dimension_2d`, and this is the most the renderer will ask a
+/// device to grant. A device offering less fails the render with its own
+/// limit named, which is why this is a cheap up-front guard against the
+/// absurd rather than a promise that anything under it will work.
+pub const MAX_RASTER_DIMENSION: u32 = MAX_TEXTURE_DIMENSION;
 
-/// Reject a canvas the rasteriser cannot produce, before it fails deep inside.
+/// Reject a canvas no GPU could rasterise, before anything is allocated.
+///
+/// A device with a lower limit than [`MAX_RASTER_DIMENSION`] rejects the frame
+/// itself, naming the limit it does have; this catches the sizes no device
+/// would take, and is the one place that points at the writers with no ceiling
+/// at all.
 ///
 /// # Errors
 ///
 /// Returns `GgsqlError::WriterError` naming the limit and the alternatives.
 fn check_size(canvas: &Canvas) -> Result<()> {
-    // The intermediate target is the panel rather than the whole canvas, so
-    // the true ceiling is slightly above this. Checking the canvas is the
-    // honest simplification: it never lets through a render that then fails.
     if canvas.width > MAX_RASTER_DIMENSION || canvas.height > MAX_RASTER_DIMENSION {
         return Err(GgsqlError::WriterError(format!(
-            "{}x{} is too large to rasterise: no dimension may exceed {} px. \
-             The svg and pdf writers have no such limit and are resolution \
-             independent, so they are the better choice at this size",
+            "{}x{} is too large to rasterise: no dimension may exceed {} px, and a \
+             given GPU may allow less. The svg and pdf writers have no such limit \
+             and are resolution independent, so they are the better choice at this size",
             canvas.width, canvas.height, MAX_RASTER_DIMENSION
         )));
     }

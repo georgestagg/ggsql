@@ -1664,33 +1664,6 @@ mod pdf_structure {
     }
 }
 
-#[cfg(all(test, feature = "duckdb", feature = "svg"))]
-mod svg_probe2 {
-    use crate::reader::{DuckDBReader, Reader};
-
-    fn breaks(tag: &str, query: &str) {
-        let reader = DuckDBReader::from_connection_string("duckdb://memory").unwrap();
-        let spec = reader.execute(query).unwrap();
-        for scale in &spec.plot().scales {
-            eprintln!(
-                "### {tag} {} type={:?} transform={:?}\n     breaks={:?}\n     labels={:?}",
-                scale.aesthetic,
-                scale.scale_type,
-                scale.transform,
-                scale.numeric_breaks(),
-                scale.break_labels()
-            );
-        }
-    }
-
-    #[test]
-    #[ignore]
-    fn probe() {
-        breaks("linear", "SELECT x, y FROM (VALUES (1,2),(10,3),(100,1)) t(x,y) VISUALISE x AS x, y AS y DRAW point");
-        breaks("log", "SELECT x, y FROM (VALUES (1,2),(10,3),(100,1)) t(x,y) VISUALISE x AS x, y AS y DRAW point SCALE x VIA log");
-    }
-}
-
 // The `hep` round trip.
 //
 // A document is written from a live composition, read back into a *new* one,
@@ -1782,22 +1755,11 @@ mod hep_roundtrip {
         }
     }
 
-    /// A plot under a non-Cartesian projection. The document carries the
-    /// projection correctly, but **reading one back panics**: the decoder calls
-    /// `add_axis` before it restores the projection, so a polar axis is
-    /// validated against the default Cartesian and rejected —
-    /// `axis placement PolarAngular(Outer) is incompatible with projection
-    /// Cartesian`.
-    ///
-    /// Upstream, in the renderer's own decoder, and fixable without a wire
-    /// change: the axes are already read into a `Vec` before being added, so
-    /// applying the projection first is enough. Nothing in this writer changes
-    /// when it lands.
-    ///
-    /// Kept as an ignored test rather than as prose so it turns green on its
-    /// own — and so the polar case is not quietly missing from the round trip.
+    /// A plot under a non-Cartesian projection, which exercises the part of
+    /// the round trip a Cartesian plot cannot: the projection has to be
+    /// restored before the axes are attached, or a polar placement is
+    /// validated against the Cartesian default and rejected.
     #[test]
-    #[ignore = "the renderer's document decoder adds axes before restoring the projection"]
     fn a_polar_document_rebuilds_too() {
         let query = "SELECT c FROM (VALUES ('a'),('a'),('a'),('b'),('b'),('c')) t(c) \
                      VISUALISE c AS fill DRAW bar PROJECT TO polar";

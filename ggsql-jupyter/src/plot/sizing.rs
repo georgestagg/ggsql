@@ -18,13 +18,15 @@ const MIN_PX: u32 = 32;
 
 /// Largest canvas dimension we will render, in device pixels.
 ///
-/// The rasteriser cannot produce a dimension above 4096 — it is
-/// `vello_hybrid`'s default intermediate-texture size, which the renderer does
-/// not override — and a pane on a large display at 2x reaches that easily. So
-/// the ceiling is the raster one even for the vector formats: capping them too
-/// costs nothing (they are resolution independent, and the *displayed* size is
-/// unaffected) and keeps one number in play instead of two.
-const MAX_PX: u32 = 4_096;
+/// The same number as `ggsql::writer::MAX_RASTER_DIMENSION`, spelled out
+/// rather than imported because a default kernel build has no raster writer to
+/// import it from. No frontend can ask for a pane this large, so the clamp is
+/// really a guard against a nonsense `size` or `pixel_ratio` arriving over the
+/// comm — a GPU with a lower limit than this rejects the frame itself, naming
+/// the limit it does have. It applies to the vector formats too: capping them
+/// costs nothing, since they are resolution independent and the *displayed*
+/// size is unaffected.
+const MAX_PX: u32 = 16_384;
 
 /// Device pixel ratios we will honour. Beyond this a frontend is either
 /// confused or asking for a texture we should not allocate.
@@ -148,15 +150,13 @@ mod tests {
     }
 
     #[test]
-    fn a_large_pane_at_two_x_stays_within_what_can_be_rendered() {
-        // 2400 logical px at 2x is 4800 device px, which the rasteriser
-        // refuses outright. Clamping gives a slightly softer plot; not
-        // clamping gives a render error and no plot at all.
+    fn a_large_pane_at_two_x_renders_at_its_full_size() {
+        // A wide pane on a retina display: 2400 logical px at 2x is 4800
+        // device px, comfortably inside what a GPU grants. Nothing is clamped,
+        // so the plot is sharp rather than upscaled from a capped render.
         let canvas = Canvas::from_logical(2400.0, 1400.0, 2.0);
-        assert!(canvas.width <= MAX_PX, "{} px", canvas.width);
-        assert_eq!(canvas.width, MAX_PX);
-        // The height was within the cap, so it is untouched.
-        assert_eq!(canvas.height, 2800);
+        assert_eq!((canvas.width, canvas.height), (4800, 2800));
+        assert_eq!(canvas.css_size(), (2400, 1400));
     }
 
     #[test]

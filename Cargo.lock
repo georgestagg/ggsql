@@ -2781,9 +2781,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hephaestus"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91f060494e66d6e8a9d6cbf513f0f39e212d37a89293b91fc40f61aeb461f9e5"
+checksum = "755ec8c5f3f62917c498d1fdbc6704dad9432c5f523696337895601342aa8c43"
 dependencies = [
  "bytemuck",
  "clipper2-rust",
@@ -5885,7 +5885,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c27177b12a6399ffc08b98f76f7c9a1f4fe9fc967c784c5a071fa8d93cf7e1"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

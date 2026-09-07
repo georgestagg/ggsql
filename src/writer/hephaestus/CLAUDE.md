@@ -651,6 +651,13 @@ so one run inventories every gap at once. Implementation notes:
   vello classic by antialiasing alone (~2% of pixels on a scatter, max channel
   delta under 70, geometry identical). `hephaestus/vello-hybrid` transitively
   enables `hephaestus/png`, so a webp-only build still compiles the PNG codec.
+- **The raster ceiling is the GPU's, not the renderer's.** The device is asked
+  for as much as it grants up to 16384 px per dimension, which is
+  `MAX_RASTER_DIMENSION` and what `check_size` guards before anything is
+  allocated — so the error can name the limit and point at `svg`/`pdf`, which
+  have none. A device offering less rejects the frame itself with its own limit
+  named. Verified on Apple silicon: 4600×3100, 8000×2000, 16000×1000 and a
+  faceted 10000×6000 all render; 17000×1000 is refused up front.
 - **fontconfig is a build-time dependency on Linux**, for **every**
   hephaestus-backed feature and not just the raster ones: text layout goes
   through parley/fontique, which links the system fontconfig to enumerate fonts
@@ -674,7 +681,7 @@ so one run inventories every gap at once. Implementation notes:
   hephaestus keeps a CI job asserting this stays true. So `svg`/`pdf`/`hep`
   remain viable for the R/CRAN target; `png`/`jpeg`/`tiff`/`webp` do not, and
   CI runs their steps with `cargo +stable`.
-- **The dependency is the published `0.4.0` crate** (`src/Cargo.toml`), pinned
+- **The dependency is the published `0.4.1` crate** (`src/Cargo.toml`), pinned
   with `default-features = false` so the GPU rasteriser arrives only with
   `raster`. So
   nothing here blocks publishing ggsql. hephaestus's own semver contract extends
@@ -690,12 +697,6 @@ Deliberately not done, in rough order of how likely they are to bite:
   checked by eyeballing, with the harness for doing it at scale. The SVG corpus
   is the natural fixture surface, being deterministic text where a 2 px panel
   shift reads as a hunk rather than as a changed hash.
-- **A `.hep` document of a plot under a non-Cartesian projection cannot be read
-  back.** Writing works; reading panics, because the renderer's decoder calls
-  `add_axis` before restoring the projection, so a polar axis is validated
-  against the default Cartesian. Upstream, and fixable without a wire change.
-  Recorded as an ignored test (`hep_roundtrip::a_polar_document_rebuilds_too`)
-  so it turns green on its own.
 - **Log-scale tick labels are wrong, and not because of this writer.** ggsql
   resolves a 1–100 `log10` domain to breaks of
   `[5e-308, 2e-256, …, 100]`, and both writers faithfully print those. The fix

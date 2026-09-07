@@ -1,6 +1,6 @@
 # `ggsql-jupyter/` — Jupyter kernel
 
-Standalone Rust binary that speaks the Jupyter messaging protocol over ZeroMQ. Embeds the `ggsql` library and renders results as Vega-Lite (visual queries) or HTML tables (pure SQL). Workspace member; published to crates.io and to PyPI (as a binary wheel via maturin).
+Standalone Rust binary that speaks the Jupyter messaging protocol over ZeroMQ. Embeds the `ggsql` library and renders results as images (visual queries) or HTML tables (pure SQL). Workspace member; published to crates.io and to PyPI (as a binary wheel via maturin).
 
 End-user installation and usage live in [`README.md`](README.md). End-user notebook docs live in [`/doc/get_started/tooling.qmd`](../doc/get_started/tooling.qmd). This file describes the *implementation*.
 
@@ -8,7 +8,7 @@ End-user installation and usage live in [`README.md`](README.md). End-user noteb
 
 ```
 ggsql-jupyter/
-├── Cargo.toml          Rust binary + library, depends on ggsql with duckdb + vegalite
+├── Cargo.toml          Rust binary + library, depends on ggsql with duckdb + svg/pdf (+ raster-plots)
 ├── pyproject.toml      maturin config (bindings = "bin") for the PyPI wheel
 ├── README.md           User-facing install + usage
 ├── src/
@@ -18,7 +18,7 @@ ggsql-jupyter/
 │   ├── executor.rs     Runs queries via ggsql::Reader, returns rendered output
 │   ├── connection.rs   Reader lifecycle, connection-string parsing
 │   ├── data_explorer.rs Positron data-explorer comm channel
-│   ├── display.rs      Output formatting (Vega-Lite + vega-embed HTML, SQL → HTML table)
+│   ├── display.rs      Output formatting (image bundles, SQL → HTML table)
 │   ├── message.rs      Jupyter message structs (ZMQ frames, HMAC signing)
 │   └── util.rs
 └── tests/
@@ -56,7 +56,7 @@ Two places deliberately **do not** pass the flag. `writeKernelJson` and `ggsql-j
 
 ## Rendering
 
-Plots are rendered in the kernel and travel as images. **Nothing fetches a renderer from a CDN**, so a plot works offline, in CI, and behind a firewall — which the previous vega-embed payload could not do.
+Plots are rendered in the kernel and travel as images. **Nothing fetches a renderer from a CDN**, so a plot works offline, in CI, and behind a firewall.
 
 `plot/` holds the whole of it:
 
@@ -115,8 +115,6 @@ Five things about it are load-bearing:
 
 Plots are retained on the render thread and capped by `--max-plots` (default 32), evicted oldest-first with `comm_close` on iopub — which cleanly removes the plot from the pane, the right semantic for "the kernel no longer keeps that plot". Positron imposes no cap of its own, so this is where a long console session's memory is bounded.
 
-`GGSQL_PLOT_VEGALITE=1` puts a console session back on the old Vega-Lite payload. That is a temporary escape hatch for confirming a comm problem against the previous behaviour without a rebuild, and it goes away with the Vega-Lite plot path.
-
 ### Why renders are asynchronous
 
 Verified rather than assumed: with a large dense render in flight, a `kernel_info_request` issued immediately after it was answered in **1 ms**, while the render's own reply arrived much later. The message loop — and with it the heartbeat, the control channel and the interrupt handler — is genuinely free during a render.
@@ -146,9 +144,15 @@ The two transports disagree, and both are right:
 
 The comm's convention is forced: Positron builds `data:{mime_type};base64,{data}` from the reply, so text sent as itself yields an invalid URI. The reference Python backend encodes unconditionally for the same reason. `RenderParams::encode` is the comm's one entry point so this cannot drift.
 
-### The 4096 px raster ceiling
+### The size clamp
 
-`vello_hybrid` builds its intermediate target with a default `max_texture_size` of **4096**, which the renderer does not override, and exceeding it fails the whole render. A pane on a large display at 2x reaches that easily, so `sizing::MAX_PX` is 4096 — a clamped request gives a slightly softer plot, where an unclamped one gives no plot at all. `ggsql::writer::MAX_RASTER_DIMENSION` is the same number, checked up front by the raster writers so the error names the limit and points at `svg`/`pdf`, which have none.
+`sizing::MAX_PX` is **16384**, matching `ggsql::writer::MAX_RASTER_DIMENSION` —
+the most a GPU is asked to grant, and beyond what any pane can ask for. So the
+clamp is a guard against a nonsense `size` or `pixel_ratio` arriving over the
+comm rather than a limit a real plot meets: a large pane at 2x renders at its
+full device size. A GPU whose own limit is lower rejects the frame and names
+it. The number is spelled out rather than imported because a default kernel
+build has no raster writer to import it from.
 
 ### Sizing
 
@@ -167,7 +171,6 @@ So `RenderHints::canvas` picks a height (golden ratio, close to ggplot2's defaul
 
 ## Positron-specific bits
 
-- The Vega-Lite console payload carries `"output_location": "plot"` so it routes to Positron's Plots pane. A static image bundle deliberately does not — see above.
 - `data_explorer.rs` implements Positron's data-explorer comm channel (registered query results become explorable tables).
 - The companion VS Code extension (`ggsql-vscode/`) discovers this binary via the `ggsql.kernelPath` setting, the active Jupyter kernelspec, or `PATH`.
 

@@ -11,7 +11,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use clap::ValueEnum;
 use ggsql::reader::Spec;
-use ggsql::writer::{VegaLiteWriter, Writer};
 use ggsql::DataFrame;
 use serde_json::{json, Value};
 
@@ -83,16 +82,6 @@ impl SessionKind {
             None if session.contains("notebook") => Self::PositronNotebook,
             None => Self::PositronConsole,
         }
-    }
-
-    /// Whether the frontend is Positron, in either of its two shapes.
-    pub fn is_positron(self) -> bool {
-        matches!(self, Self::PositronConsole | Self::PositronNotebook)
-    }
-
-    /// Whether output belongs in a notebook cell rather than a pane.
-    pub fn is_notebook(self) -> bool {
-        matches!(self, Self::PositronNotebook)
     }
 }
 
@@ -200,7 +189,6 @@ pub fn format_display_data(
         ExecutionResult::Visualization(spec) => {
             match plot::choose(hints.kind, backend.raster(), hints.canvas()) {
                 Delivery::Comm => Ok(Formatted::PlotComm(spec)),
-                Delivery::VegaLite => Ok(Formatted::Bundle(format_vegalite(&spec, hints)?)),
                 Delivery::Static(request) => {
                     Ok(Formatted::Bundle(format_static(spec, request, backend)?))
                 }
@@ -273,227 +261,6 @@ fn format_static(spec: Box<Spec>, request: RenderRequest, backend: &PlotBackend)
         },
         "transient": {},
     }))
-}
-
-/// Render a resolved plot as Vega-Lite and wrap it as display_data.
-fn format_vegalite(spec: &Spec, hints: &RenderHints) -> Result<Value> {
-    let json = VegaLiteWriter::new().render(spec)?;
-    let html = vegalite_html(&json, hints);
-    Ok(json!({
-        "data": {
-            "text/html": html,
-            "text/plain": "Vega-Lite visualization".to_string()
-        },
-        "metadata": {},
-        "transient": {},
-        "output_location": "plot"
-    }))
-}
-
-/// Generate the HTML wrapper that embeds a Vega-Lite spec via vega-embed.
-pub fn vegalite_html(spec: &str, hints: &RenderHints) -> String {
-    let spec_value: Value = serde_json::from_str(spec).unwrap_or_else(|e| {
-        tracing::error!("Failed to parse Vega-Lite JSON: {}", e);
-        json!({"error": "Invalid Vega-Lite JSON"})
-    });
-
-    let spec_json = serde_json::to_string(&spec_value).unwrap_or_else(|_| "{}".to_string());
-
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let vis_id = format!("vis-{}", timestamp);
-
-    if hints.kind.is_positron() {
-        positron_vegalite_html(&spec_json, &vis_id, hints.kind.is_notebook())
-    } else {
-        standalone_vegalite_html(&spec_json, &vis_id)
-    }
-}
-
-/// Positron template: plain 400px container. Console sessions additionally
-/// upgrade the container to `100vh` when it lives inside
-/// `.positron-output-container`, letting Vega-Lite's own container observer
-/// keep the Plots pane responsive. Notebook sessions skip that override and
-/// keep a stable 400px box.
-///
-/// Container sizing compiles to `width`/`height` signals that re-read
-/// `containerSize()` only on `window:resize`, and `isFinite(0)` holds, so a plot
-/// measured before Positron lays the slot out stays zero-sized with no error.
-/// `recoverIfCollapsed` fixes that, and two details are load-bearing: it gates
-/// on `view.width()` rather than the container's `clientWidth`, which can
-/// already be non-zero while the view is not, and it dispatches `resize` rather
-/// than calling `view.resize()`, which re-lays out from the same zero. It
-/// watches only a collapsed plot and stops once the view has a size, so it
-/// cannot re-lay out on every frame of Positron's reveal transition.
-fn positron_vegalite_html(spec_json: &str, vis_id: &str, is_notebook: bool) -> String {
-    let pane_override_js = if is_notebook {
-        ""
-    } else {
-        "var container = document.getElementById(visId);\n\
-         if (container && container.closest('.positron-output-container')) {\n\
-         container.style.height = '100vh';\n\
-         }\n"
-    };
-
-    format!(
-        r#"<div id="{vis_id}" style="width: 100%; height: 400px;"></div>
-<script type="text/javascript">
-(function() {{
-var spec = {spec_json};
-var visId = '{vis_id}';
-var options = {{"actions": true, "renderer": "svg"}};
-function recoverIfCollapsed(result) {{
-var el = document.getElementById(visId);
-if (!el || !result || !result.view) {{ return; }}
-if (typeof ResizeObserver === 'undefined') {{ return; }}
-if (result.view.width() > 0 && result.view.height() > 0) {{ return; }}
-var lastWidth = -1;
-var ro = new ResizeObserver(function() {{
-if (result.view.width() > 0 && result.view.height() > 0) {{ ro.disconnect(); return; }}
-var w = el.clientWidth;
-if (w === 0 || w === lastWidth) {{ return; }}
-lastWidth = w;
-window.dispatchEvent(new Event('resize'));
-}});
-ro.observe(el);
-}}
-{pane_override_js}
-if (typeof window.requirejs !== 'undefined') {{
-window.requirejs.config({{
-paths: {{
-'dom-ready': 'https://cdn.jsdelivr.net/npm/domready@1/ready.min',
-'vega': 'https://cdn.jsdelivr.net/npm/vega@6/build/vega.min',
-'vega-lite': 'https://cdn.jsdelivr.net/npm/vega-lite@6.4.1/build/vega-lite.min',
-'vega-embed': 'https://cdn.jsdelivr.net/npm/vega-embed@7/build/vega-embed.min'
-}}
-}});
-function docReady(fn) {{
-if (document.readyState === 'complete') fn();
-else window.addEventListener("load", function() {{ fn(); }});
-}}
-docReady(function() {{
-window.requirejs(["dom-ready", "vega", "vega-embed"], function(domReady, vega, vegaEmbed) {{
-domReady(function () {{
-vegaEmbed('#' + visId, spec, options).then(recoverIfCollapsed).catch(console.error);
-}});
-}});
-}});
-}} else {{
-function loadScript(src) {{
-return new Promise(function(resolve, reject) {{
-var script = document.createElement('script');
-script.src = src;
-script.onload = resolve;
-script.onerror = reject;
-document.head.appendChild(script);
-}});
-}}
-Promise.all([
-loadScript('https://cdn.jsdelivr.net/npm/vega@6'),
-loadScript('https://cdn.jsdelivr.net/npm/vega-lite@6.4.1'),
-loadScript('https://cdn.jsdelivr.net/npm/vega-embed@7')
-])
-.then(function() {{ return vegaEmbed('#' + visId, spec, options); }})
-.then(recoverIfCollapsed)
-.catch(function(err) {{
-console.error('Failed to load Vega libraries:', err);
-}});
-}}
-}})();
-</script>
-"#,
-        vis_id = vis_id,
-        spec_json = spec_json,
-        pane_override_js = pane_override_js
-    )
-}
-
-/// Standalone template: outer/inner div wrapper driving a uniform
-/// scale-to-fit. The inner div holds a 450px design width; when the outer
-/// container measures narrower, a CSS transform scales the inner block
-/// proportionally and the outer height follows the scaled content. A
-/// `ResizeObserver` on the outer div keeps the transform current as the
-/// document viewport resizes.
-fn standalone_vegalite_html(spec_json: &str, vis_id: &str) -> String {
-    format!(
-        r#"<div id="{vis_id}-outer" style="width: 100%; overflow: hidden;">
-<div id="{vis_id}" style="width: 100%; min-width: 450px; height: 400px;"></div>
-</div>
-<script type="text/javascript">
-(function() {{
-var spec = {spec_json};
-var visId = '{vis_id}';
-var minWidth = 450;
-var inner = document.getElementById(visId);
-var outer = document.getElementById(visId + '-outer');
-var options = {{"actions": true, "renderer": "svg"}};
-function scaleToFit(o, i) {{
-var available = o.clientWidth;
-if (available < minWidth) {{
-var scale = available / minWidth;
-i.style.transform = 'scale(' + scale + ')';
-i.style.transformOrigin = 'top left';
-o.style.height = (i.scrollHeight * scale) + 'px';
-}} else {{
-i.style.transform = '';
-o.style.height = '';
-}}
-}}
-function onRendered() {{
-scaleToFit(outer, inner);
-var ro = new ResizeObserver(function() {{ scaleToFit(outer, inner); }});
-ro.observe(outer);
-}}
-if (typeof window.requirejs !== 'undefined') {{
-window.requirejs.config({{
-paths: {{
-'dom-ready': 'https://cdn.jsdelivr.net/npm/domready@1/ready.min',
-'vega': 'https://cdn.jsdelivr.net/npm/vega@6/build/vega.min',
-'vega-lite': 'https://cdn.jsdelivr.net/npm/vega-lite@6.4.1/build/vega-lite.min',
-'vega-embed': 'https://cdn.jsdelivr.net/npm/vega-embed@7/build/vega-embed.min'
-}}
-}});
-function docReady(fn) {{
-if (document.readyState === 'complete') fn();
-else window.addEventListener("load", function() {{ fn(); }});
-}}
-docReady(function() {{
-window.requirejs(["dom-ready", "vega", "vega-embed"], function(domReady, vega, vegaEmbed) {{
-domReady(function () {{
-vegaEmbed('#' + visId, spec, options).then(onRendered).catch(console.error);
-}});
-}});
-}});
-}} else {{
-function loadScript(src) {{
-return new Promise(function(resolve, reject) {{
-var script = document.createElement('script');
-script.src = src;
-script.onload = resolve;
-script.onerror = reject;
-document.head.appendChild(script);
-}});
-}}
-Promise.all([
-loadScript('https://cdn.jsdelivr.net/npm/vega@6'),
-loadScript('https://cdn.jsdelivr.net/npm/vega-lite@6.4.1'),
-loadScript('https://cdn.jsdelivr.net/npm/vega-embed@7')
-])
-.then(function() {{ return vegaEmbed('#' + visId, spec, options); }})
-.then(onRendered)
-.catch(function(err) {{
-console.error('Failed to load Vega libraries:', err);
-}});
-}}
-}})();
-</script>
-"#,
-        vis_id = vis_id,
-        spec_json = spec_json
-    )
 }
 
 /// Format DataFrame as HTML table
@@ -611,18 +378,6 @@ mod tests {
         let display = render(&positron_console());
         assert!(display["data"]["image/svg+xml"].is_string());
         assert!(display.get("output_location").is_none());
-    }
-
-    #[test]
-    fn test_the_vegalite_escape_hatch_still_works() {
-        // A temporary way back to the previous behaviour, so a problem with
-        // the comm can be confirmed against it without a rebuild. Goes away
-        // with the Vega-Lite plot path.
-        let spec = a_spec();
-        let bundle = format_vegalite(&spec, &positron_console()).unwrap();
-        assert_eq!(bundle["output_location"], "plot");
-        let html = bundle["data"]["text/html"].as_str().unwrap();
-        assert!(html.contains("vega-embed"), "{html:.200}");
     }
 
     #[test]
@@ -774,148 +529,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_positron_html_has_no_observer_feedback_loop() {
-        // Positron animates the output slot during reveal, so the templates
-        // must not watch layout once the plot has drawn. The only observer is
-        // the collapsed-render recovery, and it disconnects as soon as the
-        // view has a size.
-        for hints in [positron_console(), positron_notebook()] {
-            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
-            assert!(
-                !html.contains("scaleToFit"),
-                "Positron HTML must not include scaleToFit (hints={:?})",
-                hints
-            );
-            assert_eq!(
-                html.matches("new ResizeObserver").count(),
-                1,
-                "the collapsed-render recovery is the only observer (hints={:?})",
-                hints
-            );
-            assert!(
-                html.contains("ro.disconnect();"),
-                "the observer must disconnect once the view has a size (hints={:?})",
-                hints
-            );
-        }
-    }
-
-    #[test]
-    fn test_positron_recovery_gates_on_rendered_view_size() {
-        // The container can report a width while the view is still laid out at
-        // the zero it captured earlier, so gating on `clientWidth` here would
-        // skip a plot that did collapse.
-        for hints in [positron_console(), positron_notebook()] {
-            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
-            assert!(
-                html.contains(
-                    "if (result.view.width() > 0 && result.view.height() > 0) { return; }"
-                ),
-                "recovery must gate on the size the view rendered at (hints={:?})",
-                hints
-            );
-        }
-    }
-
-    #[test]
-    fn test_positron_recovery_dispatches_a_resize_event() {
-        // Container sizing compiles to width/height signals that re-read
-        // `containerSize()` only on `window:resize`. `view.resize()` re-lays out
-        // from the current signal value, which is still zero, so it cannot
-        // recover a collapsed plot.
-        for hints in [positron_console(), positron_notebook()] {
-            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
-            assert!(
-                html.contains("window.dispatchEvent(new Event('resize'));"),
-                "recovery must dispatch the event the signal listens for (hints={:?})",
-                hints
-            );
-            assert!(
-                !html.contains("view.resize()"),
-                "view.resize() does not re-read containerSize (hints={:?})",
-                hints
-            );
-        }
-    }
-
-    #[test]
-    fn test_positron_html_recovers_on_both_load_paths() {
-        // vega-embed is reached either through requirejs or through direct
-        // script loading; a plot that collapsed must recover either way.
-        for hints in [positron_console(), positron_notebook()] {
-            let html = vegalite_html(r#"{"mark": "point"}"#, &hints);
-            assert_eq!(
-                html.matches("recoverIfCollapsed").count(),
-                3,
-                "recovery must be defined once and wired into both load paths (hints={:?})",
-                hints
-            );
-        }
-    }
-
-    #[test]
-    fn test_console_html_fills_positron_plots_pane() {
-        let html = vegalite_html(r#"{"mark": "point"}"#, &positron_console());
-        assert!(
-            html.contains(".positron-output-container"),
-            "HTML must detect Positron's plots pane for responsive height"
-        );
-        assert!(
-            html.contains("100vh"),
-            "HTML must scale to 100vh inside the plots pane"
-        );
-        assert!(
-            html.contains("height: 400px"),
-            "HTML must set a 400px baseline height for console output"
-        );
-    }
-
-    #[test]
-    fn test_notebook_html_skips_pane_override() {
-        let html = vegalite_html(r#"{"mark": "point"}"#, &positron_notebook());
-        assert!(
-            html.contains("height: 400px"),
-            "notebook container uses the shared 400px baseline"
-        );
-        assert!(
-            !html.contains(".positron-output-container"),
-            "notebook HTML must not carry the plots-pane 100vh override"
-        );
-        assert!(
-            !html.contains("100vh"),
-            "notebook HTML must not reach for 100vh"
-        );
-    }
-
-    #[test]
-    fn test_standalone_html_uses_scale_to_fit() {
-        // Standalone (Jupyter/Quarto) renders into a static document and
-        // wraps the plot in the outer/inner div + min-width scale-to-fit so
-        // narrow viewports shrink the plot proportionally.
-        let html = vegalite_html(r#"{"mark": "point"}"#, &RenderHints::default());
-        assert!(
-            html.contains("min-width: 450px"),
-            "standalone HTML must use the 450px design width"
-        );
-        assert!(
-            html.contains("scaleToFit"),
-            "standalone HTML must uniformly scale narrow viewports"
-        );
-        assert!(
-            html.contains("new ResizeObserver"),
-            "standalone HTML must observe container resizes"
-        );
-        assert!(
-            html.contains("-outer"),
-            "standalone HTML must wrap the inner div in an overflow-hidden outer div"
-        );
-        assert!(
-            !html.contains(".positron-output-container"),
-            "standalone HTML must not carry the Positron plots-pane branch"
-        );
-    }
-
     fn header(session: &str) -> MessageHeader {
         MessageHeader {
             msg_id: String::new(),
@@ -974,21 +587,10 @@ mod tests {
 
     #[test]
     fn test_a_non_positron_session_is_standalone_whatever_its_id_says() {
-        // The old heuristic set `is_notebook` from the id alone, so a
-        // standalone session whose id happened to contain "notebook" carried a
-        // flag the standalone template never read. Now there is one answer.
+        // The heuristic keys on the "ggsql-" prefix the extension gives its
+        // sessions, so a foreign session id containing "notebook" is still
+        // standalone rather than a Positron notebook.
         assert_eq!(kind("jupyter-notebook-9f2c", None), SessionKind::Standalone);
-        assert!(!SessionKind::Standalone.is_positron());
-        assert!(!SessionKind::Standalone.is_notebook());
-    }
-
-    #[test]
-    fn test_the_two_positron_kinds_pick_different_templates() {
-        let spec = r#"{"mark":"point"}"#;
-        let console = vegalite_html(spec, &positron_console());
-        let notebook = vegalite_html(spec, &positron_notebook());
-        // The console template alone reaches for the Plots pane.
-        assert!(console.contains("positron-output-container"));
-        assert!(!notebook.contains("positron-output-container"));
+        assert_eq!(kind("notebook", None), SessionKind::Standalone);
     }
 }
