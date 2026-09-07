@@ -2513,6 +2513,7 @@ dependencies = [
  "const_format",
  "csscolorparser",
  "duckdb",
+ "fontique",
  "geozero",
  "hephaestus",
  "jsonschema",

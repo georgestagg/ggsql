@@ -22,7 +22,7 @@ LABEL title => 'Sales by Region'
 ggsql splits queries at the `VISUALISE` boundary:
 - **SQL portion** → passed to pluggable readers (DuckDB, PostgreSQL, CSV, etc.)
 - **VISUALISE portion** → parsed and compiled into visualization specifications
-- **Output** → rendered via pluggable writers (ggplot2, PNG, Vega-Lite, etc.)
+- **Output** → rendered via pluggable writers (Vega-Lite JSON, SVG, PDF, PNG, etc.)
 
 ## Core Components
 

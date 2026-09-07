@@ -14,6 +14,7 @@ the caller decides how a failure is reported.
 
 use ggsql::reader::Spec;
 use ggsql::writer::WriterOptions;
+use std::path::Path;
 use std::sync::LazyLock;
 
 // Reached only through a writer's own `check`/`render`, so a build with no
@@ -76,6 +77,10 @@ pub struct WriterInfo {
     pub name: &'static str,
     /// Alternative spellings accepted for `name`.
     pub aliases: &'static [&'static str],
+    /// Filename extensions that imply this writer, without the dot and in
+    /// lowercase. `--output`'s extension picks a writer from these when
+    /// `--writer` was not given; see [`for_extension`].
+    pub extensions: &'static [&'static str],
     /// The cargo feature that compiles this writer in.
     pub feature: &'static str,
     /// How the format is named in messages: "PNG", "Vega-Lite JSON".
@@ -107,6 +112,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "vegalite",
         aliases: &["vl", "vega-lite"],
+        extensions: &["json", "vl.json"],
         feature: "vegalite",
         label: "Vega-Lite JSON",
         blurb: "Vega-Lite specification as JSON",
@@ -118,6 +124,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "png",
         aliases: &[],
+        extensions: &["png"],
         feature: "png",
         label: "PNG",
         blurb: "PNG image — lossless, alpha preserved",
@@ -129,6 +136,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "jpeg",
         aliases: &["jpg"],
+        extensions: &["jpg", "jpeg"],
         feature: "jpeg",
         label: "JPEG",
         blurb: "JPEG image — lossy; prefer png or webp for plots",
@@ -140,6 +148,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "tiff",
         aliases: &["tif"],
+        extensions: &["tif", "tiff"],
         feature: "tiff",
         label: "TIFF",
         blurb: "TIFF image — lossless, choice of compressor",
@@ -151,6 +160,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "webp",
         aliases: &[],
+        extensions: &["webp"],
         feature: "webp",
         label: "WebP",
         blurb: "WebP image — lossless, and the smallest of the four",
@@ -162,6 +172,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "svg",
         aliases: &[],
+        extensions: &["svg"],
         feature: "svg",
         label: "SVG",
         blurb: "SVG vector graphic — scalable, and its text stays text",
@@ -173,6 +184,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "pdf",
         aliases: &[],
+        extensions: &["pdf"],
         feature: "pdf",
         label: "PDF",
         blurb: "PDF page — vector, with the fonts subset in",
@@ -184,6 +196,7 @@ pub const WRITERS: &[WriterInfo] = &[
     WriterInfo {
         name: "hep",
         aliases: &[],
+        extensions: &["hep"],
         feature: "hep",
         label: "plot document",
         blurb: "Self-contained plot document, for a host that renders it itself",
@@ -194,17 +207,50 @@ pub const WRITERS: &[WriterInfo] = &[
     },
 ];
 
+/// The writer used when neither `--writer` nor `--output`'s extension names
+/// one. Vega-Lite: it is the only writer with no system requirements at all,
+/// and it is what `ggsql exec` has always printed to stdout.
+pub const DEFAULT_WRITER: &str = "vegalite";
+
 /// Closes `--writer`'s long help. The image writers all rasterise through the
 /// GPU, which is a runtime requirement worth stating once rather than in four
 /// blurbs.
 const WRITER_FOOTER: &str = "png, jpeg, tiff and webp rasterise on the GPU and need a working \
-                             adapter at render time. svg, pdf and hep do not.";
+                             adapter at render time. svg, pdf and hep do not.\n\n\
+                             Left unset, --output's extension picks the writer \
+                             (chart.pdf writes a PDF), falling back to vegalite. \
+                             Set explicitly, this wins, and disagreeing with the \
+                             extension is a warning rather than an error.";
 
 /// Look up a writer by name or alias, case-insensitively.
 pub fn find(name: &str) -> Option<&'static WriterInfo> {
     WRITERS.iter().find(|w| {
         w.name.eq_ignore_ascii_case(name) || w.aliases.iter().any(|a| a.eq_ignore_ascii_case(name))
     })
+}
+
+/// The writer a filename implies, from its extension.
+///
+/// Matches the longest extension first, so `chart.vl.json` picks Vega-Lite
+/// rather than stopping at `json` — both spellings map to the same writer
+/// today, but a two-part extension has to win on principle or adding one
+/// later would be shadowed by its own tail.
+///
+/// Returns `None` for a path with no extension, an unrecognised one, or a
+/// bare `-`: none of those is an error, they just leave `--writer`'s default
+/// in place.
+pub fn for_extension(path: &Path) -> Option<&'static WriterInfo> {
+    let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    // Longest first: "vl.json" before "json".
+    let mut candidates: Vec<(&'static str, &'static WriterInfo)> = WRITERS
+        .iter()
+        .flat_map(|w| w.extensions.iter().map(move |e| (*e, w)))
+        .collect();
+    candidates.sort_by_key(|(e, _)| std::cmp::Reverse(e.len()));
+    candidates
+        .into_iter()
+        .find(|(e, _)| name.len() > e.len() + 1 && name.ends_with(&format!(".{e}")))
+        .map(|(_, w)| w)
 }
 
 /// The message for a `--writer` name that matches no row. Lists every writer,
@@ -483,6 +529,122 @@ mod tests {
     fn lookup_ignores_case() {
         assert_eq!(find("PNG").map(|w| w.name), Some("png"));
         assert!(find("furlongs").is_none());
+    }
+
+    #[test]
+    fn every_writer_declares_at_least_one_extension() {
+        for info in WRITERS {
+            assert!(
+                !info.extensions.is_empty(),
+                "{} declares no extension, so --output could never pick it",
+                info.name
+            );
+        }
+    }
+
+    #[test]
+    fn extensions_are_lowercase_and_dotless() {
+        for info in WRITERS {
+            for ext in info.extensions {
+                assert_eq!(*ext, ext.to_ascii_lowercase(), "{}", info.name);
+                assert!(!ext.starts_with('.'), "{}: {ext}", info.name);
+            }
+        }
+    }
+
+    #[test]
+    fn extensions_are_unique_across_writers() {
+        let mut seen: Vec<&str> = WRITERS
+            .iter()
+            .flat_map(|w| w.extensions.iter().copied())
+            .collect();
+        let count = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "two writers claim the same extension");
+    }
+
+    #[test]
+    fn an_extension_picks_its_writer() {
+        for (path, expected) in [
+            ("chart.svg", "svg"),
+            ("chart.pdf", "pdf"),
+            ("chart.hep", "hep"),
+            ("chart.png", "png"),
+            ("chart.jpg", "jpeg"),
+            ("chart.jpeg", "jpeg"),
+            ("chart.tif", "tiff"),
+            ("chart.tiff", "tiff"),
+            ("chart.webp", "webp"),
+            ("chart.json", "vegalite"),
+        ] {
+            assert_eq!(
+                for_extension(Path::new(path)).map(|w| w.name),
+                Some(expected),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_two_part_extension_beats_its_own_tail() {
+        // "vl.json" and "json" both reach vegalite today, so this asserts the
+        // ordering rather than the destination: the longer match is the one
+        // that wins, which is what keeps a future two-part extension from
+        // being shadowed by its tail.
+        let mut candidates: Vec<&str> = WRITERS
+            .iter()
+            .flat_map(|w| w.extensions.iter().copied())
+            .filter(|e| "chart.vl.json".ends_with(&format!(".{e}")))
+            .collect();
+        candidates.sort_by_key(|e| std::cmp::Reverse(e.len()));
+        assert_eq!(candidates.first(), Some(&"vl.json"));
+        assert_eq!(
+            for_extension(Path::new("chart.vl.json")).map(|w| w.name),
+            Some("vegalite")
+        );
+    }
+
+    #[test]
+    fn extension_matching_ignores_case() {
+        assert_eq!(
+            for_extension(Path::new("C.SVG")).map(|w| w.name),
+            Some("svg")
+        );
+        assert_eq!(
+            for_extension(Path::new("c.Pdf")).map(|w| w.name),
+            Some("pdf")
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_or_absent_extension_picks_nothing() {
+        // None is not a failure — it leaves the default writer in place.
+        for path in ["notes.txt", "chart", "-", "chart.", "archive.tar.gz"] {
+            assert!(for_extension(Path::new(path)).is_none(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_dotfile_is_a_name_not_an_extension() {
+        // `.svg` is a hidden file called "svg", not an SVG, so it picks
+        // nothing rather than silently choosing a writer from a bare suffix.
+        assert!(for_extension(Path::new(".svg")).is_none());
+        assert!(for_extension(Path::new("dir/.pdf")).is_none());
+    }
+
+    #[test]
+    fn a_directory_in_the_path_is_not_read_as_an_extension() {
+        assert!(for_extension(Path::new("out.svg/chart")).is_none());
+        assert_eq!(
+            for_extension(Path::new("out.pdf/chart.svg")).map(|w| w.name),
+            Some("svg")
+        );
+    }
+
+    #[test]
+    fn the_default_writer_has_a_row() {
+        assert!(find(DEFAULT_WRITER).is_some());
     }
 
     #[test]

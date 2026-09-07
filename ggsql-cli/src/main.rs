@@ -10,7 +10,7 @@ use ggsql::validate::validate;
 use ggsql::writer::WriterOptions;
 use ggsql::{parser, VERSION};
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use writers::{Output, WriterInfo};
 
 mod writers;
@@ -43,8 +43,14 @@ pub struct RenderArgs {
     pub reader: String,
 
     /// Output format — run with --help for the writers this build has
-    #[arg(short, long, default_value = "vegalite", long_help = writers::writer_help())]
-    pub writer: String,
+    ///
+    /// Left unset, `--output`'s extension picks the writer, falling back to
+    /// vegalite. `Option` rather than a clap `default_value` precisely so
+    /// "unset" is distinguishable from "explicitly vegalite": the extension is
+    /// only consulted in the former case. The default is stated in the long
+    /// help instead, which is where clap would otherwise have put it.
+    #[arg(short, long, long_help = writers::writer_help())]
+    pub writer: Option<String>,
 
     /// Settings for the chosen writer, as `key=value` (repeatable)
     #[arg(
@@ -99,10 +105,7 @@ impl RenderArgs {
     /// setting that is not `key=value`. Both are the user's mistake, and
     /// neither should be discovered after the SQL has already run.
     fn writer(&self) -> WriterSpec {
-        let info = writers::find(&self.writer).unwrap_or_else(|| {
-            eprintln!("{}", writers::unknown_writer(&self.writer));
-            std::process::exit(1);
-        });
+        let info = self.resolve_writer();
         if !info.compiled {
             eprintln!("{}", writers::not_compiled_message(info));
             std::process::exit(1);
@@ -116,6 +119,45 @@ impl RenderArgs {
             std::process::exit(1);
         }
         WriterSpec { info, options }
+    }
+
+    /// Which writer to use: `--writer` if given, else what `--output`'s
+    /// extension implies, else the default.
+    ///
+    /// An explicit `--writer` always wins, because it is what the user said.
+    /// When it disagrees with the extension the file still gets the flag's
+    /// format, with a note on stderr — writing SVG to a `.txt` to read it is a
+    /// legitimate thing to do, so this is a warning rather than an error, and
+    /// stderr keeps it out of piped output.
+    fn resolve_writer(&self) -> &'static writers::WriterInfo {
+        if let Some(name) = &self.writer {
+            let info = writers::find(name).unwrap_or_else(|| {
+                eprintln!("{}", writers::unknown_writer(name));
+                std::process::exit(1);
+            });
+            if let Some(implied) = self.output.as_deref().and_then(writers::for_extension) {
+                if !std::ptr::eq(implied, info) {
+                    eprintln!(
+                        "Warning: writing {} to '{}', whose extension says {}",
+                        info.label,
+                        self.output.as_deref().unwrap_or(Path::new("")).display(),
+                        implied.name
+                    );
+                }
+            }
+            return info;
+        }
+        // No --writer. The extension decides, and a writer it names but this
+        // build lacks is an error rather than a silent fallback: emitting
+        // Vega-Lite JSON into a file called `.png` is the mistake this exists
+        // to prevent.
+        self.output
+            .as_deref()
+            .and_then(writers::for_extension)
+            .unwrap_or_else(|| {
+                writers::find(writers::DEFAULT_WRITER)
+                    .expect("the default writer has a registry row")
+            })
     }
 }
 

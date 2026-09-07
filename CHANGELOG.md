@@ -1,62 +1,39 @@
 ## [Unreleased]
 
 ### Added
-- New `PngWriter` renders a plot to a PNG raster image via
-  [hephaestus](https://github.com/posit-dev/hephaestus), behind a new
-  off-by-default `png` feature (`--writer png` in the CLI). `LABEL caption`
-  and the new `minor_breaks` setting have no Vega-Lite equivalent and render
-  only here. Requires a working GPU adapter — hardware or software, e.g.
-  lavapipe — at render time, and each dimension is capped at what that GPU
-  grants, up to 16384 px; `svg` and `pdf` have no such ceiling.
-- Six more output formats, each with its own writer and its own off-by-default
-  feature: `jpeg`, `tiff`, `webp`, `svg`, `pdf`, and `hep`. Every one takes the
-  same canvas settings as `png` (`width`, `height`, `units`, `dpi`,
-  `background`) plus whatever its own format actually offers — `png` and `tiff`
-  a `compression`, `jpeg` a `quality`, `svg` a `text` mode with `embed-fonts`
-  and `id-prefix`, `pdf` a `compress` and `links`, `hep` a `lossy` and
-  `embed-fonts`. `webp` has none: it is lossless with no rate control, and on
-  plot content it is both about as fast to encode as `png compression=fast` and
-  roughly half the size, which makes it the best default for a raster plot sent
-  over a wire.
-
-  **`svg`, `pdf` and `hep` need no GPU adapter and no wgpu at all** — they
-  record the same drawing commands the rasteriser would have executed, so they
-  work on a headless box, in a container with no graphics stack, and in CI. They
-  also build on Rust 1.86, so they remain available to the R bindings.
-
-  `svg` and `pdf` produce resolution-independent output whose text stays
-  selectable, and a canvas given in a physical unit is declared as one, so
-  `-D 'width=6;height=4;units=in;dpi=300'` yields a file that prints six inches
-  wide. `hep` produces no picture at all: it captures the resolved plot —
-  scales, breaks, labels, theme, geometry and data — so a host can render it
-  itself at any size and re-render on resize without re-running the query.
+- Seven new writers render a plot directly, through
+  [hephaestus](https://github.com/posit-dev/hephaestus): `svg`, `pdf` and `hep`
+  as default features, and `png`, `jpeg`, `tiff` and `webp` off by default and
+  needing a GPU adapter at render time. Each takes the canvas settings `width`,
+  `height`, `units` (`px`, `in`, `cm`, `mm`, `pt`), `dpi` and `background`,
+  plus what its own format offers: `compression` for `png` and `tiff`,
+  `quality` for `jpeg`, `text`, `embed-fonts` and `id-prefix` for `svg`,
+  `compress` and `links` for `pdf`, `lossy` and `embed-fonts` for `hep`.
+  `webp` has none — it is lossless with no rate control.
+- `LABEL caption` is honored by the new writers. It has no Vega-Lite equivalent
+  and is ignored there.
 - New `ggsql view` subcommand shows a query's plot in a native window, blocking
-  until it is closed: `ggsql view "SELECT … VISUALISE …"`. Resizing the window
-  re-lays-out the plot rather than stretching it. `-D` (`--viewer-option`) takes
-  `width`, `height`, `background` and `title`; `units` and `dpi` are refused,
-  since a window is sized in logical pixels and its resolution belongs to the
-  display. Behind a new off-by-default `window` feature, and needs a GPU
-  adapter. The subcommand exists either way and says what would enable it.
+  until it is closed. Resizing re-lays-out the plot rather than stretching it.
+  `-D` (`--viewer-option`) takes `width`, `height`, `background` and `title`;
+  `units` and `dpi` are refused, since a window is sized in logical pixels and
+  its resolution belongs to the display. Behind a new off-by-default `window`
+  feature, and needs a GPU adapter; the subcommand exists either way and says
+  what would enable it.
 - Writers can be configured from key–value options: `Writer::from_options` takes
   a `WriterOptions` set, and the CLI collects them from a repeatable
   `--writer-option key=value` flag on `exec` and `run` (short `-D`, also
   spellable `--writer-options`). Several settings can be collapsed into one flag
   separated by `;` — `-D 'width=1600;dpi=150'`, quoted because shells read `;`
-  themselves — and the two forms mix. The png writer
-  takes `width`, `height`, `units` (`px`, `in`, `cm`, `mm`, `pt`), `dpi`, and
-  `background` (any CSS color, including `transparent`), defaulting to a
-  1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An
-  unknown key or unusable value is an error naming the option, not a silently
-  ignored setting.
+  themselves — and the two forms mix. An unknown key or unusable value is an
+  error naming the option, not a silently ignored setting.
 - `--reader`, `--writer`, and `--output` gained the short forms `-r`, `-w`, and
   `-o` on `exec` and `run`; `validate --reader` also takes `-r`.
-- Text is rendered as rich text (markdown) by the png writer. A text layer's
+- Text is rendered as rich text (markdown) by the new writers. A text layer's
   `label` is parsed for `**bold**`, `*italic*`, `_underline_`, `~~strike~~`,
   `` `code` `` and marquee-style `{selector body}` spans that set a colour or
   size (`{.red hot}`, `{#0072B2 blue}`, `{.20 big}`), and so are the plot title,
-  subtitle, caption and axis titles set with `LABEL`. Legend titles and break
-  labels (axis tick labels, legend keys) do not parse yet and show their markers.
-  The new `parse` setting on the text layer turns it off for that layer
+  subtitle, caption, axis titles, legend titles and break labels. The new
+  `parse` setting on the text layer turns it off for that layer
   (`SETTING parse => false`), drawing the label exactly as given; it defaults to
   `true`. Chrome text has no switch yet. The Vega-Lite writer has no rich-text
   equivalent and ignores `parse`, always drawing text literally.
@@ -64,50 +41,35 @@
   subdivisions between breaks: a whole number of minor breaks *per interval between
   two breaks* (`0` removes them), an array of exact positions, or — for temporal
   scales — an interval such as `'week'`. Defaults to a value chosen by the
-  transformation. This has no Vega-Lite equivalent and is ignored by that writer;
-  the png writer draws them.
+  transformation. This has no Vega-Lite equivalent and is ignored by that writer.
 
 ### Changed
-- **Plots in a Positron console now use the Plots pane properly.** Each plot
-  opens a `positron.plot` comm, so the pane re-renders it at the exact size it
-  is given — resizing the pane redraws the plot sharp instead of stretching a
-  fixed-size image — and the pane's own save, copy and zoom affordances work on
-  it. The plot history is capped by a new `--max-plots` (default 32), which is
-  what bounds memory in a long session; older plots are closed oldest-first.
-  Without a GPU adapter the console falls back to a static SVG rather than
-  opening a comm it could not serve a raster request on. Once the pane has
-  reported its size, a new plot arrives already rendered at it, so it appears
-  immediately rather than blank for a moment.
-- **Plots in notebooks and documents are now rendered by the kernel and no
-  longer need network access.** A `VISUALISE` query in JupyterLab, in a Positron
-  notebook, or in a Quarto render used to emit HTML that fetched vega, vega-lite
-  and vega-embed from a CDN on every render; it now emits a rendered image. So
-  plots work offline, in CI and behind a firewall, each output is a fraction of
-  the size, and nothing depends on a third-party host staying up.
-
-  **Quarto is obeyed rather than guessed at.** `QUARTO_FIG_FORMAT` selects the
-  writer (`png`, `jpeg`, `svg`, `pdf`), and `QUARTO_FIG_WIDTH`/`_HEIGHT` are
-  read as inches at `QUARTO_FIG_DPI` — so `fig-width: 6` finally means six
-  inches, and a PDF document gets a real vector figure with selectable text and
-  embedded fonts instead of a rasterised screenshot.
-
-  **A GPU is needed for raster output, not to see a plot.** Without an adapter,
-  or in a build without the new non-default `raster-plots` feature, plots render
-  as SVG — carrying the same resolved scales, breaks and labels, and needing
-  neither wgpu nor an adapter.
-
-  Two things are lost with vega-embed, and worth knowing: a static image has no
-  tooltips, no pan/zoom and no save-as menu. Positron's Plots pane supplies its
-  own, so the loss is felt mainly in plain Jupyter and Quarto HTML.
-- `--writer` now lists every format ggsql knows in its long help, marking the
-  ones the running build does not have and naming the feature that would bring
-  each in — the more common mistake than a misspelled name. `-D`'s long help
-  lists each writer's settings. An unknown writer, a writer whose feature is
-  off, and an unusable setting are all now reported **before** the query runs
-  rather than after.
-- The png writer now records its render resolution in the PNG itself, so a
-  figure rendered above 96 dpi reports its true physical size instead of being
-  read as 72 dpi by whatever opens it.
+- Plots in a Positron console now open a `positron.plot` comm, so the Plots pane
+  renders them at its own size, re-renders sharp when resized, and its save,
+  copy and zoom affordances work on them. A new `--max-plots` (default 32) caps
+  the retained history, closing the oldest first. Once the pane has reported a
+  size, a new plot arrives already rendered at it.
+- Plots in notebooks and documents are now rendered by the kernel and no longer
+  need network access. A `VISUALISE` query in JupyterLab, a Positron notebook or
+  a Quarto render previously emitted HTML that fetched vega, vega-lite and
+  vega-embed from a CDN on every render; it now emits a rendered image.
+- Quarto's figure settings are honoured: `QUARTO_FIG_FORMAT` selects the writer
+  (`png`, `jpeg`, `svg`, `pdf`) and `QUARTO_FIG_WIDTH`/`_HEIGHT` are read as
+  inches at `QUARTO_FIG_DPI`, so `fig-width: 6` means six inches and a PDF
+  document gets a vector figure.
+- Kernel plots render as SVG wherever raster output is unavailable — no GPU
+  adapter, or a build without the new non-default `raster-plots` feature — so a
+  GPU is needed for raster output, not to see a plot.
+- `--output`'s extension picks the writer when `--writer` is omitted: `svg`,
+  `pdf`, `hep`, `png`, `jpg`/`jpeg`, `tif`/`tiff`, `webp` and `json`/`vl.json`
+  each name their own. An explicit `--writer` still wins, warning on stderr if
+  it disagrees with the extension. An unrecognised extension falls back to
+  Vega-Lite; an extension naming a writer the build lacks is an error.
+- An unknown writer, a writer whose feature is off, and an unusable writer
+  setting are now reported **before** the query runs rather than after.
+  `--writer` and `-D` list every writer and its settings in their long help,
+  marking the ones this build does not have and naming the feature that would
+  add each.
 - Dodging now only takes effect where groups actually meet on a position. A
   layer whose grouping gives every group a position of its own — `colour` mapped
   to the same column as the discrete axis, say — is drawn at its full width
@@ -121,17 +83,15 @@
 - Categorical `y` axes now run bottom-up, so the first level sits at the bottom
   of the panel as it does in ggplot2. This affects every plot with a discrete or
   ordinal `y` — horizontal bars, boxplots and violins by category, points and
-  2D jitter — and brings the Vega-Lite writer in line with the raster one, which
-  already read this way.
-- Banded marks now measure against the full step in the VegaLite writer. A band fraction
-  (a bar's `width`, a dodge displacement, a jitter spread, a violin or boxplot
-  half-width, a discrete tile's extent) is a fraction of the whole category step,
-  so `width => 0.9` leaves a 10% gap — ggplot2's convention. Vega-Lite previously
-  subtracted its own default band padding first, making every banded mark there
-  narrower than the same query rendered as a raster. This applies to dodged,
-  jittered and half-sided layers too, where Vega-Lite reserved a further 20% of
-  every step: their marks were narrower, their displacements smaller, and their
-  category ticks pulled toward the middle of the panel.
+  2D jitter.
+- Banded marks now measure against the full step in the Vega-Lite writer. A band
+  fraction (a bar's `width`, a dodge displacement, a jitter spread, a violin or
+  boxplot half-width, a discrete tile's extent) is a fraction of the whole
+  category step, so `width => 0.9` leaves a 10% gap — ggplot2's convention.
+  Vega-Lite previously subtracted its own default band padding first, and a
+  further 20% of every step for dodged, jittered and half-sided layers, so
+  their marks were narrower, their displacements smaller and their category
+  ticks pulled toward the middle of the panel.
 
 ### Fixed
 - A dodged violin or half-boxplot on a categorical `y` axis is no longer flipped
@@ -194,12 +154,6 @@
 - In plain VS Code, the extension no longer offers run buttons, keybindings or
   Command Palette entries for commands that need the Positron runtime and so
   had no handler there.
-- Plots in Positron notebooks no longer come out blank when the cell output is
-  rendered before Positron has laid the slot out, which happened on the first
-  execution after a kernel started and when reopening a saved notebook. The
-  plot sizes itself from its container, so a zero-width first measurement drew
-  it at zero size with nothing left to correct it. It now recovers once the
-  container has a real width.
 - ggsql interpreter sessions in Positron now come back after an extension host
   restart as well as after a window reload. A session the user renamed also
   keeps its name across the restore, and ggsql runtimes are rediscovered on

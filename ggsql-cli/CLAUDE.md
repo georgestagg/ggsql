@@ -44,9 +44,18 @@ Which keys a writer accepts is the writer's business, and an unknown one is its 
 
 ### The writer registry
 
-[`src/writers.rs`](src/writers.rs) holds one `WriterInfo` row per writer: its name and aliases, the cargo feature that compiles it, the `label` used in messages ("PNG", "Vega-Lite JSON"), a `blurb` and an `options` line for help, `compiled: cfg!(feature = "…")`, and a `render` function pointer. Dispatch, `--writer`'s long help, `-D`'s long help and the "unknown writer" message are all generated from that list, so **adding a writer means adding a row and its render function** — nothing else in the CLI changes. Because `compiled` is a field rather than a `#[cfg]` around the row, the help and the error can name a writer this build lacks and say which feature would bring it in, which is the more common mistake than a misspelled name.
+[`src/writers.rs`](src/writers.rs) holds one `WriterInfo` row per writer: its name and aliases, the filename extensions that imply it, the cargo feature that compiles it, the `label` used in messages ("PNG", "Vega-Lite JSON"), a `blurb` and an `options` line for help, `compiled: cfg!(feature = "…")`, and a `render` function pointer. Dispatch, `--writer`'s long help, `-D`'s long help and the "unknown writer" message are all generated from that list, so **adding a writer means adding a row and its render function** — nothing else in the CLI changes. Because `compiled` is a field rather than a `#[cfg]` around the row, the help and the error can name a writer this build lacks and say which feature would bring it in, which is the more common mistake than a misspelled name.
 
 Render functions return `Result<(Output, Vec<String>), String>`: the output plus anything the writer had to degrade to produce it. They report failure rather than exiting, so `render_spec` owns how a problem is presented. **Warnings go to stderr unconditionally, not behind `-v`** — something the writer could not express is a defect in the file the user is about to ship, and stderr keeps it out of a piped artifact.
+
+**`RenderArgs::resolve_writer` decides which writer runs**, and the order is deliberate:
+
+1. An explicit `--writer` wins — it is what the user said. If it disagrees with `--output`'s extension the flag is still obeyed, with a note on stderr; writing SVG to a `.txt` to read it is legitimate, so this is a warning, not an error.
+2. Otherwise `--output`'s extension picks one, via `writers::for_extension`. Longest extension first, so a two-part `vl.json` cannot be shadowed by its own `json` tail.
+3. **An extension naming a writer this build lacks is an error**, with the feature named — the same message an explicit `--writer` gives. Falling back here would write Vega-Lite JSON into a file called `.png`, which is the mistake the feature exists to prevent.
+4. An unrecognised extension, or no `--output`, falls back to `writers::DEFAULT_WRITER`.
+
+This is why `RenderArgs::writer` is `Option<String>` with no clap `default_value`: "unset" has to be distinguishable from "explicitly vegalite", or step 2 could never fire. The default is stated in the long help instead.
 
 `open_reader(uri) -> Result<Box<dyn Reader>, String>` is the matching single place for connection strings. `ggsql::reader::Reader` is object-safe on purpose, so every subcommand that needs data shares one function that knows which schemes exist and which of them this build has — `exec`, `run` and `view` all go through it.
 
@@ -79,10 +88,12 @@ The macOS codesign step uses [`/entitlements.plist`](../entitlements.plist) at t
 ## Features
 
 ```toml
-default = ["duckdb", "sqlite", "vegalite", "ipc", "parquet", "builtin-data", "odbc"]
+default = ["duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc", "svg", "pdf", "hep"]
 ```
 
 Each feature passes through to `ggsql/<feature>`. A writer feature gates only its own row's render function in `writers.rs`; the row itself is always present.
+
+`svg`, `pdf` and `hep` are default because they cost nothing to have: no GPU adapter, no wgpu, and on Linux no `libfontconfig1-dev` at build time. `png`, `jpeg`, `tiff`, `webp` and `window` are not, since those do need an adapter at run time.
 
 ## Testing
 

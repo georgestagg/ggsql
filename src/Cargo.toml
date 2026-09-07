@@ -59,6 +59,16 @@ sprintf = "0.4"
 const_format.workspace = true
 uuid.workspace = true
 
+# Named only to reach one feature parley does not re-export. `fontconfig-dlopen`
+# makes fontique load `libfontconfig.so.1` at runtime instead of asking
+# pkg-config for it at build time, so building any renderer-backed writer needs
+# only the runtime library and not the `-dev` package — which is what keeps
+# `cargo install ggsql-cli` working on a bare box now that `svg`, `pdf` and
+# `hep` are default. Cargo unions features, so this applies to the `fontique`
+# parley resolves; Linux-only because that is the only target with fontconfig.
+[target.'cfg(target_os = "linux")'.dependencies]
+fontique = { version = "0.9", optional = true, default-features = false, features = ["fontconfig-dlopen"] }
+
 [dev-dependencies]
 jsonschema = { version = "0.44", default-features = false, features = ["resolve-file"] }
 tempfile = "3.8"
@@ -67,7 +77,7 @@ adbc_datafusion = "0.23"
 adbc_driver_manager = "0.23"
 
 [features]
-default = ["adbc", "duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc", "spatial"]
+default = ["adbc", "duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc", "spatial", "svg", "pdf", "hep"]
 duckdb = ["dep:duckdb"]
 parquet = ["dep:parquet"]
 sqlite = ["dep:rusqlite"]
@@ -80,7 +90,7 @@ vegalite = []
 # rasteriser on top of it. Splitting them is what lets a vector-only build skip
 # wgpu, vello_hybrid and pollster entirely — hephaestus gates only its GPU
 # backends behind that feature, not the plot layer.
-graphics = ["dep:hephaestus"]
+graphics = ["dep:hephaestus", "dep:fontique"]
 # The GPU rasteriser. `vello-hybrid` rather than vello classic: it computes
 # coverage on the CPU and hands the GPU a plain render pipeline. Its GPU buffers
 # are sized to the scene's actual content rather than to fixed caps, so there is

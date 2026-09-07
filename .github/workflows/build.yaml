@@ -37,32 +37,39 @@ jobs:
         # which invokes `protoc` at build time. Required for the ADBC test path.
         run: sudo apt-get install -y protobuf-compiler
 
-      - name: Install png writer system libraries
-        # The png writer renders via wgpu/Vello, which needs a Vulkan
-        # adapter. ubuntu-latest has no GPU, so install Mesa's lavapipe software
-        # device. If no adapter is found anyway, the writer test skips its render
-        # assertion gracefully rather than failing.
-        # Text layout goes through parley/fontique, which links the system
-        # fontconfig on Linux to enumerate fonts, so its development files
-        # (fontconfig.pc plus headers) must be present at build time.
-        run: sudo apt-get install -y mesa-vulkan-drivers libfontconfig1-dev
+      - name: Install renderer system libraries
+        # Two separate needs, conflated easily:
+        #
+        # * mesa-vulkan-drivers is for the *raster* writers and the plot
+        #   viewer, which render through wgpu and need a Vulkan adapter.
+        #   ubuntu-latest has no GPU, so this installs Mesa's lavapipe software
+        #   device. Without an adapter those tests skip their render assertion
+        #   rather than fail.
+        # * fontconfig is for *every* renderer-backed feature including svg,
+        #   pdf and hep: text layout goes through parley/fontique, which
+        #   enumerates fonts through the system fontconfig whatever draws.
+        #
+        # Only the fontconfig *runtime* library is installed, deliberately:
+        # ggsql enables fontique's `fontconfig-dlopen`, so the `-dev` package
+        # is not needed at build time, and leaving it out makes every CI run a
+        # regression test for that. fonts-dejavu-core gives fontconfig
+        # something to find.
+        run: sudo apt-get install -y mesa-vulkan-drivers libfontconfig1 fonts-dejavu-core
 
       - name: Install Rust
-        # 1.86 is the MSRV (declared as `rust-version` in /Cargo.toml, see
-        # /CLAUDE.md); this sets it as the default toolchain so plain `cargo`
-        # uses it. fmt, clippy and the library build run on 1.86 to guarantee
-        # the shipped crate builds there.
-        uses: dtolnay/rust-toolchain@1.86.0
+        # Stable is the default toolchain. It is *not* the MSRV: `rust-version`
+        # in /Cargo.toml is 1.86 (CRAN's), which is what points clippy's
+        # MSRV-aware lints at 1.86 — so running clippy here still guards it.
+        # The default cannot be 1.86 itself, because the default writers pull
+        # `parley`, which declares 1.88, and the `adbc` test path needs 1.88
+        # for real.
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Install Rust (test toolchain)
-        # The experimental `adbc` feature's test path pulls `adbc_datafusion` →
-        # `datafusion` ≥53.1.0, which requires rustc ≥1.88. Steps that compile
-        # tests/dev-dependencies use this newer toolchain via `cargo +stable`.
-        # Installing it here does not change the default — plain `cargo` stays
-        # on 1.86.
-        run: rustup toolchain install stable --profile minimal
+      - name: Install Rust (CRAN toolchain)
+        # For the MSRV check below only. Does not change the default.
+        run: rustup toolchain install 1.86 --profile minimal
 
       - name: Caching
         uses: Swatinem/rust-cache@v2
@@ -78,24 +85,32 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Install wasm-pack
-        # `cargo install` runs at the repo root, where 1.86 is the default;
-        # `+stable` builds the tool on the newer toolchain. The actual wasm build
-        # below runs in ggsql-wasm/, whose nested rust-toolchain.toml selects stable.
-        run: cargo +stable install wasm-pack
+        # The wasm build itself runs in ggsql-wasm/, whose nested
+        # rust-toolchain.toml selects stable.
+        run: cargo install wasm-pack
 
-      - name: Build library (MSRV 1.86)
+      - name: Build library
         run: cargo build
 
       - name: Build all targets
-        # --all-targets compiles dev-dependencies (datafusion), so it needs ≥1.88.
-        run: cargo +stable build --all-targets
+        run: cargo build --all-targets
+
+      - name: Check the library builds on CRAN's toolchain (MSRV 1.86)
+        # The R package vendors ggsql and CRAN builds it on 1.86, so the code
+        # has to keep compiling there. `--ignore-rust-version` is needed only
+        # because `parley` *declares* 1.88 while compiling fine on 1.86 — do
+        # not delete the flag; delete this job and the MSRV silently rots.
+        #
+        # Library only, not --all-targets: the `adbc` dev-dependency path pulls
+        # datafusion, which uses let-chains and genuinely requires 1.88.
+        run: cargo +1.86 check --ignore-rust-version -p ggsql
 
       - name: Run tree-sitter tests
         working-directory: tree-sitter-ggsql
         run: tree-sitter test
 
       - name: Run Rust tests
-        run: cargo +stable test --lib --bins
+        run: cargo test --lib --bins
 
       - name: Install dbc CLI and SQLite ADBC driver
         run: |
@@ -103,17 +118,25 @@ jobs:
           "$HOME/.local/bin/dbc" install sqlite
 
       - name: Run ADBC unit tests
-        run: cargo +stable test --features "adbc sqlite" --lib
+        run: cargo test --features "adbc sqlite" --lib
 
       - name: Run ADBC SQLite equivalence tests
-        run: cargo +stable test --features "adbc sqlite" --lib -- --ignored equivalence
+        run: cargo test --features "adbc sqlite" --lib -- --ignored equivalence
 
-      - name: Run png writer tests
-        # Non-default feature. The hephaestus crate it renders through needs
-        # rustc ≥1.88 (wgpu), so it builds on +stable and is excluded from the
-        # 1.86 library build. Default features (incl. duckdb) supply the
-        # in-memory reader the test uses.
-        run: cargo +stable test --features png --lib writer::hephaestus
+      - name: Run GPU-free writer tests
+        # svg, pdf and hep are default features and need no adapter, so these
+        # are hard assertions on every runner. hep-read adds the document
+        # round trip. Fast, and its failure is unambiguous, so it runs first.
+        run: cargo test --features hep-read --lib writer::
+
+      - name: Run raster writer tests
+        # Non-default features needing a GPU adapter. Skips its render
+        # assertions gracefully if lavapipe did not come up.
+        run: cargo test --features "png jpeg tiff webp" --lib writer::
+
+      - name: Check the plot viewer builds
+        # Not a writer and it blocks on a window, so it is compiled, not run.
+        run: cargo check --features window
 
       - name: Build WASM library
         working-directory: ggsql-wasm/library

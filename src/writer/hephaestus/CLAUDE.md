@@ -2,18 +2,18 @@
 
 The writers here render a resolved ggsql `Spec` through
 [hephaestus](https://github.com/posit-dev/hephaestus), a 2D scene renderer with a
-grammar-of-graphics plot API. Seven of them exist, each behind its own
-non-default cargo feature:
+grammar-of-graphics plot API. Seven of them exist, each behind its own cargo
+feature — the three GPU-free ones on by default, the four raster ones not:
 
-| Writer | Feature | GPU | Output | Its own options |
-| --- | --- | --- | --- | --- |
-| `PngWriter` | `png` | yes | PNG bytes, lossless, alpha preserved | `compression` = `none`/`fast`/`balanced`/`small` |
-| `JpegWriter` | `jpeg` | yes | JPEG bytes, lossy, **no alpha** | `quality` 1–100 |
-| `TiffWriter` | `tiff` | yes | TIFF bytes, lossless, alpha preserved | `compression` = `none`/`deflate`/`lzw`/`packbits` |
-| `WebpWriter` | `webp` | yes | WebP bytes, lossless VP8L, alpha preserved | — |
-| `SvgWriter` | `svg` | **no** | SVG text, resolution independent | `text` = `text`/`outline`, `embed-fonts`, `id-prefix` |
-| `PdfWriter` | `pdf` | **no** | one PDF page, fonts subset in | `compress`, `links` |
-| `HepWriter` | `hep` | **no** | a `.hep` plot document — no picture at all | `lossy`, `embed-fonts` |
+| Writer | Feature | Default | GPU | Output | Its own options |
+| --- | --- | --- | --- | --- | --- |
+| `PngWriter` | `png` | — | yes | PNG bytes, lossless, alpha preserved | `compression` = `none`/`fast`/`balanced`/`small` |
+| `JpegWriter` | `jpeg` | — | yes | JPEG bytes, lossy, **no alpha** | `quality` 1–100 |
+| `TiffWriter` | `tiff` | — | yes | TIFF bytes, lossless, alpha preserved | `compression` = `none`/`deflate`/`lzw`/`packbits` |
+| `WebpWriter` | `webp` | — | yes | WebP bytes, lossless VP8L, alpha preserved | — |
+| `SvgWriter` | `svg` | ✓ | **no** | SVG text, resolution independent | `text` = `text`/`outline`, `embed-fonts`, `id-prefix` |
+| `PdfWriter` | `pdf` | ✓ | **no** | one PDF page, fonts subset in | `compress`, `links` |
+| `HepWriter` | `hep` | ✓ | **no** | a `.hep` plot document — no picture at all | `lossy`, `embed-fonts` |
 
 **Each format exposes the axis it actually has, and they share no knob they
 would have to reinterpret.** PNG's `compression` trades encode time for size,
@@ -25,9 +25,9 @@ four raster writers would mean four different things.
 **The three GPU-free writers are the important ones architecturally.** They go
 through the same `PlotComposition` and the same `render` call — the composition
 takes `&mut dyn SceneBuilder`, so a vector scene slots in exactly where the
-rasteriser does. That is why they need no adapter, pull in no wgpu, and compile
-on the MSRV toolchain, which is what keeps them available to the R bindings. It
-is also what makes them the test surface: see [Testing](#testing).
+rasteriser does. That is why they need no adapter, pull in no wgpu and need no
+`-dev` package to build, which is what lets them be **default features**. It is
+also what makes them the test surface: see [Testing](#testing).
 
 **hephaestus is not a public name.** The user-facing names are the formats
 (`--writer png`, `--features webp`, `ggsql::writer::TiffWriter`); the module is
@@ -636,9 +636,10 @@ so one run inventories every gap at once. Implementation notes:
 
 ## Operational constraints
 
-- **A GPU adapter is required by the four raster writers**, at render time. CI
-  installs Mesa's lavapipe; headless containers need something equivalent. The
-  vector and document writers need neither an adapter nor wgpu.
+- **A GPU adapter is required by the four raster writers**, at render time, and
+  by nothing else. CI installs Mesa's lavapipe; headless containers need
+  something equivalent. The vector and document writers need neither an adapter
+  nor wgpu, which is why they are the default ones.
 - **The backend is Vello Hybrid, not vello classic**, and the choice is named
   in exactly one place ([`raster.rs`](raster.rs)) so it stays swappable. Hybrid
   computes coverage on the CPU and gives the GPU a plain render pipeline, which
@@ -658,29 +659,41 @@ so one run inventories every gap at once. Implementation notes:
   have none. A device offering less rejects the frame itself with its own limit
   named. Verified on Apple silicon: 4600×3100, 8000×2000, 16000×1000 and a
   faceted 10000×6000 all render; 17000×1000 is refused up front.
-- **fontconfig is a build-time dependency on Linux**, for **every**
-  hephaestus-backed feature and not just the raster ones: text layout goes
-  through parley/fontique, which links the system fontconfig to enumerate fonts
-  regardless of which backend draws. So `libfontconfig1-dev` (or the distro
-  equivalent supplying `fontconfig.pc`) is needed to build with `svg` just as
-  much as with `png`. macOS uses CoreText and needs nothing extra.
+- **fontconfig is a *runtime* dependency on Linux, not a build-time one.** Text
+  layout goes through parley/fontique, which enumerates fonts through the
+  system fontconfig whatever backend draws — so this applies to `svg` and `pdf`
+  just as much as to `png`. But `src/Cargo.toml` names `fontique` directly for
+  one reason: to turn on `fontconfig-dlopen`, which parley does not re-export.
+  With it, `yeslogic-fontconfig-sys`'s build script makes no pkg-config call at
+  all and `libfontconfig.so.1` is loaded on use, so **`libfontconfig1-dev` is
+  not needed to build** — which is what lets `svg`/`pdf`/`hep` be default
+  features without breaking `cargo install ggsql-cli` on a bare box. Verified
+  in `debian:bookworm-slim` and `manylinux_2_28`, neither of which ships the
+  `-dev` package; CI installs only the runtime library so every run re-checks
+  it. macOS uses CoreText and needs nothing.
+
+  **With no fontconfig at all, a render silently loses all text**: geometry
+  draws, every `<text>` disappears, and the exit code is 0. Worth knowing when
+  a minimal container produces an unlabelled plot.
 - **A GPU is needed for raster output, not to see a plot.** `svg`, `pdf` and
   `hep` need no adapter and no wgpu, so they are the fallback for a machine
   that has none — and the reason CI has hard assertions at all.
-- **MSRV split, and it is narrower than it looks.** ggsql's MSRV is CRAN-locked
-  at 1.86, and only the builds that pull the GPU rasteriser are genuinely
-  1.88+. The vector
-  and document writers **compile on 1.86** — what refuses is cargo's *floor
-  check*, because `parley` declares `rust-version = 1.88` while compiling fine
-  on 1.86, and `--ignore-rust-version` bypasses a declaration check:
+- **The vector and document writers are default features *and* MSRV-clean.**
+  `svg`, `pdf` and `hep` need no adapter, no wgpu and no `-dev` package, so
+  there is nothing to opt into — and they still compile on CRAN's 1.86, which
+  is what keeps them available to the R package's vendored copy. What refuses
+  on 1.86 is cargo's *declaration* check, because `parley` declares 1.88 while
+  compiling fine on it, and `--ignore-rust-version` bypasses a declaration:
 
   ```sh
-  cargo +1.86 check -p ggsql --features svg,pdf,hep --ignore-rust-version   # passes
+  cargo +1.86 check --ignore-rust-version -p ggsql   # default features; passes
   ```
 
-  hephaestus keeps a CI job asserting this stays true. So `svg`/`pdf`/`hep`
-  remain viable for the R/CRAN target; `png`/`jpeg`/`tiff`/`webp` do not, and
-  CI runs their steps with `cargo +stable`.
+  CI runs exactly that, so the claim is checked rather than asserted. The four
+  raster writers are genuinely 1.88+ (wgpu), which is one more reason they are
+  not default. **Do not use a 1.87+ std API anywhere in the library** —
+  `rust-version = "1.86"` keeps clippy flagging one as a lint, and that guard
+  is why the declaration stays at 1.86 rather than following `parley`'s.
 - **The dependency is the published `0.4.1` crate** (`src/Cargo.toml`), pinned
   with `default-features = false` so the GPU rasteriser arrives only with
   `raster`. So
@@ -693,10 +706,11 @@ so one run inventories every gap at once. Implementation notes:
 
 Deliberately not done, in rough order of how likely they are to bite:
 
-- **No snapshot tests** (see [Testing](#testing)) — whole-picture correctness is
-  checked by eyeballing, with the harness for doing it at scale. The SVG corpus
-  is the natural fixture surface, being deterministic text where a 2 px panel
-  shift reads as a hunk rather than as a changed hash.
+- **No committed snapshot fixtures** (see [Testing](#testing)) — whole-picture
+  correctness is checked by eyeballing, with the harness's `--baseline` for
+  doing it at scale. The SVG corpus is the natural fixture surface, being
+  deterministic text where a 2 px panel shift reads as a hunk rather than as a
+  changed hash; whether to commit it is still open.
 - **Log-scale tick labels are wrong, and not because of this writer.** ggsql
   resolves a 1–100 `log10` domain to breaks of
   `[5e-308, 2e-256, …, 100]`, and both writers faithfully print those. The fix

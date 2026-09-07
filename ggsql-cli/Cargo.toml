@@ -50,7 +50,7 @@ regex.workspace = true
 ureq = "3"
 
 [features]
-default = ["duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc"]
+default = ["duckdb", "sqlite", "vegalite", "parquet", "builtin-data", "odbc", "svg", "pdf", "hep"]
 duckdb = ["ggsql/duckdb"]
 parquet = ["ggsql/parquet"]
 sqlite = ["ggsql/sqlite"]
@@ -97,4 +97,11 @@ binaries = [
   { path = "ggsql", main = true },
   { path = "ggsql-jupyter", main = false },
 ]
+
+# The default `svg`/`pdf`/`hep` writers lay text out through fontconfig, loaded
+# at run time (see /CLAUDE.md). Nothing is needed to *build* against it, but
+# without the runtime library and a font a plot renders with no labels at all
+# and no error, so the package declares both rather than degrading silently.
+[package.metadata.packager.deb]
+depends = ["libfontconfig1", "fonts-dejavu-core"]
 

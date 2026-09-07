@@ -27,7 +27,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
@@ -103,7 +103,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
 
@@ -210,7 +210,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
@@ -317,7 +317,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
 
@@ -364,7 +364,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
 
@@ -415,7 +415,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.86.0
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Get crates.io publish token
         uses: rust-lang/crates-io-auth-action@v1
@@ -476,7 +476,7 @@ jobs:
         run: npm install -g tree-sitter-cli
 
       - name: Install Rust toolchain
-        # This job only builds wasm, which is exempt from the 1.86 MSRV (R
+        # This job only builds wasm, which is exempt from the MSRV (R
         # doesn't use wasm) and needs a newer rustc, so the whole job runs on
         # stable. ggsql-wasm/rust-toolchain.toml also selects stable for the build.
         uses: dtolnay/rust-toolchain@stable

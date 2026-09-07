@@ -55,7 +55,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --auditwheel=skip
+          # raster-plots adds the png/jpeg/tiff writers. They need a GPU
+          # adapter at *run* time and fall back to SVG without one, so a wheel
+          # carrying them still works on a headless machine. No
+          # before-script-linux: ggsql enables fontique's `fontconfig-dlopen`,
+          # so nothing here needs fontconfig-devel at build time — verified in
+          # this exact image, which does not ship it.
+          args: --release --out dist --auditwheel=skip --features raster-plots
           working-directory: ggsql-jupyter
           manylinux: 2_28
           docker-options: -e GGSQL_SKIP_GENERATE=1
@@ -89,7 +95,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --auditwheel=skip
+          args: --release --out dist --auditwheel=skip --features raster-plots
           working-directory: ggsql-jupyter
 
       - uses: actions/upload-artifact@v4
@@ -114,7 +120,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x64
-          args: --release --out dist
+          args: --release --out dist --features raster-plots
           working-directory: ggsql-jupyter
 
       - uses: actions/upload-artifact@v4
