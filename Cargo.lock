@@ -2554,6 +2554,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "arrow",
+ "base64",
  "bytes",
  "chrono",
  "clap",

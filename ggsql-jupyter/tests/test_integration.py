@@ -183,15 +183,32 @@ class TestExecution:
         content = execute_result["content"]
         assert "data" in content
 
-        # Should have Vega-Lite MIME type
+        # A plot arrives as a rendered image: PNG where this build has the
+        # raster writers and the machine has a GPU adapter, SVG otherwise.
         data = content["data"]
-        assert "application/vnd.vegalite.v6+json" in data
+        assert (
+            "image/png" in data or "image/svg+xml" in data
+        ), f"expected a rendered plot, got {sorted(data)}"
+        assert "text/plain" in data
 
-        # Check Vega-Lite spec structure
-        vega_spec = data["application/vnd.vegalite.v6+json"]
-        assert "$schema" in vega_spec
-        assert "data" in vega_spec
-        assert "mark" in vega_spec or "layer" in vega_spec
+        if "image/svg+xml" in data:
+            assert data["image/svg+xml"].startswith("<svg")
+        else:
+            # base64-encoded bytes carrying the PNG signature
+            import base64
+
+            assert base64.b64decode(data["image/png"]).startswith(b"\x89PNG")
+
+        # The rendered size travels with it, so a 2x render is displayed at 1x
+        # rather than at twice its intended size.
+        mime = "image/png" if "image/png" in data else "image/svg+xml"
+        assert content["metadata"][mime]["width"] > 0
+        assert content["metadata"][mime]["height"] > 0
+
+        # Nothing in the bundle reaches for a CDN — this is what lets a plot
+        # render offline, in CI, and behind a firewall.
+        assert "jsdelivr" not in str(data)
+        assert "vega-embed" not in str(data)
 
     def test_error_handling(self, client):
         """Test that syntax errors are reported correctly."""

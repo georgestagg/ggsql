@@ -8,6 +8,7 @@ mod display;
 mod executor;
 mod kernel;
 mod message;
+mod plot;
 use anyhow::{Context, Result};
 use clap::Parser;
 use display::SessionMode;

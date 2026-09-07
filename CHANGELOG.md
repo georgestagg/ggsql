@@ -67,6 +67,27 @@
   the png writer draws them.
 
 ### Changed
+- **Plots in notebooks and documents are now rendered by the kernel and no
+  longer need network access.** A `VISUALISE` query in JupyterLab, in a Positron
+  notebook, or in a Quarto render used to emit HTML that fetched vega, vega-lite
+  and vega-embed from a CDN on every render; it now emits a rendered image. So
+  plots work offline, in CI and behind a firewall, each output is a fraction of
+  the size, and nothing depends on a third-party host staying up.
+
+  **Quarto is obeyed rather than guessed at.** `QUARTO_FIG_FORMAT` selects the
+  writer (`png`, `jpeg`, `svg`, `pdf`), and `QUARTO_FIG_WIDTH`/`_HEIGHT` are
+  read as inches at `QUARTO_FIG_DPI` — so `fig-width: 6` finally means six
+  inches, and a PDF document gets a real vector figure with selectable text and
+  embedded fonts instead of a rasterised screenshot.
+
+  **A GPU is needed for raster output, not to see a plot.** Without an adapter,
+  or in a build without the new non-default `raster-plots` feature, plots render
+  as SVG — carrying the same resolved scales, breaks and labels, and needing
+  neither wgpu nor an adapter.
+
+  Two things are lost with vega-embed, and worth knowing: a static image has no
+  tooltips, no pan/zoom and no save-as menu. Positron's Plots pane supplies its
+  own, so the loss is felt mainly in plain Jupyter and Quarto HTML.
 - `--writer` now lists every format ggsql knows in its long help, marking the
   ones the running build does not have and naming the feature that would bring
   each in — the more common mistake than a misspelled name. `-D`'s long help

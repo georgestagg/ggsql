@@ -18,8 +18,12 @@ name = "ggsql_jupyter"
 path = "src/lib.rs"
 
 [dependencies]
-# Core ggsql library
-ggsql = { workspace = true, features = ["duckdb", "vegalite"] }
+# Core ggsql library.
+#
+# `svg` and `pdf` are not optional: SVG is the fallback whenever raster output
+# is unavailable, so the path that always works must always be compiled in.
+# They cost no GPU stack and no wgpu, which is what makes that affordable.
+ggsql = { workspace = true, features = ["duckdb", "vegalite", "svg", "pdf"] }
 
 # Arrow for DataFrame array types
 arrow = { workspace = true }
@@ -57,12 +61,21 @@ hex = "0.4"
 # UUID for message IDs
 uuid = { version = "1.0", features = ["v4"] }
 
+# Binary output travels base64-encoded in a display bundle
+base64 = { workspace = true }
+
 [features]
 default = ["all-readers"]
 all-readers = ["sqlite", "odbc", "duckdb"]
 odbc = ["ggsql/odbc"]
 sqlite = ["ggsql/sqlite"]
 duckdb = ["ggsql/duckdb"]
+
+# The raster plot formats, which need a GPU adapter at render time and the wgpu
+# stack at build time. Non-default on purpose: the SVG fallback is what a build
+# without them uses, so the path that always works is never the one that has to
+# be opted into.
+raster-plots = ["ggsql/png", "ggsql/jpeg"]
 
 [dev-dependencies]
 tempfile = "3.8"

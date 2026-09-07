@@ -5,7 +5,10 @@
 
 use crate::executor::ExecutionResult;
 use crate::message::MessageHeader;
+use crate::plot::{self, Canvas, Delivery, PlotBackend, RenderRequest};
 use anyhow::Result;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use clap::ValueEnum;
 use ggsql::reader::Spec;
 use ggsql::writer::{VegaLiteWriter, Writer};
@@ -97,7 +100,10 @@ impl SessionKind {
 #[derive(Default, Debug, Clone, Copy)]
 pub struct RenderHints {
     pub kind: SessionKind,
+    /// Width of the output slot in CSS pixels, when the frontend says.
     pub output_width_px: Option<u32>,
+    /// Device pixel ratio of the display, when the frontend says.
+    pub pixel_ratio: Option<f64>,
 }
 
 impl RenderHints {
@@ -106,14 +112,50 @@ impl RenderHints {
         content: &Value,
         mode: Option<SessionMode>,
     ) -> Self {
-        let output_width_px = content
-            .get("positron")
+        // Positron puts both of these on the execute request for a notebook
+        // or inline cell — see `runtimeNotebookKernel.ts`, which measures the
+        // output slot and reads the window's `devicePixelRatio`.
+        let positron = content.get("positron");
+        let output_width_px = positron
             .and_then(|p| p.get("output_width_px"))
             .and_then(|v| v.as_u64())
             .and_then(|v| u32::try_from(v).ok());
+        let pixel_ratio = positron
+            .and_then(|p| p.get("output_pixel_ratio"))
+            .and_then(|v| v.as_f64())
+            .filter(|v| *v > 0.0);
         Self {
             kind: SessionKind::resolve(header.session.as_str(), mode),
             output_width_px,
+            pixel_ratio,
+        }
+    }
+
+    /// The canvas a static render should use.
+    ///
+    /// **An execute request reports a width but no height**, because the slot
+    /// it describes is a cell output — as wide as the cell and as tall as
+    /// whatever it is given. So the height is ours to pick, and the golden
+    /// ratio is close to ggplot2's own default figure and a better answer than
+    /// a square.
+    ///
+    /// This is not how the Plots pane is sized. A pane reports a **full**
+    /// size, through the plot comm's `render` request and through the ui
+    /// comm's `did_change_plots_render_settings` — both carrying a required
+    /// `{width, height}` plus a pixel ratio — which is why a plot in the pane
+    /// fits it exactly. Neither reaches this function: the pane's size arrives
+    /// per render, not per execution.
+    pub fn canvas(&self) -> Canvas {
+        let ratio = self.pixel_ratio.unwrap_or(1.0);
+        match self.output_width_px {
+            Some(width) if width > 0 => {
+                let width = f64::from(width);
+                Canvas::from_logical(width, width / 1.618, ratio)
+            }
+            _ => {
+                let default = Canvas::default();
+                Canvas::from_logical(f64::from(default.width), f64::from(default.height), ratio)
+            }
         }
     }
 }
@@ -135,12 +177,21 @@ impl RenderHints {
 ///   "transient": { ... }
 /// }
 /// ```
-pub fn format_display_data(result: ExecutionResult, hints: &RenderHints) -> Result<Option<Value>> {
+pub fn format_display_data(
+    result: ExecutionResult,
+    hints: &RenderHints,
+    backend: &PlotBackend,
+) -> Result<Option<Value>> {
     match result {
         // Rendering can now fail, because it happens here rather than at
         // execution time — which is the point: the format is chosen where the
         // destination is known.
-        ExecutionResult::Visualization(spec) => Ok(Some(format_vegalite(&spec, hints)?)),
+        ExecutionResult::Visualization(spec) => {
+            match plot::choose(hints.kind, backend.raster(), hints.canvas()) {
+                Delivery::VegaLite => Ok(Some(format_vegalite(&spec, hints)?)),
+                Delivery::Static(request) => Ok(Some(format_static(spec, request, backend)?)),
+            }
+        }
         ExecutionResult::DataFrame(df) => {
             // DDL statements return DataFrames with 0 columns - don't display anything
             if df.width() == 0 {
@@ -165,6 +216,49 @@ fn format_connection_changed(display_name: &str) -> Value {
         "metadata": {},
         "transient": {}
     })
+}
+
+/// Render a plot to an image and wrap it as a static display bundle.
+///
+/// **No `output_location`.** That key routes an output to Positron's plot
+/// widget, which would show the picture in the Plots pane *as well as* putting
+/// it in the cell — one plot arriving twice. A static bundle belongs wherever
+/// the cell's output goes and nowhere else.
+///
+/// `metadata[mime].width/height` carries the size the frontend should display
+/// at, in CSS pixels. Without it a 2x render appears at twice its intended
+/// size; JupyterLab and nbconvert both honour it.
+fn format_static(spec: Box<Spec>, request: RenderRequest, backend: &PlotBackend) -> Result<Value> {
+    let metadata = spec.metadata();
+    let summary = format!(
+        "<ggsql plot: {} layer{}, {} row{}>",
+        metadata.layer_count,
+        if metadata.layer_count == 1 { "" } else { "s" },
+        metadata.rows,
+        if metadata.rows == 1 { "" } else { "s" },
+    );
+
+    let bytes = backend.render(spec, request)?;
+    let mime = request.format.mime();
+    // SVG is text and travels as itself; everything else is bytes and travels
+    // base64-encoded, which is what a display bundle expects for binary data.
+    let payload = if request.format.is_text() {
+        String::from_utf8(bytes)?
+    } else {
+        BASE64.encode(&bytes)
+    };
+
+    let (css_width, css_height) = request.canvas.css_size();
+    Ok(json!({
+        "data": {
+            mime: payload,
+            "text/plain": summary,
+        },
+        "metadata": {
+            mime: { "width": css_width, "height": css_height }
+        },
+        "transient": {},
+    }))
 }
 
 /// Render a resolved plot as Vega-Lite and wrap it as display_data.
@@ -482,17 +576,22 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn test_vegalite_format() {
-        let result = ExecutionResult::Visualization(Box::new(a_spec()));
-        let display = format_display_data(result, &RenderHints::default())
-            .expect("rendering should succeed")
-            .expect("Visualization should return Some");
+    fn render(hints: &RenderHints) -> Value {
+        format_display_data(
+            ExecutionResult::Visualization(Box::new(a_spec())),
+            hints,
+            &backend(),
+        )
+        .expect("rendering should succeed")
+        .expect("a visualization should produce output")
+    }
 
-        assert!(display["data"]["text/html"].is_string());
-        assert!(display["data"]["text/plain"].is_string());
-        // Still routed to the Plots pane, and still a vega-embed payload —
-        // the wire format is unchanged by moving the render here.
+    #[test]
+    fn test_console_still_gets_vegalite() {
+        // The console keeps the Plots-pane payload until a plot comm replaces
+        // it; switching it to a static image before then would lose the pane's
+        // resize behaviour and gain nothing.
+        let display = render(&positron_console());
         assert_eq!(display["output_location"], "plot");
         let html = display["data"]["text/html"].as_str().unwrap();
         assert!(html.contains("vega-embed"), "{html:.200}");
@@ -500,11 +599,100 @@ mod tests {
     }
 
     #[test]
+    fn test_a_notebook_gets_a_static_image_in_its_cell() {
+        let display = render(&positron_notebook());
+
+        // SVG, because this backend has no GPU — and the fallback is the point:
+        // a plot still arrives.
+        let svg = display["data"]["image/svg+xml"].as_str().unwrap();
+        assert!(svg.starts_with("<svg"), "{svg:.80}");
+        assert!(display["data"]["text/html"].is_null(), "no CDN payload");
+
+        // A plain-text summary for a frontend that renders neither.
+        let text = display["data"]["text/plain"].as_str().unwrap();
+        assert!(text.contains("layer"), "{text}");
+
+        // **No `output_location`.** That key would route this to the Plots
+        // pane as well as the cell, and the plot would arrive twice.
+        assert!(
+            display.get("output_location").is_none(),
+            "a static bundle must not claim a plot slot"
+        );
+    }
+
+    #[test]
+    fn test_a_retina_notebook_renders_at_its_own_ratio() {
+        // Positron puts `output_pixel_ratio` on the execute request next to
+        // `output_width_px`, so a retina cell gets a sharp plot rather than an
+        // upscaled one.
+        let hints = RenderHints::from_request(
+            &header("ggsql-notebook-abc"),
+            &json!({"positron": {"output_width_px": 600, "output_pixel_ratio": 2.0}}),
+            None,
+        );
+        assert_eq!(hints.pixel_ratio, Some(2.0));
+
+        let canvas = hints.canvas();
+        // Twice the device pixels, at twice the dpi...
+        assert_eq!(canvas.width, 1200);
+        assert_eq!(canvas.dpi, 192.0);
+        // ...displayed at the size the cell actually is.
+        assert_eq!(canvas.css_size(), (600, 371));
+    }
+
+    #[test]
+    fn test_a_missing_ratio_falls_back_to_one() {
+        // Plain Jupyter reports nothing, and an older Positron reports only a
+        // width. Rendering at 1x is soft on a retina display; assuming 2x
+        // would waste four times the pixels on every plot everywhere else.
+        let hints = RenderHints::from_request(
+            &header("abcd-1234"),
+            &json!({"positron": {"output_width_px": 600}}),
+            None,
+        );
+        assert_eq!(hints.pixel_ratio, None);
+        assert_eq!(hints.canvas().dpi, 96.0);
+        assert_eq!(hints.canvas().width, 600);
+    }
+
+    #[test]
+    fn test_a_nonsense_ratio_is_ignored_rather_than_used() {
+        let hints = RenderHints::from_request(
+            &header("ggsql-notebook-abc"),
+            &json!({"positron": {"output_width_px": 600, "output_pixel_ratio": 0}}),
+            None,
+        );
+        assert_eq!(hints.pixel_ratio, None);
+    }
+
+    #[test]
+    fn test_a_static_bundle_declares_the_size_to_show_it_at() {
+        // 589 CSS px wide, as the notebook hints report.
+        let display = render(&positron_notebook());
+        let metadata = &display["metadata"]["image/svg+xml"];
+        assert_eq!(metadata["width"], 589);
+        assert_eq!(metadata["height"], 364);
+    }
+
+    #[test]
+    fn test_standalone_gets_a_static_image_and_needs_no_network() {
+        // The headline change: a plain Jupyter or Quarto render no longer
+        // reaches for a CDN, so a plot works offline and in CI.
+        let display = render(&RenderHints::default());
+        assert!(display["data"]["image/svg+xml"].is_string());
+        let bundle = serde_json::to_string(&display).unwrap();
+        assert!(
+            !bundle.contains("jsdelivr") && !bundle.contains("vega-embed"),
+            "a static bundle should carry no CDN reference"
+        );
+    }
+
+    #[test]
     fn test_empty_dataframe_returns_none() {
         // DDL statements return DataFrames with 0 columns
         let df = DataFrame::empty();
         let result = ExecutionResult::DataFrame(df);
-        let display = format_display_data(result, &RenderHints::default()).unwrap();
+        let display = format_display_data(result, &RenderHints::default(), &backend()).unwrap();
 
         assert!(
             display.is_none(),
@@ -521,7 +709,7 @@ mod tests {
         let empty: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
         let df = DataFrame::new(vec![("x", empty)]).unwrap();
         let result = ExecutionResult::DataFrame(df);
-        let display = format_display_data(result, &RenderHints::default()).unwrap();
+        let display = format_display_data(result, &RenderHints::default(), &backend()).unwrap();
 
         assert!(
             display.is_some(),
@@ -537,10 +725,17 @@ mod tests {
         );
     }
 
+    /// A render backend with no GPU, so tests are fast and identical
+    /// everywhere. The SVG path it leaves is the one that always works.
+    fn backend() -> PlotBackend {
+        PlotBackend::without_raster()
+    }
+
     fn positron_console() -> RenderHints {
         RenderHints {
             kind: SessionKind::PositronConsole,
             output_width_px: None,
+            pixel_ratio: None,
         }
     }
 
@@ -548,6 +743,7 @@ mod tests {
         RenderHints {
             kind: SessionKind::PositronNotebook,
             output_width_px: Some(589),
+            pixel_ratio: None,
         }
     }
 

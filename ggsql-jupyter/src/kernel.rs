@@ -8,6 +8,7 @@ use crate::data_explorer::{DataExplorerState, RpcResponse};
 use crate::display::{format_display_data, RenderHints, SessionMode};
 use crate::executor::{self, ExecutionResult, QueryExecutor};
 use crate::message::{ConnectionInfo, JupyterMessage, MessageHeader};
+use crate::plot::PlotBackend;
 use anyhow::Result;
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
@@ -28,6 +29,8 @@ pub struct KernelServer {
     #[allow(dead_code)]
     connection: ConnectionInfo,
     executor: QueryExecutor,
+    /// The render thread, and whether it found a GPU adapter.
+    plots: PlotBackend,
     session: String,
     /// What the frontend declared this session to be, if it declared anything.
     /// `None` leaves classification to the session-id heuristic.
@@ -98,6 +101,7 @@ impl KernelServer {
             heartbeat,
             connection,
             executor,
+            plots: PlotBackend::spawn(),
             session,
             session_mode,
             execution_count: 0,
@@ -343,7 +347,9 @@ impl KernelServer {
                 // Per Jupyter spec: execute_result includes execution_count
                 // Only send if there's something to display (DDL returns None)
                 if !silent && !is_connection_changed {
-                    if let Some(display_data) = format_display_data(exec_result, &hints)? {
+                    if let Some(display_data) =
+                        format_display_data(exec_result, &hints, &self.plots)?
+                    {
                         // Build message content, including output_location if present
                         let mut content = json!({
                             "execution_count": self.execution_count,
