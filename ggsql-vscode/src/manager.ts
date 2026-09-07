@@ -193,7 +193,15 @@ function generateMetadata(
         base64EncodedIconSvg: base64Icon,
         startupBehavior: 'explicit' as positron.LanguageRuntimeStartupBehavior,
         sessionLocation: 'workspace' as positron.LanguageRuntimeSessionLocation,
-        extraRuntimeData: {}
+        extraRuntimeData: {},
+        // Without this subscription the frontend never tells the kernel how
+        // large the Plots pane is. The kernel only needs it for one thing: to
+        // pre-render a new plot at the right size, so the pane shows it
+        // immediately instead of blank until its own render request lands.
+        // Every other render already carries its own size on the request.
+        // A string cast rather than the enum, because `positron` is imported
+        // as a type here — the same pattern as `startupBehavior` above.
+        uiSubscriptions: ['did_change_plots_render_settings' as positron.UiRuntimeNotifications]
     };
 }
 

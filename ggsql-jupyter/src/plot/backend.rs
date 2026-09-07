@@ -59,6 +59,15 @@ enum Job {
     Store { comm_id: String, spec: Box<Spec> },
     /// Forget a stored plot, because its comm closed or it was evicted.
     Forget { comm_id: String },
+    /// Re-render a stored plot and answer `reply` directly.
+    ///
+    /// The blocking counterpart to `Render`, used once per plot for the
+    /// pre-render that rides on `comm_open`.
+    RenderStored {
+        comm_id: String,
+        request: RenderRequest,
+        reply: Sender<Result<Vec<u8>>>,
+    },
     /// Re-render a stored plot and report the result asynchronously.
     Render {
         comm_id: String,
@@ -181,6 +190,31 @@ impl PlotBackend {
         });
     }
 
+    /// Render a stored plot, blocking until the thread answers.
+    ///
+    /// Blocking is fine here and only here: this runs once, while a plot comm
+    /// is being opened and the pane has not yet asked for anything, so nothing
+    /// is queued behind it. Every render the *pane* asks for goes through
+    /// [`Self::request_render`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the thread has stopped, the plot is unknown, or the
+    /// render failed.
+    pub fn render_stored(&self, comm_id: &str, request: RenderRequest) -> Result<Vec<u8>> {
+        let (reply, answer) = mpsc::channel();
+        self.jobs
+            .send(Job::RenderStored {
+                comm_id: comm_id.to_string(),
+                request,
+                reply,
+            })
+            .map_err(|_| anyhow!("the render thread has stopped"))?;
+        answer
+            .recv()
+            .map_err(|_| anyhow!("the render thread stopped while rendering"))?
+    }
+
     /// Ask for a stored plot to be re-rendered, and return immediately.
     ///
     /// **This is why the thread exists.** The reply arrives later on the
@@ -244,6 +278,17 @@ fn render_loop(
             } => {
                 let result = render_one(&spec, &request, renderer.as_mut());
                 // A caller that gave up before we finished is not an error.
+                let _ = reply.send(result);
+            }
+            Job::RenderStored {
+                comm_id,
+                request,
+                reply,
+            } => {
+                let result = match stored.get(&comm_id) {
+                    Some(spec) => render_one(spec, &request, renderer.as_mut()),
+                    None => Err(anyhow!("this plot is no longer available")),
+                };
                 let _ = reply.send(result);
             }
             Job::Render {

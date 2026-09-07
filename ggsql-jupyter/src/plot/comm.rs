@@ -114,6 +114,20 @@ impl RenderParams {
         })
     }
 
+    /// Encode rendered bytes the way a comm reply carries them.
+    ///
+    /// **Always base64, even for SVG.** Positron builds
+    /// `data:{mime_type};base64,{data}` from the reply
+    /// (`languageRuntimePlotClient.ts`), so text sent as itself would produce
+    /// an invalid URI. This is the opposite of a static display bundle, where
+    /// `image/svg+xml` travels as text — two transports, two conventions. The
+    /// reference Python backend encodes unconditionally for the same reason.
+    pub fn encode(bytes: &[u8]) -> String {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        STANDARD.encode(bytes)
+    }
+
     /// The `result` half of a successful `render` reply.
     ///
     /// **`mime_type` names the format that was actually produced.** Positron
@@ -291,6 +305,42 @@ mod tests {
         assert_eq!(result["settings"]["size"]["height"], 300);
         assert_eq!(result["settings"]["pixel_ratio"], 2.0);
         assert_eq!(result["settings"]["format"], "png");
+    }
+
+    #[test]
+    fn the_panes_render_settings_parse_as_a_render_request() {
+        // `did_change_plots_render_settings` carries a `plot_render_settings`,
+        // whose shape is a `render` request's params — size, pixel_ratio and
+        // format, all required there. Parsing them with the same function is
+        // what keeps a pre-render identical to what a render would produce.
+        let settings = json!({
+            "size": {"width": 500, "height": 400},
+            "pixel_ratio": 2,
+            "format": "png"
+        });
+        let parsed = RenderParams::from_rpc(&settings).unwrap();
+        assert_eq!(parsed.request.canvas.width, 1000);
+        assert_eq!(parsed.request.canvas.height, 800);
+        assert_eq!(parsed.request.format, Format::Png);
+        // And the echoed settings match what the pane asked for, which is what
+        // Positron gates a pre-render on.
+        let result = parsed.to_result("AAAA".into());
+        assert_eq!(result["settings"]["size"]["width"], 500);
+        assert_eq!(result["settings"]["size"]["height"], 400);
+        assert!(result["settings"].get("pixel_ratio").is_some());
+    }
+
+    #[test]
+    fn svg_is_base64_encoded_like_every_other_format() {
+        // Positron builds `data:<mime>;base64,<data>` from a comm reply, so
+        // text sent as itself would produce an invalid URI. A static display
+        // bundle is the other way round — this is the comm's convention.
+        let encoded = RenderParams::encode(b"<svg/>");
+        assert_eq!(encoded, "PHN2Zy8+");
+        assert!(
+            !encoded.starts_with('<'),
+            "svg must not travel as text here"
+        );
     }
 
     #[test]

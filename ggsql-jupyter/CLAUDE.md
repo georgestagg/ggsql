@@ -123,6 +123,29 @@ Verified rather than assumed: with a large dense render in flight, a `kernel_inf
 
 That matters most for the interactive path, where dragging the Plots pane asks for a frame per event. Positron's `PositronPlotRenderQueue` already serialises renders per session and cancels superseded ones, so the kernel never sees overlapping renders for the same comm and needs no cancellation of its own.
 
+### Pre-rendering, and the one notification we subscribe to
+
+`manager.ts` sets `uiSubscriptions: ['did_change_plots_render_settings']`. Without it the frontend never tells the kernel how large the Plots pane is, and the kernel needs that for exactly one thing: rendering a **new** plot at the right size so `comm_open` can carry it as `pre_render`, and the pane shows it immediately instead of blank until its own render request lands. Every other render already carries its own size on the request.
+
+Three details are easy to get wrong:
+
+- **It is a notification, not a request.** It has no JSON-RPC `id`, and replying to one is a protocol error — so the ui branch checks `rpc_id.is_null()` before building a reply. It previously answered *everything* on that comm with `result: null`.
+- **The first plot of a session carries no pre-render.** The pane has not reported yet, and rendering at a guessed size would show the wrong-sized picture and have it replaced the moment the pane asks properly. The flash is worse than the wait; the reference Python backend skips it for the same reason.
+- **A pre-render without `settings` is silently discarded** (`languageRuntimePlotClient.ts` gates on `pre_render?.settings`), so it always goes through `RenderParams::to_result`, which includes them.
+
+`plot_render_settings` has the same shape as a `render` request's params, so the same parser handles both — which is what keeps a pre-render identical to what a render would have produced.
+
+### Base64, twice over, differently
+
+The two transports disagree, and both are right:
+
+| Transport | `image/svg+xml` | Binary formats |
+| --- | --- | --- |
+| Static display bundle | as text | base64 |
+| Plot comm reply, and `pre_render` | **base64** | base64 |
+
+The comm's convention is forced: Positron builds `data:{mime_type};base64,{data}` from the reply, so text sent as itself yields an invalid URI. The reference Python backend encodes unconditionally for the same reason. `RenderParams::encode` is the comm's one entry point so this cannot drift.
+
 ### The 4096 px raster ceiling
 
 `vello_hybrid` builds its intermediate target with a default `max_texture_size` of **4096**, which the renderer does not override, and exceeding it fails the whole render. A pane on a large display at 2x reaches that easily, so `sizing::MAX_PX` is 4096 — a clamped request gives a slightly softer plot, where an unclamped one gives no plot at all. `ggsql::writer::MAX_RASTER_DIMENSION` is the same number, checked up front by the raster writers so the error names the limit and points at `svg`/`pdf`, which have none.

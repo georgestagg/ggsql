@@ -11,8 +11,6 @@ use crate::message::{ConnectionInfo, JupyterMessage, MessageHeader};
 use crate::plot::comm::{PlotMetadata, RenderParams, RpcError};
 use crate::plot::{PlotBackend, RenderOutcome, RenderTicket};
 use anyhow::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use ggsql::reader::Spec;
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
@@ -52,6 +50,12 @@ pub struct KernelServer {
     max_plots: usize,
     /// Counts plots this session, so an untitled one can be named.
     plot_seq: u32,
+    /// The size, ratio and format the Plots pane last reported, from the ui
+    /// comm's `did_change_plots_render_settings`.
+    ///
+    /// `None` until the pane has reported once, which is why the first plot of
+    /// a session carries no pre-render.
+    plot_render_settings: Option<RenderParams>,
     session: String,
     /// What the frontend declared this session to be, if it declared anything.
     /// `None` leaves classification to the session-id heuristic.
@@ -130,6 +134,7 @@ impl KernelServer {
             plot_order: VecDeque::new(),
             max_plots: max_plots.max(1),
             plot_seq: 0,
+            plot_render_settings: None,
             session,
             session_mode,
             execution_count: 0,
@@ -670,20 +675,28 @@ impl KernelServer {
             }
             // Handle positron.ui requests
             else if Some(comm_id.to_string()) == self.ui_comm_id {
-                self.send_shell_reply(
-                    "comm_msg",
-                    json!({
-                        "comm_id": comm_id,
-                        "data": {
-                            "jsonrpc": "2.0",
-                            "id": rpc_id,
-                            "result": null
-                        }
-                    }),
-                    parent,
-                    identities,
-                )
-                .await?;
+                // **A notification carries no `id`, and replying to one is a
+                // protocol error.** Everything Positron pushes at us on this
+                // comm arrives this way, so the shape has to be checked before
+                // the reply is built.
+                if rpc_id.is_null() {
+                    self.handle_ui_notification(method, &data["params"]);
+                } else {
+                    self.send_shell_reply(
+                        "comm_msg",
+                        json!({
+                            "comm_id": comm_id,
+                            "data": {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "result": null
+                            }
+                        }),
+                        parent,
+                        identities,
+                    )
+                    .await?;
+                }
             }
             // Handle positron.plot requests
             else if self.plot_comms.contains_key(comm_id) {
@@ -921,6 +934,14 @@ impl KernelServer {
         self.plot_comms.insert(comm_id.clone(), metadata);
         self.plot_order.push_back(comm_id.clone());
 
+        // The plot is stored, so it can be rendered at the size the pane last
+        // reported. Nothing to show for the first plot of a session, when the
+        // pane has not reported yet.
+        let data = match self.pre_render(&comm_id) {
+            Some(pre_render) => json!({ "pre_render": pre_render }),
+            None => Value::Null,
+        };
+
         // Parented to the `execute_request`, as every iopub message emitted
         // during an execution must be: it is how a frontend ties the plot to
         // the cell that produced it.
@@ -929,10 +950,7 @@ impl KernelServer {
             json!({
                 "comm_id": comm_id,
                 "target_name": "positron.plot",
-                // `initial_data` in plot.json is nullable, and a pre-render
-                // would need render settings we do not have for the first plot
-                // of a session — sending one at a guessed size would flash.
-                "data": null,
+                "data": data,
             }),
             Some(parent),
         );
@@ -940,6 +958,57 @@ impl KernelServer {
         self.iopub.send(zmq_msg).await?;
 
         self.evict_old_plots().await
+    }
+
+    /// Act on a notification pushed at us over the ui comm.
+    ///
+    /// Nothing is replied to — see the call site.
+    fn handle_ui_notification(&mut self, method: &str, params: &Value) {
+        match method {
+            // The Plots pane reporting its size, ratio and preferred format.
+            // Fired when the pane is resized, and it is the *only* place a
+            // pane's size reaches us outside a render request — which is what
+            // makes a pre-render possible at all.
+            "did_change_plots_render_settings" => {
+                match RenderParams::from_rpc(&params["settings"]) {
+                    Ok(settings) => {
+                        tracing::debug!(
+                            "plots pane render settings: {}x{} @ {}x",
+                            settings.request.canvas.width,
+                            settings.request.canvas.height,
+                            settings.pixel_ratio
+                        );
+                        self.plot_render_settings = Some(settings);
+                    }
+                    Err(e) => tracing::warn!("unusable plot render settings: {:?}", e),
+                }
+            }
+            other => tracing::debug!("ignoring ui notification '{other}'"),
+        }
+    }
+
+    /// Render a plot at the pane's last known settings, for `comm_open`.
+    ///
+    /// `None` when the pane has not reported yet — which is the first plot of
+    /// a session. Rendering at a guessed size there would show the wrong-sized
+    /// picture and then be replaced the moment the pane asks properly, so the
+    /// flash is worse than the wait. The reference Python backend skips it for
+    /// the same reason.
+    ///
+    /// **A pre-render without `settings` is silently discarded** by Positron
+    /// (`languageRuntimePlotClient.ts` gates on `pre_render?.settings`), so
+    /// this always goes through `to_result`, which includes them.
+    fn pre_render(&self, comm_id: &str) -> Option<Value> {
+        let settings = self.plot_render_settings?;
+        // A pre-render is a nicety; if it fails the comm still opens and the
+        // pane's own render request produces the picture a moment later.
+        match self.plots.render_stored(comm_id, settings.request) {
+            Ok(bytes) => Some(settings.to_result(RenderParams::encode(&bytes))),
+            Err(e) => {
+                tracing::debug!("no pre-render for this plot: {e}");
+                None
+            }
+        }
     }
 
     /// Close the oldest plot comms until the history is back within its cap.
@@ -1049,12 +1118,8 @@ impl KernelServer {
 
         match result {
             Ok(bytes) => {
-                // SVG is text and travels as itself; the rest base64-encoded.
-                let encoded = if params.request.format.is_text() {
-                    String::from_utf8(bytes)?
-                } else {
-                    BASE64.encode(&bytes)
-                };
+                // Always base64 here, SVG included — see `RenderParams::encode`.
+                let encoded = RenderParams::encode(&bytes);
                 self.reply_plot_result(
                     params.to_result(encoded),
                     &rpc_id,

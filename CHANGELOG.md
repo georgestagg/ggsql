@@ -74,7 +74,9 @@
   it. The plot history is capped by a new `--max-plots` (default 32), which is
   what bounds memory in a long session; older plots are closed oldest-first.
   Without a GPU adapter the console falls back to a static SVG rather than
-  opening a comm it could not serve a raster request on.
+  opening a comm it could not serve a raster request on. Once the pane has
+  reported its size, a new plot arrives already rendered at it, so it appears
+  immediately rather than blank for a moment.
 - **Plots in notebooks and documents are now rendered by the kernel and no
   longer need network access.** A `VISUALISE` query in JupyterLab, in a Positron
   notebook, or in a Quarto render used to emit HTML that fetched vega, vega-lite
