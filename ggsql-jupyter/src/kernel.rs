@@ -346,11 +346,17 @@ impl KernelServer {
         let silent = content["silent"].as_bool().unwrap_or(false);
         let hints = RenderHints::from_request(&parent.header, content, self.session_mode);
 
+        // `kind` decides where a plot goes, so log the two things that decide
+        // it: the mode the frontend declared, and the session id the heuristic
+        // falls back to when it declared nothing. A plot arriving in the wrong
+        // slot is otherwise indistinguishable from a plot rendered wrongly.
         tracing::info!(
-            "Executing code ({} chars, silent={}, session={:?}, width_px={:?})",
+            "Executing code ({} chars, silent={}, kind={:?} from mode={:?} session={}, width_px={:?})",
             code.len(),
             silent,
             hints.kind,
+            self.session_mode,
+            parent.header.session,
             hints.output_width_px
         );
 
