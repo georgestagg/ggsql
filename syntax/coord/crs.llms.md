@@ -69,6 +69,7 @@ In this context, ‘supported’ means that we are reasonably confident that we 
 | Azimuthal Equidistant | `azimuthal_equidistant` | (0, 0) | NA | `+proj=aeqd` |
 | Interrupted Goode Homolosine | `igh` | 0 | NA | `+proj=igh` |
 | Robinson | `robinson` | 0 | NA | `+proj=robin` |
+| Equal Earth | `equal_earth` | 0 | NA | `+proj=eqearth` |
 
 The way to draw an unsupported map is to use the `target` setting. Unsupported maps are likely drawn without projection-appropriate clipping.
 

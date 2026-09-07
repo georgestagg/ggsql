@@ -42,13 +42,13 @@ LABEL
 
 ##### Line chart
 
-![](./gallery/examples/thumbnails/boxplot.svg)
-
-##### Box plots
-
 ![](./gallery/examples/thumbnails/violin-plot.svg)
 
 ##### Violin plots
+
+![](./gallery/examples/thumbnails/boxplot.svg)
+
+##### Box plots
 
 [See all examples →](gallery/index.llms.md)
 

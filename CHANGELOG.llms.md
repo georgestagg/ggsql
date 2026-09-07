@@ -2,6 +2,8 @@
 
 ### Added
 
+- New `equal_earth` map projection (`+proj=eqearth`).
+
 - New caching layer that wraps any `Reader` with an in-memory, writeable cache backend (currently duckdb or sqlite), making write-constrained databases usable and avoiding repeated remote reads during interactive iteration. Memoized reads are bounded by a TTL and an LRU byte budget, configurable per connection. The cache can be cleared mid-session with the `-- @uncache` meta-command.
 
 - New `PngWriter` renders a plot to a PNG raster image via [hephaestus](https://github.com/posit-dev/hephaestus), behind a new off-by-default `png` feature (`--writer png` in the CLI). `LABEL caption` and the new `minor_breaks` setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.

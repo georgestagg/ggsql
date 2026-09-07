@@ -48,9 +48,9 @@ ul.task-list li input[type="checkbox"] {
 <link href="site_libs/quarto-html/quarto-syntax-highlighting-dcb1874e0c6aa5279562b677d1a72506.css" rel="stylesheet" class="quarto-color-scheme-extra" id="quarto-text-highlighting-styles">
 <script src="site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-27d9141d6de982451b3f5cbbd2944b4c.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-dark-dcd3eca948fe9d3317e121b05665202f.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
-<link href="site_libs/bootstrap/bootstrap-27d9141d6de982451b3f5cbbd2944b4c.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-ee2fbf1385f1445439e0330faa874de9.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-dark-48c390d65c4999e95bad94a105d94c4e.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme quarto-color-alternate" id="quarto-bootstrap" data-mode="light">
+<link href="site_libs/bootstrap/bootstrap-ee2fbf1385f1445439e0330faa874de9.min.css" rel="stylesheet" append-hash="true" class="quarto-color-scheme-extra" id="quarto-bootstrap" data-mode="light">
 <script src="site_libs/quarto-contrib/iconify-3.0.0/iconify-icon.min.js"></script>
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
@@ -296,6 +296,7 @@ gradient teal.
 <section id="added" class="level3">
 <h3 class="anchored" data-anchor-id="added">Added</h3>
 <ul>
+<li><p>New <code>equal_earth</code> map projection (<code>+proj=eqearth</code>).</p></li>
 <li><p>New caching layer that wraps any <code>Reader</code> with an in-memory, writeable cache backend (currently duckdb or sqlite), making write-constrained databases usable and avoiding repeated remote reads during interactive iteration. Memoized reads are bounded by a TTL and an LRU byte budget, configurable per connection. The cache can be cleared mid-session with the <code>-- @uncache</code> meta-command.</p></li>
 <li><p>New <code>PngWriter</code> renders a plot to a PNG raster image via <a href="https://github.com/posit-dev/hephaestus">hephaestus</a>, behind a new off-by-default <code>png</code> feature (<code>--writer png</code> in the CLI). <code>LABEL caption</code> and the new <code>minor_breaks</code> setting have no Vega-Lite equivalent and render only here. Requires a working GPU adapter — hardware or software, e.g. lavapipe — at render time.</p></li>
 <li><p>Writers can be configured from key–value options: <code>Writer::from_options</code> takes a <code>WriterOptions</code> set, and the CLI collects them from a repeatable <code>--writer-option key=value</code> flag on <code>exec</code> and <code>run</code> (short <code>-D</code>, also spellable <code>--writer-options</code>). Several settings can be collapsed into one flag separated by <code>;</code> — <code>-D 'width=1600;dpi=150'</code>, quoted because shells read <code>;</code> themselves — and the two forms mix. The png writer takes <code>width</code>, <code>height</code>, <code>units</code> (<code>px</code>, <code>in</code>, <code>cm</code>, <code>mm</code>, <code>pt</code>), <code>dpi</code>, and <code>background</code> (any CSS color, including <code>transparent</code>), defaulting to a 1500×1000 px white canvas at 300 dpi; the Vega-Lite writer takes none. An unknown key or unusable value is an error naming the option, not a silently ignored setting.</p></li>
