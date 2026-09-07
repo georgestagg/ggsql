@@ -8,10 +8,11 @@
 //! code.
 
 pub mod backend;
+pub mod comm;
 pub mod quarto;
 pub mod sizing;
 
-pub use backend::PlotBackend;
+pub use backend::{PlotBackend, RenderOutcome};
 pub use sizing::Canvas;
 
 use crate::display::SessionKind;
@@ -23,6 +24,8 @@ pub enum Format {
     Jpeg,
     Svg,
     Pdf,
+    /// Only the plot comm asks for this; nothing else routes to it.
+    Tiff,
 }
 
 impl Format {
@@ -35,6 +38,7 @@ impl Format {
             Self::Jpeg => "image/jpeg",
             Self::Svg => "image/svg+xml",
             Self::Pdf => "application/pdf",
+            Self::Tiff => "image/tiff",
         }
     }
 
@@ -46,8 +50,27 @@ impl Format {
 
     /// Whether producing this needs a GPU adapter.
     pub fn needs_raster(self) -> bool {
-        matches!(self, Self::Png | Self::Jpeg)
+        matches!(self, Self::Png | Self::Jpeg | Self::Tiff)
     }
+}
+
+/// What a comm render needs to send its answer back where it came from.
+///
+/// The render thread treats this as opaque and echoes it with the result. It
+/// lives here rather than in `backend` so the thread carries no knowledge of
+/// the messaging layer beyond moving this along.
+#[derive(Debug, Clone)]
+pub struct RenderTicket {
+    pub comm_id: String,
+    /// The JSON-RPC `id` to answer.
+    pub rpc_id: serde_json::Value,
+    /// The request being answered, which decides the reply's `mime_type` and
+    /// echoed `settings`.
+    pub params: comm::RenderParams,
+    /// The `comm_msg` this is a reply to, and the socket identities to route
+    /// it back along.
+    pub parent: crate::message::JupyterMessage,
+    pub identities: Vec<Vec<u8>>,
 }
 
 /// A plot to render, at a size, in a format.
@@ -63,20 +86,37 @@ pub enum Delivery {
     /// A static bundle in the cell's output, which is what a notebook, a
     /// Quarto render and plain Jupyter all want.
     Static(RenderRequest),
-    /// The existing Vega-Lite HTML payload, routed to Positron's Plots pane.
+    /// A `positron.plot` comm, which the kernel opens and then serves render
+    /// requests on. **No `execute_result` accompanies it** — the comm alone
+    /// creates the pane entry, so an output message as well would show the
+    /// plot twice.
+    Comm,
+    /// The old Vega-Lite HTML payload, routed to Positron's Plots pane.
     ///
-    /// Still the console path until the plot comm exists to replace it.
+    /// No longer chosen, and kept only as an escape hatch: setting
+    /// `GGSQL_PLOT_VEGALITE=1` puts a console session back on it. That exists
+    /// so a problem with the comm in a real Positron build can be confirmed
+    /// against the previous behaviour without rebuilding, and it goes away
+    /// with the Vega-Lite plot path itself.
     VegaLite,
+}
+
+/// Whether the temporary Vega-Lite escape hatch is set.
+fn vegalite_override() -> bool {
+    std::env::var("GGSQL_PLOT_VEGALITE")
+        .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 /// Decide what to do with a plot.
 ///
 /// The rules, in the order they apply:
 ///
-/// 1. **A Positron console session keeps the Vega-Lite payload** — for now.
-///    Its replacement is a `positron.plot` comm, and until that exists,
-///    switching the console to a static image would lose the Plots pane's
-///    resize behaviour and gain nothing.
+/// 1. **A Positron console session opens a plot comm** — but only if raster
+///    output is possible. Positron asks the comm for `png`, and answering a
+///    `png` request with SVG bytes would have it write SVG into a file named
+///    `.png`; so with no adapter the console takes the static SVG path
+///    instead, and gets a picture rather than a broken one.
 /// 2. **Quarto is obeyed.** If `QUARTO_FIG_FORMAT` and friends are set, the
 ///    document has told us exactly what figure it wants, including its size
 ///    in inches. Only for a standalone session — Quarto never drives a
@@ -88,7 +128,18 @@ pub enum Delivery {
 ///    and labels the raster path would.
 pub fn choose(kind: SessionKind, backend_raster: bool, canvas: Canvas) -> Delivery {
     if kind == SessionKind::PositronConsole {
-        return Delivery::VegaLite;
+        if vegalite_override() {
+            return Delivery::VegaLite;
+        }
+        if backend_raster {
+            return Delivery::Comm;
+        }
+        // No adapter: fall through to a static SVG bundle rather than open a
+        // comm we cannot serve a `png` request on.
+        return Delivery::Static(RenderRequest {
+            format: Format::Svg,
+            canvas,
+        });
     }
 
     if kind == SessionKind::Standalone {
@@ -128,16 +179,22 @@ mod tests {
     };
 
     #[test]
-    fn a_console_session_still_gets_vega_lite() {
-        // Until the plot comm lands. Both with and without an adapter: the
-        // console path does not depend on one yet.
-        for raster in [true, false] {
-            assert_eq!(
-                choose(SessionKind::PositronConsole, raster, CANVAS),
-                Delivery::VegaLite,
-                "raster={raster}"
-            );
-        }
+    fn a_console_session_opens_a_plot_comm() {
+        assert_eq!(
+            choose(SessionKind::PositronConsole, true, CANVAS),
+            Delivery::Comm
+        );
+    }
+
+    #[test]
+    fn a_console_without_an_adapter_gets_a_picture_rather_than_a_comm() {
+        // Positron asks a comm for `png`. Answering that with SVG bytes would
+        // display fine and then save SVG into a `.png`, so with no adapter the
+        // console takes the static path instead.
+        let Delivery::Static(request) = choose(SessionKind::PositronConsole, false, CANVAS) else {
+            panic!("expected a static bundle");
+        };
+        assert_eq!(request.format, Format::Svg);
     }
 
     #[test]
@@ -172,12 +229,13 @@ mod tests {
         assert_eq!(Format::Jpeg.mime(), "image/jpeg");
         assert_eq!(Format::Svg.mime(), "image/svg+xml");
         assert_eq!(Format::Pdf.mime(), "application/pdf");
+        assert_eq!(Format::Tiff.mime(), "image/tiff");
     }
 
     #[test]
     fn only_svg_travels_as_text() {
         assert!(Format::Svg.is_text());
-        for format in [Format::Png, Format::Jpeg, Format::Pdf] {
+        for format in [Format::Png, Format::Jpeg, Format::Pdf, Format::Tiff] {
             assert!(!format.is_text(), "{format:?}");
         }
     }
@@ -186,7 +244,7 @@ mod tests {
     fn the_vector_formats_need_no_adapter() {
         assert!(!Format::Svg.needs_raster());
         assert!(!Format::Pdf.needs_raster());
-        for format in [Format::Png, Format::Jpeg] {
+        for format in [Format::Png, Format::Jpeg, Format::Tiff] {
             assert!(format.needs_raster(), "{format:?}");
         }
     }

@@ -67,7 +67,7 @@ pub use canvas::Canvas;
 use canvas::CANVAS_HINT_OPTIONS;
 
 #[cfg(feature = "raster-writer")]
-pub use raster::RasterRenderer;
+pub use raster::{RasterRenderer, MAX_RASTER_DIMENSION};
 
 #[cfg(feature = "hep")]
 pub use hep::HepWriter;

@@ -28,8 +28,9 @@ ggsql = { workspace = true, features = ["duckdb", "vegalite", "svg", "pdf"] }
 # Arrow for DataFrame array types
 arrow = { workspace = true }
 
-# Async runtime
-tokio = { workspace = true }
+# Async runtime. `sync` is named explicitly for the render thread's outcome
+# channel rather than relying on another dependency to enable it.
+tokio = { workspace = true, features = ["sync"] }
 
 # CLI
 clap = { workspace = true }
@@ -75,7 +76,7 @@ duckdb = ["ggsql/duckdb"]
 # stack at build time. Non-default on purpose: the SVG fallback is what a build
 # without them uses, so the path that always works is never the one that has to
 # be opted into.
-raster-plots = ["ggsql/png", "ggsql/jpeg"]
+raster-plots = ["ggsql/png", "ggsql/jpeg", "ggsql/tiff"]
 
 [dev-dependencies]
 tempfile = "3.8"

@@ -37,6 +37,15 @@ struct Args {
     #[arg(long, value_enum)]
     session_mode: Option<SessionMode>,
 
+    /// How many plots to keep available for re-rendering.
+    ///
+    /// Each retained plot holds its post-stat data so the Plots pane can
+    /// re-draw it at any size without re-running the query. Positron imposes
+    /// no cap of its own, so this is where a long console session's memory is
+    /// bounded. The oldest plots are closed once the limit is passed.
+    #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u32).range(1..))]
+    max_plots: u32,
+
     /// Install the kernel spec
     #[arg(long)]
     install: bool,
@@ -84,7 +93,13 @@ async fn main() -> Result<()> {
     tracing::info!("Creating kernel server");
 
     // Create and run kernel
-    let mut kernel = kernel::KernelServer::new(connection, &args.reader, args.session_mode).await?;
+    let mut kernel = kernel::KernelServer::new(
+        connection,
+        &args.reader,
+        args.session_mode,
+        args.max_plots as usize,
+    )
+    .await?;
 
     tracing::info!("Kernel ready, starting event loop");
 

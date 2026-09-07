@@ -67,6 +67,14 @@
   the png writer draws them.
 
 ### Changed
+- **Plots in a Positron console now use the Plots pane properly.** Each plot
+  opens a `positron.plot` comm, so the pane re-renders it at the exact size it
+  is given — resizing the pane redraws the plot sharp instead of stretching a
+  fixed-size image — and the pane's own save, copy and zoom affordances work on
+  it. The plot history is capped by a new `--max-plots` (default 32), which is
+  what bounds memory in a long session; older plots are closed oldest-first.
+  Without a GPU adapter the console falls back to a static SVG rather than
+  opening a comm it could not serve a raster request on.
 - **Plots in notebooks and documents are now rendered by the kernel and no
   longer need network access.** A `VISUALISE` query in JupyterLab, in a Positron
   notebook, or in a Quarto render used to emit HTML that fetched vega, vega-lite

@@ -177,31 +177,45 @@ impl RenderHints {
 ///   "transient": { ... }
 /// }
 /// ```
+/// What the kernel should do with a formatted result.
+pub enum Formatted {
+    /// Emit this as the cell's `execute_result`.
+    Bundle(Value),
+    /// Open a `positron.plot` comm for this plot and emit **no**
+    /// `execute_result` — the comm alone creates the pane entry.
+    PlotComm(Box<Spec>),
+    /// Nothing to show, as for a DDL statement.
+    Nothing,
+}
+
 pub fn format_display_data(
     result: ExecutionResult,
     hints: &RenderHints,
     backend: &PlotBackend,
-) -> Result<Option<Value>> {
+) -> Result<Formatted> {
     match result {
-        // Rendering can now fail, because it happens here rather than at
-        // execution time — which is the point: the format is chosen where the
-        // destination is known.
+        // Rendering happens here rather than at execution time — which is the
+        // point: the format is chosen where the destination is known, and so
+        // it can also fail here.
         ExecutionResult::Visualization(spec) => {
             match plot::choose(hints.kind, backend.raster(), hints.canvas()) {
-                Delivery::VegaLite => Ok(Some(format_vegalite(&spec, hints)?)),
-                Delivery::Static(request) => Ok(Some(format_static(spec, request, backend)?)),
+                Delivery::Comm => Ok(Formatted::PlotComm(spec)),
+                Delivery::VegaLite => Ok(Formatted::Bundle(format_vegalite(&spec, hints)?)),
+                Delivery::Static(request) => {
+                    Ok(Formatted::Bundle(format_static(spec, request, backend)?))
+                }
             }
         }
         ExecutionResult::DataFrame(df) => {
             // DDL statements return DataFrames with 0 columns - don't display anything
             if df.width() == 0 {
-                Ok(None)
+                Ok(Formatted::Nothing)
             } else {
-                Ok(Some(format_dataframe(df)))
+                Ok(Formatted::Bundle(format_dataframe(df)))
             }
         }
         ExecutionResult::ConnectionChanged { display_name, .. } => {
-            Ok(Some(format_connection_changed(&display_name)))
+            Ok(Formatted::Bundle(format_connection_changed(&display_name)))
         }
     }
 }
@@ -238,7 +252,7 @@ fn format_static(spec: Box<Spec>, request: RenderRequest, backend: &PlotBackend)
         if metadata.rows == 1 { "" } else { "s" },
     );
 
-    let bytes = backend.render(spec, request)?;
+    let bytes = backend.render_once(spec, request)?;
     let mime = request.format.mime();
     // SVG is text and travels as itself; everything else is bytes and travels
     // base64-encoded, which is what a display bundle expects for binary data.
@@ -577,25 +591,38 @@ mod tests {
     }
 
     fn render(hints: &RenderHints) -> Value {
-        format_display_data(
+        match format_display_data(
             ExecutionResult::Visualization(Box::new(a_spec())),
             hints,
             &backend(),
         )
         .expect("rendering should succeed")
-        .expect("a visualization should produce output")
+        {
+            Formatted::Bundle(bundle) => bundle,
+            Formatted::PlotComm(_) => panic!("expected a bundle, not a comm"),
+            Formatted::Nothing => panic!("expected output"),
+        }
     }
 
     #[test]
-    fn test_console_still_gets_vegalite() {
-        // The console keeps the Plots-pane payload until a plot comm replaces
-        // it; switching it to a static image before then would lose the pane's
-        // resize behaviour and gain nothing.
+    fn test_console_without_an_adapter_falls_back_to_a_picture() {
+        // This test's backend has no GPU, so the console cannot open a comm
+        // Positron would ask `png` of — it gets a static SVG instead.
         let display = render(&positron_console());
-        assert_eq!(display["output_location"], "plot");
-        let html = display["data"]["text/html"].as_str().unwrap();
+        assert!(display["data"]["image/svg+xml"].is_string());
+        assert!(display.get("output_location").is_none());
+    }
+
+    #[test]
+    fn test_the_vegalite_escape_hatch_still_works() {
+        // A temporary way back to the previous behaviour, so a problem with
+        // the comm can be confirmed against it without a rebuild. Goes away
+        // with the Vega-Lite plot path.
+        let spec = a_spec();
+        let bundle = format_vegalite(&spec, &positron_console()).unwrap();
+        assert_eq!(bundle["output_location"], "plot");
+        let html = bundle["data"]["text/html"].as_str().unwrap();
         assert!(html.contains("vega-embed"), "{html:.200}");
-        assert!(html.contains("\"mark\""), "the spec should be embedded");
     }
 
     #[test]
@@ -695,8 +722,8 @@ mod tests {
         let display = format_display_data(result, &RenderHints::default(), &backend()).unwrap();
 
         assert!(
-            display.is_none(),
-            "Empty DataFrame (0 columns) should return None"
+            matches!(display, Formatted::Nothing),
+            "Empty DataFrame (0 columns) should produce nothing"
         );
     }
 
@@ -712,8 +739,8 @@ mod tests {
         let display = format_display_data(result, &RenderHints::default(), &backend()).unwrap();
 
         assert!(
-            display.is_some(),
-            "DataFrame with columns but 0 rows should return Some"
+            matches!(display, Formatted::Bundle(_)),
+            "DataFrame with columns but 0 rows should produce a bundle"
         );
     }
 

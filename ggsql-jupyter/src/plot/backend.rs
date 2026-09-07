@@ -30,12 +30,13 @@
 //! The renderer is `Send` but not `Sync`, which is exactly the shape this
 //! wants: it moves here once and is never shared.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{anyhow, Result};
 use ggsql::reader::Spec;
 
-use super::{Format, RenderRequest};
+use super::{Format, RenderRequest, RenderTicket};
 
 /// How long to wait for a GPU adapter before deciding there isn't one.
 ///
@@ -44,10 +45,31 @@ use super::{Format, RenderRequest};
 /// answered in ten seconds is not one to render through.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// A finished render, on its way back to the message loop.
+pub struct RenderOutcome {
+    pub ticket: Box<RenderTicket>,
+    pub result: Result<Vec<u8>>,
+}
+
 /// Work for the render thread.
 enum Job {
-    /// Render `spec` and send the bytes back down `reply`.
+    /// Keep `spec` so it can be re-rendered on demand. This is what lets a
+    /// plot be re-drawn at a new size without re-running the query — and it is
+    /// why the retained `DataFrame`s live here rather than on the async task.
+    Store { comm_id: String, spec: Box<Spec> },
+    /// Forget a stored plot, because its comm closed or it was evicted.
+    Forget { comm_id: String },
+    /// Re-render a stored plot and report the result asynchronously.
     Render {
+        comm_id: String,
+        request: RenderRequest,
+        // Boxed to keep the variants a similar size: a ticket carries a whole
+        // Jupyter message, and every job would otherwise be that large.
+        ticket: Box<RenderTicket>,
+    },
+    /// Render a plot we were handed and will not keep, answering `reply`
+    /// directly. The one-shot path, for a static output bundle.
+    RenderOnce {
         spec: Box<Spec>,
         request: RenderRequest,
         reply: Sender<Result<Vec<u8>>>,
@@ -71,8 +93,8 @@ impl PlotBackend {
     /// Blocks until the probe finishes, so callers know from the first plot
     /// onward whether raster output is possible. Call it after announcing
     /// `starting` status, not before.
-    pub fn spawn() -> Self {
-        Self::start(true)
+    pub fn spawn(outcomes: tokio::sync::mpsc::UnboundedSender<RenderOutcome>) -> Self {
+        Self::start(true, Some(outcomes))
     }
 
     /// A backend that never builds a GPU renderer.
@@ -83,16 +105,19 @@ impl PlotBackend {
     /// is what a test should be asserting on anyway.
     #[cfg(test)]
     pub fn without_raster() -> Self {
-        Self::start(false)
+        Self::start(false, None)
     }
 
-    fn start(allow_raster: bool) -> Self {
+    fn start(
+        allow_raster: bool,
+        outcomes: Option<tokio::sync::mpsc::UnboundedSender<RenderOutcome>>,
+    ) -> Self {
         let (jobs, inbox) = mpsc::channel();
         let (probed, probe_result) = mpsc::channel();
 
         std::thread::Builder::new()
             .name("ggsql-render".to_string())
-            .spawn(move || render_loop(inbox, probed, allow_raster))
+            .spawn(move || render_loop(inbox, probed, allow_raster, outcomes))
             .expect("failed to spawn the render thread");
 
         // A thread that died before probing, or a driver that never answered,
@@ -118,16 +143,22 @@ impl PlotBackend {
         self.raster
     }
 
-    /// Render a plot, blocking until the thread answers.
+    /// Render a plot once, blocking until the thread answers.
+    ///
+    /// Deliberately blocking, unlike [`Self::request_render`]. This is the
+    /// static path: it runs once per execution, inside a cell that has already
+    /// paid for parsing and SQL, and its output has to be ordered between the
+    /// `execute_input` and the `execute_reply`. A few milliseconds there buys
+    /// a great deal of simplicity.
     ///
     /// # Errors
     ///
     /// Returns an error if the render thread has stopped, or if the render
     /// itself failed.
-    pub fn render(&self, spec: Box<Spec>, request: RenderRequest) -> Result<Vec<u8>> {
+    pub fn render_once(&self, spec: Box<Spec>, request: RenderRequest) -> Result<Vec<u8>> {
         let (reply, answer) = mpsc::channel();
         self.jobs
-            .send(Job::Render {
+            .send(Job::RenderOnce {
                 spec,
                 request,
                 reply,
@@ -136,6 +167,33 @@ impl PlotBackend {
         answer
             .recv()
             .map_err(|_| anyhow!("the render thread stopped while rendering"))?
+    }
+
+    /// Keep a plot so its comm can re-render it at any size.
+    pub fn store(&self, comm_id: String, spec: Box<Spec>) {
+        let _ = self.jobs.send(Job::Store { comm_id, spec });
+    }
+
+    /// Forget a stored plot.
+    pub fn forget(&self, comm_id: &str) {
+        let _ = self.jobs.send(Job::Forget {
+            comm_id: comm_id.to_string(),
+        });
+    }
+
+    /// Ask for a stored plot to be re-rendered, and return immediately.
+    ///
+    /// **This is why the thread exists.** The reply arrives later on the
+    /// outcome channel, so a render — up to a couple of hundred milliseconds
+    /// on a dense plot, and asked for once per frame while a pane is being
+    /// dragged — never blocks the message loop, and with it the heartbeat, the
+    /// control channel and the interrupt handler.
+    pub fn request_render(&self, comm_id: &str, request: RenderRequest, ticket: RenderTicket) {
+        let _ = self.jobs.send(Job::Render {
+            comm_id: comm_id.to_string(),
+            request,
+            ticket: Box::new(ticket),
+        });
     }
 }
 
@@ -146,7 +204,12 @@ impl Drop for PlotBackend {
 }
 
 /// The render thread's body: probe once, then serve jobs until told to stop.
-fn render_loop(inbox: Receiver<Job>, probed: Sender<bool>, allow_raster: bool) {
+fn render_loop(
+    inbox: Receiver<Job>,
+    probed: Sender<bool>,
+    allow_raster: bool,
+    outcomes: Option<tokio::sync::mpsc::UnboundedSender<RenderOutcome>>,
+) {
     // One renderer for the whole session. Building it is the expensive part,
     // and it handles a changing frame size internally, so it serves every
     // subsequent render whatever size that render asks for.
@@ -161,10 +224,20 @@ fn render_loop(inbox: Receiver<Job>, probed: Sender<bool>, allow_raster: bool) {
     // module docs: it is mostly font loading, and it is per process.
     warm_up(renderer.as_mut());
 
+    // The retained plots. They live here rather than beside the comm state so
+    // the post-stat `DataFrame`s stay off the async task entirely.
+    let mut stored: HashMap<String, Box<Spec>> = HashMap::new();
+
     while let Ok(job) = inbox.recv() {
         match job {
             Job::Shutdown => break,
-            Job::Render {
+            Job::Store { comm_id, spec } => {
+                stored.insert(comm_id, spec);
+            }
+            Job::Forget { comm_id } => {
+                stored.remove(&comm_id);
+            }
+            Job::RenderOnce {
                 spec,
                 request,
                 reply,
@@ -172,6 +245,21 @@ fn render_loop(inbox: Receiver<Job>, probed: Sender<bool>, allow_raster: bool) {
                 let result = render_one(&spec, &request, renderer.as_mut());
                 // A caller that gave up before we finished is not an error.
                 let _ = reply.send(result);
+            }
+            Job::Render {
+                comm_id,
+                request,
+                ticket,
+            } => {
+                let result = match stored.get(&comm_id) {
+                    Some(spec) => render_one(spec, &request, renderer.as_mut()),
+                    // The comm closed, or the plot was evicted, between the
+                    // request arriving and us reaching it.
+                    None => Err(anyhow!("this plot is no longer available")),
+                };
+                if let Some(outcomes) = &outcomes {
+                    let _ = outcomes.send(RenderOutcome { ticket, result });
+                }
             }
         }
     }
@@ -269,7 +357,7 @@ fn render_one(
             Ok(pdf)
         }
         #[cfg(feature = "raster-plots")]
-        Format::Png | Format::Jpeg => {
+        Format::Png | Format::Jpeg | Format::Tiff => {
             let renderer = renderer.ok_or_else(|| {
                 anyhow!("this plot needs a GPU adapter, and none was found at startup")
             })?;
@@ -290,11 +378,17 @@ fn render_one(
                             .render_with(spec, renderer)?,
                     )
                 }
+                Format::Tiff => {
+                    Ok(
+                        ggsql::writer::TiffWriter::new(canvas.width, canvas.height, canvas.dpi)
+                            .render_with(spec, renderer)?,
+                    )
+                }
                 Format::Svg | Format::Pdf => unreachable!("handled above"),
             }
         }
         #[cfg(not(feature = "raster-plots"))]
-        Format::Png | Format::Jpeg => {
+        Format::Png | Format::Jpeg | Format::Tiff => {
             let _ = renderer;
             Err(anyhow!(
                 "this build has no raster plot formats; rebuild with --features raster-plots"

@@ -17,7 +17,14 @@ pub const CSS_DPI: f64 = 96.0;
 const MIN_PX: u32 = 32;
 
 /// Largest canvas dimension we will render, in device pixels.
-const MAX_PX: u32 = 16_384;
+///
+/// The rasteriser cannot produce a dimension above 4096 — it is
+/// `vello_hybrid`'s default intermediate-texture size, which the renderer does
+/// not override — and a pane on a large display at 2x reaches that easily. So
+/// the ceiling is the raster one even for the vector formats: capping them too
+/// costs nothing (they are resolution independent, and the *displayed* size is
+/// unaffected) and keeps one number in play instead of two.
+const MAX_PX: u32 = 4_096;
 
 /// Device pixel ratios we will honour. Beyond this a frontend is either
 /// confused or asking for a texture we should not allocate.
@@ -138,6 +145,18 @@ mod tests {
     fn an_absurd_size_is_clamped_rather_than_allocated() {
         let canvas = Canvas::from_logical(99_999.0, 99_999.0, 1.0);
         assert_eq!((canvas.width, canvas.height), (MAX_PX, MAX_PX));
+    }
+
+    #[test]
+    fn a_large_pane_at_two_x_stays_within_what_can_be_rendered() {
+        // 2400 logical px at 2x is 4800 device px, which the rasteriser
+        // refuses outright. Clamping gives a slightly softer plot; not
+        // clamping gives a render error and no plot at all.
+        let canvas = Canvas::from_logical(2400.0, 1400.0, 2.0);
+        assert!(canvas.width <= MAX_PX, "{} px", canvas.width);
+        assert_eq!(canvas.width, MAX_PX);
+        // The height was within the cap, so it is untouched.
+        assert_eq!(canvas.height, 2800);
     }
 
     #[test]

@@ -51,6 +51,35 @@ impl RasterRenderer {
     }
 }
 
+/// Largest canvas dimension the rasteriser can produce, in pixels.
+///
+/// Not a hardware limit: it is the default `max_texture_size` that
+/// `vello_hybrid` builds its intermediate target with, which the renderer does
+/// not currently override. Asking for more fails the whole render, so this is
+/// checked up front to produce an error that says something useful — and names
+/// the vector writers, which have no such ceiling.
+pub const MAX_RASTER_DIMENSION: u32 = 4096;
+
+/// Reject a canvas the rasteriser cannot produce, before it fails deep inside.
+///
+/// # Errors
+///
+/// Returns `GgsqlError::WriterError` naming the limit and the alternatives.
+fn check_size(canvas: &Canvas) -> Result<()> {
+    // The intermediate target is the panel rather than the whole canvas, so
+    // the true ceiling is slightly above this. Checking the canvas is the
+    // honest simplification: it never lets through a render that then fails.
+    if canvas.width > MAX_RASTER_DIMENSION || canvas.height > MAX_RASTER_DIMENSION {
+        return Err(GgsqlError::WriterError(format!(
+            "{}x{} is too large to rasterise: no dimension may exceed {} px. \
+             The svg and pdf writers have no such limit and are resolution \
+             independent, so they are the better choice at this size",
+            canvas.width, canvas.height, MAX_RASTER_DIMENSION
+        )));
+    }
+    Ok(())
+}
+
 /// Draw `view` at the canvas's size and resolution and read the pixels back.
 ///
 /// Returns RGBA8 with straight (un-premultiplied) alpha, `width * height * 4`
@@ -60,6 +89,7 @@ pub fn render_rgba8(
     canvas: &Canvas,
     renderer: &mut RasterRenderer,
 ) -> Result<Vec<u8>> {
+    check_size(canvas)?;
     {
         let scene = renderer.0.scene();
         scene.clear();

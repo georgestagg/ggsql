@@ -74,7 +74,7 @@ mod hephaestus;
 pub use hephaestus::{rgba, Canvas, Color};
 
 #[cfg(feature = "raster-writer")]
-pub use hephaestus::RasterRenderer;
+pub use hephaestus::{RasterRenderer, MAX_RASTER_DIMENSION};
 
 #[cfg(feature = "jpeg")]
 pub use hephaestus::JpegWriter;

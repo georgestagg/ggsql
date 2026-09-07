@@ -73,7 +73,7 @@ Three things have to agree — where the output is going, what this build and ma
 
 | `SessionKind` | Result |
 | --- | --- |
-| `PositronConsole` | The Vega-Lite payload, still — **until the plot comm replaces it** |
+| `PositronConsole` | A `positron.plot` comm, with **no `execute_result`** — or a static SVG bundle when there is no GPU adapter |
 | `PositronNotebook` | A static image bundle in the cell |
 | `Standalone` | What `QUARTO_FIG_FORMAT` asked for, else a static image |
 
@@ -101,7 +101,31 @@ Measured on a release build, Apple GPU, vello-hybrid:
 
 That is why the thread renders a **throwaway 64×64 SVG frame at startup**, before anything is waiting on it: with the warm-up, the first plot of a session renders in ~14 ms rather than ~85 ms, and far better than that on a genuinely cold start. `backend::warm_up` builds its own in-memory database to do it — never the session's reader, since executing a query through that would materialise ggsql's internal views in the user's session.
 
-Per-render cost is otherwise small enough that blocking the message loop on it is acceptable at this stage; the reason to move renders off it entirely is the interactive path, where a resize asks for a frame per drag event.
+### The plot comm
+
+A console session gets one `positron.plot` comm per plot, modelled on `positron.dataExplorer` rather than the singleton connection comm — the pane shows plots as a history. `plot/comm.rs` holds the protocol (all pure, so it is tested without a Positron host); `kernel.rs` holds the transport.
+
+Five things about it are load-bearing:
+
+- **The comm alone creates the pane entry, so the kernel emits no `execute_result` alongside it.** An output message as well — whether an `image/png` bundle or `output_location: "plot"` — puts a second copy of the plot in the pane.
+- **`comm_open` must follow `execute_input`** and be parented to the `execute_request`. Positron populates `_recentExecutions` from `execute_input`, and that is where the plot's `code` metadata comes from.
+- **`render` is answered asynchronously; `get_metadata` is not.** A render goes to the thread and its reply comes back through the `select!` outcome arm, so the message loop stays free. `get_metadata` is answered from `plot_comms` because it gets Positron's default 5 s timeout where `render` gets 30 s — it must never queue behind a render.
+- **`get_intrinsic_size` returns `null`.** ggsql has no figure-size syntax, so there is no intrinsic size, and `null` makes Positron use its fill policy rather than offer an "Intrinsic" option that would be a lie.
+- **`show`/`update` are never sent, and are `MethodNotFound` inbound.** They mean "the backend mutated this figure, re-fetch it"; a ggsql `Spec` is immutable per execution, so re-running a cell opens a *new* comm, as the R and matplotlib backends do. An unknown method is an error rather than `result: null`, so a future Positron method fails visibly instead of being silently satisfied with garbage.
+
+Plots are retained on the render thread and capped by `--max-plots` (default 32), evicted oldest-first with `comm_close` on iopub — which cleanly removes the plot from the pane, the right semantic for "the kernel no longer keeps that plot". Positron imposes no cap of its own, so this is where a long console session's memory is bounded.
+
+`GGSQL_PLOT_VEGALITE=1` puts a console session back on the old Vega-Lite payload. That is a temporary escape hatch for confirming a comm problem against the previous behaviour without a rebuild, and it goes away with the Vega-Lite plot path.
+
+### Why renders are asynchronous
+
+Verified rather than assumed: with a large dense render in flight, a `kernel_info_request` issued immediately after it was answered in **1 ms**, while the render's own reply arrived much later. The message loop — and with it the heartbeat, the control channel and the interrupt handler — is genuinely free during a render.
+
+That matters most for the interactive path, where dragging the Plots pane asks for a frame per event. Positron's `PositronPlotRenderQueue` already serialises renders per session and cancels superseded ones, so the kernel never sees overlapping renders for the same comm and needs no cancellation of its own.
+
+### The 4096 px raster ceiling
+
+`vello_hybrid` builds its intermediate target with a default `max_texture_size` of **4096**, which the renderer does not override, and exceeding it fails the whole render. A pane on a large display at 2x reaches that easily, so `sizing::MAX_PX` is 4096 — a clamped request gives a slightly softer plot, where an unclamped one gives no plot at all. `ggsql::writer::MAX_RASTER_DIMENSION` is the same number, checked up front by the raster writers so the error names the limit and points at `svg`/`pdf`, which have none.
 
 ### Sizing
 
