@@ -19,6 +19,7 @@ src/
 ├── naming.rs                    Internal column-name conventions (__ggsql_*)
 ├── util.rs                      String helpers (and_list, or_list, …)
 ├── validate.rs                  validate(): syntax + semantic checks without SQL execution
+├── fonts.rs                     Font registration, for hosts with no font database
 │
 ├── parser/      Tree-sitter integration → typed AST (Plot)
 ├── plot/        AST: Plot, Layer, Geom, Scale, Facet, Projection, Mappings  (see plot/CLAUDE.md)
@@ -82,6 +83,18 @@ The pipeline that takes a parsed `Plot` plus a `Reader` and produces a fully-res
 
 Three **internal** features carry the split, enabled by the writer features rather than named directly: `graphics` is the shared composition layer, and `raster = graphics + hephaestus/vello-hybrid` adds the GPU rasteriser. Only `raster` pulls in wgpu, vello_hybrid and pollster, which is what lets a vector-only build skip them — `cargo tree --features graphics` shows none of the three, `--features png` shows 19. `raster-writer` then narrows `raster` once more, to "some writer actually reads pixels back" — the viewer needs the rasteriser without ever doing that. `graphics` is the single module gate for `writer/hephaestus/`, so adding a format needs no change there.
 
+### `fonts.rs`
+
+Registering font faces with the shaper, behind `graphics`. Natively the operating
+system enumerates fonts and nothing here is needed; a browser enumerates none, so
+a wasm host has to hand the faces over itself or every plot comes out with no
+text and — since text is what sets the margins — the wrong layout too.
+
+`register_font` takes sfnt bytes, and with the optional `webfonts` feature the
+WOFF and WOFF2 containers a font CDN serves a browser as well. Without it those
+are refused by name, because compressed bytes hold no recognisable face and
+registering nothing is a silent failure.
+
 ### `plot/`
 
 Sufficiently large to have its own [`plot/CLAUDE.md`](plot/CLAUDE.md). It holds the AST types and the registries for geoms, scale types, transforms, positions, and coords.
@@ -124,11 +137,12 @@ Defined in `Cargo.toml`:
 | `hep` | ✓ | `.hep` plot-document writer (`graphics`; no GPU, MSRV-clean) |
 | `hep-read` | — | **Test-only.** Reading a `.hep` back, for the round-trip test |
 | `window` | — | `PlotViewer` — a native plot window (`raster`; not a writer) |
+| `webfonts` | — | `fonts::register_font` also accepts WOFF / WOFF2 (`graphics`) |
 | `builtin-data` | ✓ | Bundled penguins/airquality datasets |
 | `all-readers` | — | `duckdb` + `sqlite` + `odbc` |
 | `all-writers` | — | every writer above except the test-only `hep-read` |
 
-`ggsql-wasm` builds with `default-features = false` plus `vegalite`, `sqlite`, `builtin-data`. `ggsql-jupyter` builds with `duckdb`, `vegalite`.
+`ggsql-wasm` builds with `default-features = false` plus `svg`, `sqlite`, `builtin-data`, `spatial` — it draws plots in the browser with `SvgWriter`, which needs no GPU adapter. `ggsql-jupyter` builds with `duckdb`, `vegalite`.
 
 ## Testing
 

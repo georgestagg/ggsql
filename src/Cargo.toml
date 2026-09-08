@@ -44,6 +44,11 @@ geozero = { workspace = true, optional = true, features = ["with-wkb", "with-wkt
 # the `raster` feature, so a build wanting only vector output pulls no wgpu.
 hephaestus = { version = "0.4.1", optional = true, default-features = false, features = ["geom-wkb", "geom-wkt"] }
 
+# WOFF / WOFF2 decoding for `fonts::register_font`, behind `webfonts`. Pure
+# Rust and no build script; `brotli` here is `brotli-decompressor`, the
+# decode-only half, so the gate costs a decompressor and nothing else.
+wuff = { version = "0.2", optional = true, default-features = false, features = ["brotli", "z"] }
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
@@ -129,6 +134,12 @@ hep-read = ["hep", "hephaestus/document-read"]
 # The plot viewer, which is not a writer: it shows a window and returns nothing.
 # Needs `raster` because a window is presented by the GPU rasteriser.
 window = ["raster", "hephaestus/window"]
+
+# Accept the font containers a CDN serves a browser — WOFF and WOFF2 — in
+# `fonts::register_font`, unwrapping them to the sfnt inside before the shaper
+# sees it. Off by default: a host reading fonts off a filesystem has sfnt
+# already, and this is the one place the decompressor is worth its bytes.
+webfonts = ["graphics", "dep:wuff"]
 
 builtin-data = []
 all-readers = ["duckdb", "sqlite", "odbc"]

@@ -1,5 +1,5 @@
 import "./styles.css";
-import vegaEmbed from "vega-embed";
+import { PlotView, type GgsqlPlot } from "ggsql-wasm";
 import { WasmContextManager } from "../context";
 import { WASM_BASE } from "../wasmBase";
 import { createEditor, type EditorInstance } from "./editor";
@@ -13,9 +13,14 @@ interface CellInfo {
   rewrittenQuery: string;
   cellDiv: HTMLElement;
   codeScaffold: HTMLElement;
-  visId: string | null;
+  /**
+   * The cell's output box. Holds whatever the kernel rendered at build time,
+   * which stays on screen until wasm has a plot to put in its place — so a
+   * failed load leaves the picture rather than a blank gap.
+   */
   visContainer: HTMLElement | null;
-  result: string | null;
+  view: PlotView | null;
+  plot: GgsqlPlot | null;
   succeeded: boolean;
   error: string | null;
   editor: EditorInstance | null;
@@ -97,15 +102,6 @@ async function installRequestedExtensions(
 }
 
 // ---------------------------------------------------------------------------
-// Vega embed options
-// ---------------------------------------------------------------------------
-
-const VEGA_EMBED_OPTS = {
-  actions: { export: true, source: false, compiled: false, editor: false },
-  renderer: "svg" as const,
-};
-
-// ---------------------------------------------------------------------------
 // Phase 1: Gather cell metadata from the DOM (no mutations)
 // ---------------------------------------------------------------------------
 
@@ -128,33 +124,18 @@ function gatherCells(): CellInfo[] {
       cellDiv.querySelector<HTMLElement>(".sourceCode.cell-code");
     if (!codeScaffold) continue;
 
-    const outputDiv = cellDiv.querySelector<HTMLElement>(
+    const visContainer = cellDiv.querySelector<HTMLElement>(
       ".cell-output.cell-output-display"
     );
-    let visId: string | null = null;
-    let visContainer: HTMLElement | null = null;
-
-    if (outputDiv) {
-      const visCandidates = outputDiv.querySelectorAll<HTMLElement>(
-        'div[id^="vis-"]'
-      );
-      const match = Array.from(visCandidates).find((el) =>
-        /^vis-\d+$/.test(el.id)
-      );
-      if (match) {
-        visContainer = match;
-        visId = match.id;
-      }
-    }
 
     cells.push({
       query,
       rewrittenQuery: rewriteCsvRefs(query),
       cellDiv,
       codeScaffold,
-      visId,
       visContainer,
-      result: null,
+      view: null,
+      plot: null,
       succeeded: false,
       error: null,
       editor: null,
@@ -214,10 +195,10 @@ async function initAndExecute(
     await installRequestedExtensions(ctx, cell.query);
     try {
       if (ctx.hasVisual(cell.rewrittenQuery)) {
-        cell.result = ctx.execute(cell.rewrittenQuery);
+        cell.plot = ctx.execute(cell.rewrittenQuery);
       } else {
         ctx.executeSql(cell.rewrittenQuery);
-        cell.result = null;
+        cell.plot = null;
       }
       cell.succeeded = true;
     } catch (e: any) {
@@ -242,6 +223,38 @@ async function initAndExecute(
 // ---------------------------------------------------------------------------
 
 const DEBOUNCE_MS = 100;
+
+// Fallback aspect for an output box that has no measurable one — an image the
+// browser has not laid out yet. Matches Quarto's own default figure shape.
+const DEFAULT_ASPECT = 7 / 5;
+
+/**
+ * Draw a cell's plot into its output box, creating the view on first use.
+ *
+ * The view is kept for the life of the cell: it owns the `ResizeObserver`, and
+ * an editor that re-runs on every keystroke would otherwise build one per
+ * edit. Nothing touches the box until there is a plot to put in it, so the
+ * kernel-rendered picture stays up if wasm never gets that far.
+ */
+function showPlot(cell: CellInfo): void {
+  if (!cell.visContainer || !cell.plot) return;
+  if (!cell.view) {
+    // Measured before the box is emptied, so the inline SVG keeps the shape
+    // the page already reserved and nothing shifts under the reader.
+    const rect = cell.visContainer.getBoundingClientRect();
+    const aspect =
+      rect.width > 0 && rect.height > 0 ? rect.width / rect.height : DEFAULT_ASPECT;
+    cell.view = new PlotView(cell.visContainer, {
+      idPrefix: `ggsql-cell-${cellCounter++}-`,
+      aspect,
+    });
+  }
+  cell.view.setPlot(cell.plot);
+  // The view owns it now, and freeing it twice would be an error.
+  cell.plot = null;
+}
+
+let cellCounter = 0;
 
 async function applyEditors(
   cells: CellInfo[],
@@ -276,15 +289,7 @@ async function applyEditors(
     const editorInst = await createEditor(editorContainer, cell.query, SITE_ROOT);
     cell.editor = editorInst;
 
-    if (cell.result && cell.visId && cell.visContainer) {
-      try {
-        const spec = JSON.parse(cell.result);
-        cell.visContainer.innerHTML = "";
-        await vegaEmbed("#" + cell.visId, spec, VEGA_EMBED_OPTS);
-      } catch (e) {
-        console.warn("[ggsql-quarto] vegaEmbed failed for", cell.visId, e);
-      }
-    }
+    showPlot(cell);
 
     // Re-execute on every edit, debounced
     let debounceTimer: number | undefined;
@@ -347,13 +352,8 @@ async function executeCell(
 
   try {
     if (ctx.hasVisual(currentQuery)) {
-      const result = ctx.execute(currentQuery);
-      const spec = JSON.parse(result);
-
-      if (cell.visContainer && cell.visId) {
-        cell.visContainer.innerHTML = "";
-        await vegaEmbed("#" + cell.visId, spec, VEGA_EMBED_OPTS);
-      }
+      cell.plot = ctx.execute(currentQuery);
+      showPlot(cell);
     } else {
       ctx.executeSql(currentQuery);
     }

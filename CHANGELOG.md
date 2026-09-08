@@ -44,6 +44,31 @@
   transformation. This has no Vega-Lite equivalent and is ignored by that writer.
 
 ### Changed
+- The wasm bundle draws plots with ggsql's own renderer instead of emitting
+  Vega-Lite. A query is executed in the browser and drawn straight to SVG, so
+  the playground and the live examples on the docs site look like every other
+  ggsql output rather than like a second implementation, and `vega`,
+  `vega-lite` and `vega-embed` are gone from the page — about 1.8 MB less
+  JavaScript. A plot re-solves its layout when its box changes size, so a wider
+  pane gets more tick labels rather than stretched ones. **Breaking:**
+  `GgsqlContext.execute` returns a `GgsqlPlot` to draw rather than a Vega-Lite
+  JSON string; the npm package is entered through a new `ggsql.js` wrapper that
+  adds `PlotView` and `registerDefaultFonts` beside it.
+- A browser enumerates no fonts of its own, so the wasm package ships four
+  Roboto faces and registers them before drawing. Without them a plot has no
+  text at all — and, since text is what sets the layout, the wrong margins with
+  it. New `ggsql::fonts::{register_font, registered_font_families,
+  set_generic_family}` are the library side of that, available to any host
+  whose platform has no font database to enumerate. A page wanting its own
+  typography calls `registerFontFromUrl(url, { genericFor })` instead, which
+  registers the face and points a generic at whatever family name the file
+  turned out to carry — the one place that name exists.
+- New off-by-default `webfonts` feature: `fonts::register_font` also accepts the
+  WOFF and WOFF2 containers a font CDN serves a browser, unwrapping them to the
+  sfnt inside. That is how a font arrives at a web page, so `ggsql-wasm` turns
+  it on. Without the feature such a container is refused by name rather than
+  reaching the shaper and registering nothing, which would draw a plot with no
+  text and no indication why.
 - Plots in a Positron console now open a `positron.plot` comm, so the Plots pane
   renders them at its own size, re-renders sharp when resized, and its save,
   copy and zoom affordances work on them. A new `--max-plots` (default 32) caps

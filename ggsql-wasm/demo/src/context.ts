@@ -1,7 +1,9 @@
 import init, {
   GgsqlContext,
+  GgsqlPlot,
   initExtensionLoader,
   installExtension,
+  registerDefaultFonts,
 } from "ggsql-wasm";
 import { WASM_BASE } from "./wasmBase";
 
@@ -14,6 +16,9 @@ export class WasmContextManager {
 
     const wasmExports = await init(WASM_BASE + "ggsql_wasm_bg.wasm");
     initExtensionLoader(wasmExports);
+    // Before any plot is drawn: a browser enumerates no system fonts, so a
+    // plot rendered without this has no text and the wrong margins.
+    await registerDefaultFonts(WASM_BASE + "fonts/");
     this.context = new GgsqlContext();
     this.initialized = true;
   }
@@ -29,7 +34,7 @@ export class WasmContextManager {
     return this.context;
   }
 
-  execute(query: string): string {
+  execute(query: string): GgsqlPlot {
     return this.getContext().execute(query);
   }
 

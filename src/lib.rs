@@ -46,7 +46,15 @@ pub mod util;
 
 pub mod reader;
 
-#[cfg(feature = "vegalite")]
+// Shaping a plot's text needs fonts, and a browser supplies none of its own.
+// Gated with the composition layer, which is what does the shaping.
+#[cfg(feature = "graphics")]
+pub mod fonts;
+
+// Any writer at all makes the module worth having: `graphics` is the gate the
+// renderer-backed writers share, so an `svg`-only build reaches `SvgWriter`
+// without dragging the Vega-Lite one in.
+#[cfg(any(feature = "vegalite", feature = "graphics"))]
 pub mod writer;
 
 pub mod execute;

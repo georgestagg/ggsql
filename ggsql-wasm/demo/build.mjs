@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { copyFileSync, mkdirSync } from "fs";
+import { copyFileSync, mkdirSync, readdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
@@ -25,6 +25,17 @@ copyFileSync(
   join(__dirname, "../../ggsql-vscode/syntaxes/ggsql.tmLanguage.json"),
   join(distDir, "ggsql.tmLanguage.json"),
 );
+// The plot renderer shapes text before it can lay a plot out, and a browser
+// enumerates no fonts of its own, so the faces have to be served alongside the
+// wasm — see `registerDefaultFonts` in the client.
+mkdirSync(join(distDir, "fonts"), { recursive: true });
+for (const face of readdirSync(join(__dirname, "../pkg/fonts"))) {
+  copyFileSync(
+    join(__dirname, "../pkg/fonts", face),
+    join(distDir, "fonts", face),
+  );
+}
+
 for (const ext of ["mod_spatialite"]) {
   try {
     copyFileSync(
